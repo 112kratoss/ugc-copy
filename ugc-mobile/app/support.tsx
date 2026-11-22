@@ -59,6 +59,7 @@ import {
   checkSupportMessage,
   createSupportClientMessageId,
   failPendingSupportMessage,
+  isSupportPhotoRefusal,
   settlePendingSupportMessage,
   startPendingSupportMessage,
   supportClockLabel,
@@ -77,6 +78,7 @@ import {
   supportTextSegments,
   supportThreadRows,
   supportUnreadMessages,
+  withoutKeptPendingMessages,
   withStableSupportPhotoLinks,
   type SupportConversationResponse,
   type SupportMessage,
@@ -120,6 +122,8 @@ const REACTION_PILL_HEIGHT = 26;
 const PHOTO_MAX_HEIGHT = 320;
 /** The picked photo's square above the composer. */
 const PHOTO_DRAFT_SIZE = 44;
+/** How long a photo that failed to load waits before it is tried once more by itself. */
+const PHOTO_RETRY_MS = 2500;
 
 /** A photo picked from the library, kept until its message is sent. */
 type PickedSupportPhoto = {
@@ -178,6 +182,8 @@ export default function SupportScreen() {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<SupportQuotedMessage | null>(null);
   const [editing, setEditing] = useState<SupportMessage | null>(null);
+  // An edit on its way to the server: the composer keeps its text until the answer.
+  const [savingEdit, setSavingEdit] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [unreadMark, setUnreadMark] = useState<{ fromId: string; count: number } | null | undefined>(undefined);
@@ -191,6 +197,10 @@ export default function SupportScreen() {
   // Photos of messages on their way or not sent, and where each was staged, by client id, for a retry.
   const photosRef = useRef(new Map<string, PickedSupportPhoto>());
   const stagedRef = useRef(new Map<string, string>());
+  // The sends, one after another, so a photo and the words after it are kept in that order.
+  const sendQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  // What the composer held when an edit began, given back when the edit ends.
+  const draftBeforeEditRef = useRef('');
   const fieldRef = useRef<TextInput>(null);
   const lastTypingRef = useRef<number | null>(null);
   const markingRef = useRef(false);
@@ -214,12 +224,25 @@ export default function SupportScreen() {
     setUnreadMark(unread.length > 0 ? { fromId: unread[0].id, count: unread.length } : null);
   }, [data, unreadMark]);
 
-  // Read receipts: while the screen is in front, support's new messages are read.
+  // A message a read shows was kept under its client id is the thread's now,
+  // whatever its send answered (its answer lost, or slower than the read).
+  useEffect(() => {
+    if (!data) return;
+    for (const message of data.messages) {
+      if (!message.clientMessageId) continue;
+      photosRef.current.delete(message.clientMessageId);
+      stagedRef.current.delete(message.clientMessageId);
+    }
+    setPending((current) => withoutKeptPendingMessages(current, data.messages));
+  }, [data]);
+
+  // Read receipts: while the screen is in front, support's new messages are
+  // read, up to the newest one drawn.
   useEffect(() => {
     if (!visible || !data?.conversation || markingRef.current) return;
     if (supportUnreadMessages(data.messages, 'user', data.conversation.userLastReadAt).length === 0) return;
     markingRef.current = true;
-    api.markSupportConversationRead()
+    api.markSupportConversationRead(data.messages[data.messages.length - 1]?.id ?? null)
       .then((read) => {
         queryClient.setQueryData<SupportConversationResponse>(queryKey, (current) => supportConversationWithReadTimes(current, read));
       })
@@ -247,7 +270,8 @@ export default function SupportScreen() {
   /**
    * Sends a message, or tries one that was not sent again (the same client id,
    * whose photo is kept from the first try, and named by where it was staged
-   * once it got there).
+   * once it got there). It is drawn at once, and goes to the server after the
+   * sends written before it have settled.
    */
   const send = async (
     body: string,
@@ -268,6 +292,17 @@ export default function SupportScreen() {
       replyTo: quoted,
       photo: photo ? pendingPhotoOf(photo) : null,
     }));
+    const turn = sendQueueRef.current.then(() => post(body, clientMessageId, quoted, photo));
+    sendQueueRef.current = turn;
+    await turn;
+  };
+
+  const post = async (
+    body: string,
+    clientMessageId: string,
+    quoted: SupportQuotedMessage | null,
+    photo: PickedSupportPhoto | null,
+  ) => {
     try {
       let storagePath = photo ? stagedRef.current.get(clientMessageId) ?? null : null;
       if (photo && !storagePath) {
@@ -294,11 +329,33 @@ export default function SupportScreen() {
       // Read again now, and at the quick pace from here, rather than after an idle wait.
       void queryClient.invalidateQueries({ queryKey });
     } catch (error) {
-      // A refusal (the staged photo gone, say) means the next try uploads anew.
-      if (error instanceof ApiError && error.status >= 400 && error.status < 500) stagedRef.current.delete(clientMessageId);
-      setPending((current) => failPendingSupportMessage(current, clientMessageId));
+      const code = error instanceof ApiError ? error.code ?? null : null;
+      // A refusal of the photo itself means the next try stages it anew; any
+      // other (a quote gone, too many at once) keeps the copy already staged.
+      if (isSupportPhotoRefusal(code)) stagedRef.current.delete(clientMessageId);
+      setPending((current) => failPendingSupportMessage(current, clientMessageId, code));
       setSendError(supportSendFailureWords(error));
     }
+  };
+
+  /** Lets a message that was not sent go, with its photo and where it was staged. */
+  const discard = (clientMessageId: string) => {
+    photosRef.current.delete(clientMessageId);
+    stagedRef.current.delete(clientMessageId);
+    setPending((current) => settlePendingSupportMessage(current, clientMessageId));
+    setSendError(null);
+  };
+
+  /** A message not sent: try it again, or let it go. */
+  const openNotSentActions = (item: SupportPendingMessage) => {
+    haptic.light();
+    showActionSheet({
+      title: SUPPORT_WORDS.notSentActions,
+      actions: [
+        { label: SUPPORT_WORDS.tryAgain, onPress: () => void send(item.body, item.clientMessageId, item.replyTo) },
+        { label: SUPPORT_WORDS.delete, destructive: true, onPress: () => discard(item.clientMessageId) },
+      ],
+    });
   };
 
   /** A photo from the library, held to the rule, drawn above the composer until it goes. */
@@ -306,10 +363,16 @@ export default function SupportScreen() {
     if (editing) return;
     let result: ImagePicker.ImagePickerResult;
     try {
-      // The system's own picker, which needs no permission. Below full quality,
-      // so an iPhone hands over a JPEG rather than its HEIC, which the server
-      // cannot read.
-      result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsMultipleSelection: false, quality: 0.9 });
+      // The system's own picker, which needs no permission. An iPhone keeps
+      // most photos as HEIC, which the server cannot read and the picker
+      // hands over as it is stored, at any quality: the compatible
+      // representation is a JPEG (as the profile editor asks for).
+      result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: false,
+        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        quality: 0.9,
+      });
     } catch {
       setSendError(SUPPORT_WORDS.actionFailed);
       return;
@@ -333,12 +396,12 @@ export default function SupportScreen() {
     setPhotoDraft(picked);
   };
 
-  /** A change drawn at once, and put back if the server refuses it. */
+  /** A change drawn at once, and put back if the server refuses it; says whether the server took it. */
   const change = async (
     before: SupportMessage,
     drawn: SupportMessage,
     run: () => Promise<{ message: SupportMessage }>,
-  ) => {
+  ): Promise<boolean> => {
     setSendError(null);
     tracker.touch();
     await queryClient.cancelQueries({ queryKey });
@@ -347,9 +410,11 @@ export default function SupportScreen() {
       const result = await run();
       queryClient.setQueryData<SupportConversationResponse>(queryKey, (current) => supportConversationWithMessage(current, result.message));
       void queryClient.invalidateQueries({ queryKey });
+      return true;
     } catch (error) {
       queryClient.setQueryData<SupportConversationResponse>(queryKey, (current) => supportConversationWithMessage(current, before));
       setSendError(supportActionFailureWords(error));
+      return false;
     }
   };
 
@@ -358,25 +423,33 @@ export default function SupportScreen() {
     void change(message, toggled.message, () => api.reactToSupportMessage(message.id, toggled.emoji));
   };
 
+  /** Leaves an edit: the composer gets back what it held before the edit began. */
+  const endEdit = () => {
+    setEditing(null);
+    setDraft(draftBeforeEditRef.current);
+    draftBeforeEditRef.current = '';
+  };
+
   const startReply = (message: SupportMessage) => {
-    if (editing) {
-      setEditing(null);
-      setDraft('');
-    }
+    if (savingEdit) return;
+    if (editing) endEdit();
     setReplyTo(supportQuoteOf(message));
     fieldRef.current?.focus();
   };
 
   const startEdit = (message: SupportMessage) => {
+    if (savingEdit) return;
     setReplyTo(null);
+    // The unsent draft waits aside while the edit is written.
+    if (!editing) draftBeforeEditRef.current = draft;
     setEditing(message);
     setDraft(message.body ?? '');
     fieldRef.current?.focus();
   };
 
   const cancelCompose = () => {
-    if (editing) setDraft('');
-    setEditing(null);
+    if (savingEdit) return;
+    if (editing) endEdit();
     setReplyTo(null);
   };
 
@@ -531,19 +604,26 @@ export default function SupportScreen() {
   // A bubble is at most 84% of the thread's width; a photo fills it, less its frame.
   const photoMaxWidth = Math.round((windowWidth - 2 * (appTheme.spacing.compact + 4)) * 0.84) - 8;
 
+  /** Saves an edit, keeping its text in the composer until the server has it: a refusal leaves it there. */
+  const saveEdit = async (target: SupportMessage, body: string) => {
+    if (target.body === body) {
+      endEdit();
+      return;
+    }
+    setSavingEdit(true);
+    const saved = await change(
+      target,
+      supportEditedMessage(target, body, new Date().toISOString()),
+      () => api.editSupportMessage(target.id, body),
+    );
+    setSavingEdit(false);
+    if (saved) endEdit();
+  };
+
   const submit = () => {
-    if (!checked.ok) return;
+    if (!checked.ok || savingEdit) return;
     if (editing) {
-      const target = editing;
-      setEditing(null);
-      setDraft('');
-      if (target.body !== checked.body) {
-        void change(
-          target,
-          supportEditedMessage(target, checked.body, new Date().toISOString()),
-          () => api.editSupportMessage(target.id, checked.body),
-        );
-      }
+      void saveEdit(editing, checked.body);
       return;
     }
     const quoted = replyTo;
@@ -623,7 +703,7 @@ export default function SupportScreen() {
                 onLongPress={openMessageActions}
                 onReply={startReply}
                 onReact={react}
-                onRetry={(item_) => void send(item_.body, item_.clientMessageId, item_.replyTo)}
+                onRetry={openNotSentActions}
                 onOpenQuote={openQuote}
                 onOpenPhoto={openPhoto}
                 photoMaxWidth={photoMaxWidth}
@@ -809,7 +889,7 @@ export default function SupportScreen() {
             icon={editing ? Check : Send}
             label={editing ? SUPPORT_WORDS.save : SUPPORT_WORDS.send}
             accent="primary"
-            disabled={!checked.ok}
+            disabled={!checked.ok || savingEdit}
             onPress={submit}
           />
         </View>
@@ -907,7 +987,9 @@ function SwipeToReply({ enabled, onReply, children }: { enabled: boolean; onRepl
  * A photo in a bubble: the server's preview, kept in the image cache under the
  * message's id so a link signed anew does not fetch it again, with its
  * thumbhash under it while it loads; or the picture on the device while it is
- * on its way. A link that no longer opens says so in the photo's place.
+ * on its way. A photo that fails to load (a dropped connection) is tried once
+ * more by itself a moment later; after that it says so in its place, and a
+ * press tries again.
  */
 function SupportPhotoView({
   messageId,
@@ -929,17 +1011,34 @@ function SupportPhotoView({
   const theme = useAppTheme();
   const uri = photo ? photo.previewUrl : local?.localUri ?? null;
   const [failedUri, setFailedUri] = useState<string | null>(null);
-  const broken = !uri || failedUri === uri;
+  // Each try draws the image anew; the first failure of a link tries once more by itself.
+  const [attempt, setAttempt] = useState(0);
+  const failed = Boolean(uri) && failedUri === uri;
+  useEffect(() => {
+    if (!failed || attempt > 0) return undefined;
+    const timer = setTimeout(() => {
+      setFailedUri(null);
+      setAttempt(1);
+    }, PHOTO_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [attempt, failed]);
+  const broken = !uri || failed;
+  const canRetry = failed && attempt > 0;
   const frame = supportPhotoFrame(
     { width: photo?.width ?? local?.width ?? 4, height: photo?.height ?? local?.height ?? 3 },
     { maxWidth, maxHeight: PHOTO_MAX_HEIGHT },
   );
   return (
     <Pressable
-      accessibilityRole="imagebutton"
-      accessibilityLabel={SUPPORT_WORDS.openPhoto}
-      disabled={broken || !onPress}
-      onPress={onPress}
+      accessibilityRole={canRetry ? 'button' : 'imagebutton'}
+      accessibilityLabel={canRetry ? `${SUPPORT_WORDS.photoLoadFailed} ${SUPPORT_WORDS.photoTryAgain}` : SUPPORT_WORDS.openPhoto}
+      disabled={canRetry ? false : broken || !onPress}
+      onPress={canRetry
+        ? () => {
+          setFailedUri(null);
+          setAttempt((current) => current + 1);
+        }
+        : onPress}
       onLongPress={onLongPress}
       delayLongPress={280}
       style={{
@@ -955,9 +1054,15 @@ function SupportPhotoView({
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6, padding: 12 }}>
           <ImageOff size={appTheme.icon.default} color={theme.colors.faint} />
           <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>{SUPPORT_WORDS.photoLoadFailed}</AppText>
+          {canRetry ? (
+            <AppText variant="caption" color="text" style={{ textAlign: 'center', fontWeight: '600' }}>
+              {SUPPORT_WORDS.photoTryAgain}
+            </AppText>
+          ) : null}
         </View>
       ) : (
         <Image
+          key={attempt}
           source={photo && messageId ? { uri, cacheKey: `support-photo-${messageId}` } : { uri }}
           placeholder={photo?.thumbhash ? { thumbhash: photo.thumbhash } : undefined}
           contentFit="cover"
@@ -1213,7 +1318,7 @@ function SupportThreadRowView({
       {failed && pending ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityHint="Sends this message again."
+          accessibilityHint="Try it again, or delete it."
           onPress={() => onRetry(pending)}
           style={{ minHeight: appTheme.touch.default, justifyContent: 'center' }}
         >

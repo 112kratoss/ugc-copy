@@ -35,7 +35,14 @@ payouts, referrals, content, operator activity, system.
   re-encodes it as the account's are and keeps it under the account's folder
   of `support_attachments`, so it goes with the account. The list says
   "📷 Photo" for a photo without a caption (`last_message_has_photo`).
-  Resolving is a switch; the account writing again reopens it. The web's
+  Resolving is a switch; the account writing again reopens it. A resolve
+  names the time of the account's latest message the operator was shown
+  (`seenLastUserMessageAt`), and one that came in since refuses it with 409
+  CONVERSATION_CHANGED, so a new question is never resolved away unread
+  (#900's review). The lists page by offset with their true totals (a page
+  past the end lands on the first), an ended console session or a thread
+  that could not be read says so above the chat, and support deleting or
+  editing a reply takes away or rewords the account's alert about it. The web's
   `/contact` form stays for visitors without an account.
 
 - **Auth is a single master operator**, not per-person accounts: `ADMIN_USERNAME`

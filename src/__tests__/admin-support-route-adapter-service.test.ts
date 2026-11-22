@@ -13,6 +13,7 @@ const MESSAGE_ID = '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e';
 const staffMessage = {
   id: MESSAGE_ID,
   author: 'staff' as const,
+  clientMessageId: null,
   body: 'Done.',
   createdAt: '2026-11-21T10:00:00.000Z',
   editedAt: null,
@@ -144,11 +145,30 @@ describe('POST /api/admin/support', () => {
     expect(calls.map(([args]) => args.status)).toEqual(['resolved', 'open']);
   });
 
+  it('holds a resolve to the account\'s latest message the operator was shown, and says when a newer one came', async () => {
+    const { post, setSupportConversationStatus } = consoleWith();
+    await post({ action: 'resolve', conversationId: CONVERSATION_ID, seenLastUserMessageAt: '2026-11-21T09:58:00.123456+00:00' });
+    expect(setSupportConversationStatus).toHaveBeenLastCalledWith(expect.objectContaining({
+      status: 'resolved',
+      seenLastUserMessageAt: '2026-11-21T09:58:00.123456+00:00',
+    }));
+    // A reopen is never held to it.
+    await post({ action: 'reopen', conversationId: CONVERSATION_ID, seenLastUserMessageAt: '2026-11-21T09:58:00Z' });
+    expect(setSupportConversationStatus).toHaveBeenLastCalledWith(expect.not.objectContaining({ seenLastUserMessageAt: expect.anything() }));
+
+    setSupportConversationStatus.mockResolvedValueOnce({ ok: false, code: 'CONVERSATION_CHANGED', error: 'A new message came in. Read it, then resolve.' } as never);
+    const changed = await post({ action: 'resolve', conversationId: CONVERSATION_ID, seenLastUserMessageAt: null });
+    expect(changed.status).toBe(409);
+    await expect(changed.json()).resolves.toEqual({ error: 'A new message came in. Read it, then resolve.', code: 'CONVERSATION_CHANGED' });
+  });
+
   it('reads and types as support, in the account\'s conversation', async () => {
     const { post, markSupportConversationRead, setSupportConversationTyping } = consoleWith();
     const read = await post({ action: 'read', conversationId: CONVERSATION_ID });
     await expect(read.json()).resolves.toEqual({ success: true, userLastReadAt: null, staffLastReadAt: '2026-11-21T10:05:00.000Z' });
-    expect(markSupportConversationRead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'account-1', reader: 'staff' }));
+    expect(markSupportConversationRead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'account-1', reader: 'staff', upToMessageId: null }));
+    await post({ action: 'read', conversationId: CONVERSATION_ID, upToMessageId: MESSAGE_ID });
+    expect(markSupportConversationRead).toHaveBeenLastCalledWith(expect.objectContaining({ upToMessageId: MESSAGE_ID }));
 
     await post({ action: 'typing', conversationId: CONVERSATION_ID, typing: true });
     expect(setSupportConversationTyping).toHaveBeenCalledWith(expect.objectContaining({ userId: 'account-1', author: 'staff', typing: true }));

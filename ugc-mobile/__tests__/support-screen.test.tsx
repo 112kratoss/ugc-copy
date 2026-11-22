@@ -55,7 +55,10 @@ vi.mock('lucide-react-native', () => Object.fromEntries(
 ));
 vi.mock('react-native-safe-area-context', () => ({ useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }) }));
 vi.mock('expo-image', () => ({ Image: (props: MockProps) => React.createElement('expo-image', props) }));
-vi.mock('expo-image-picker', () => ({ launchImageLibraryAsync: picker.launch }));
+vi.mock('expo-image-picker', () => ({
+  launchImageLibraryAsync: picker.launch,
+  UIImagePickerPreferredAssetRepresentationMode: { Automatic: 'automatic', Compatible: 'compatible', Current: 'current' },
+}));
 vi.mock('@/components/media-lightbox', () => ({ MediaLightbox: (props: MockProps) => React.createElement('media-lightbox', props) }));
 vi.mock('@/lib/media', () => ({ uploadPickedMedia: upload.picked }));
 vi.mock('react-native', () => {
@@ -204,6 +207,16 @@ function attachButton(tree: renderer.ReactTestRenderer) {
 
 function bubbleOf(tree: renderer.ReactTestRenderer, hintIncludes = 'Hold for reactions') {
   return tree.root.findAll((node) => String(node.type) === 'pressable' && String(node.props.accessibilityHint ?? '').includes(hintIncludes));
+}
+
+/** Presses a message's "Not sent" mark and picks one of the two things it offers. */
+async function chooseOnNotSent(tree: renderer.ReactTestRenderer, label: 'Try again' | 'Delete') {
+  const mark = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityHint === 'Try it again, or delete it.');
+  act(() => { (mark.props.onPress as () => void)(); });
+  const request = actionSheet.show.mock.calls.at(-1)?.[0] as { title: string; actions: Array<{ label: string; onPress: () => void }> };
+  expect(request.title).toBe('Your message was not sent');
+  expect(request.actions.map((action) => action.label)).toEqual(['Try again', 'Delete']);
+  await act(async () => { request.actions.find((action) => action.label === label)?.onPress(); });
 }
 
 beforeEach(() => {
@@ -358,6 +371,33 @@ describe('Message support', () => {
     expect(authState.api.editSupportMessage).toHaveBeenCalledWith('m4', 'Thanks a lot!');
   });
 
+  it('keeps the unsent draft aside while a message is edited, and a refused edit\'s new text', async () => {
+    authState.api.editSupportMessage
+      .mockRejectedValueOnce(new ApiError('A message can be edited for 15 minutes after it is sent.', 409, undefined, undefined, 'EDIT_TOO_LATE'))
+      .mockResolvedValueOnce({ success: true, message: message({ id: 'm4', body: 'Thanks so much!', editedAt: new Date(NOW).toISOString(), createdAt: iso(5) }) });
+    const tree = render();
+    const field = () => tree.root.findByType('text-input' as never);
+    typeDraft(tree, 'A question I was writing');
+
+    const [last] = bubbleOf(tree);
+    act(() => { (last.props.onLongPress as () => void)(); });
+    const request = actionSheet.show.mock.calls[0][0] as { actions: Array<{ label: string; onPress: () => void }> };
+    act(() => { request.actions[2].onPress(); });
+    expect(field().props.value).toBe('Thanks!');
+
+    typeDraft(tree, 'Thanks so much!');
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    // Refused: the new text stays in the composer, still editing.
+    expect(field().props.value).toBe('Thanks so much!');
+    expect(sendButton(tree).props.label).toBe('Save');
+
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(authState.api.editSupportMessage).toHaveBeenLastCalledWith('m4', 'Thanks so much!');
+    // Saved: the draft written before the edit comes back.
+    expect(field().props.value).toBe('A question I was writing');
+    expect(sendButton(tree).props.label).toBe('Send');
+  });
+
   it('deletes for everyone only after the confirmation', async () => {
     authState.api.deleteSupportMessage.mockResolvedValueOnce({ success: true, message: message({ id: 'm4', body: null, deletedAt: new Date(NOW).toISOString(), createdAt: iso(5) }) });
     const tree = render();
@@ -387,14 +427,61 @@ describe('Message support', () => {
     expect(drawnText(tree)).toContain('Not sent. Tap to try again.');
     expect(drawnText(tree)).toContain('Your message was not sent. Check your connection, then try again.');
 
-    const retry = tree.root.findAll((node) => String(node.type) === 'pressable')
-      .find((node) => node.props.accessibilityHint === 'Sends this message again.');
-    if (!retry) throw new Error('No retry');
-    await act(async () => { (retry.props.onPress as () => void)(); });
+    await chooseOnNotSent(tree, 'Try again');
 
     const [first, second] = authState.api.sendSupportMessage.mock.calls as unknown as Array<[{ clientMessageId: string }]>;
     expect(second[0].clientMessageId).toBe(first[0].clientMessageId);
     expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
+  });
+
+  it('lets a message that was not sent go', async () => {
+    authState.api.sendSupportMessage.mockRejectedValueOnce(new ApiError('Failed to send your message.', 500));
+    const tree = render();
+    typeDraft(tree, 'Never mind');
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(drawnText(tree)).toContain('Never mind');
+
+    await chooseOnNotSent(tree, 'Delete');
+    expect(drawnText(tree)).not.toContain('Never mind');
+    expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
+    expect(authState.api.sendSupportMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles a message whose answer was lost once a read shows it kept', async () => {
+    authState.api.sendSupportMessage.mockRejectedValueOnce(new TypeError('Network request failed'));
+    const tree = render();
+    typeDraft(tree, 'Did it go?');
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(drawnText(tree)).toContain('Not sent. Tap to try again.');
+
+    const [[sent]] = authState.api.sendSupportMessage.mock.calls as unknown as Array<[{ clientMessageId: string }]>;
+    query.data = {
+      ...conversation,
+      messages: [...conversation.messages, message({ id: 'm5', body: 'Did it go?', createdAt: iso(0), clientMessageId: sent.clientMessageId })],
+    };
+    act(() => { tree.update(React.createElement(SupportScreen)); });
+    expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
+    expect(drawnText(tree).filter((text) => text === 'Did it go?')).toHaveLength(1);
+  });
+
+  it('sends one message at a time, in the order written', async () => {
+    let releaseFirst: () => void = () => undefined;
+    authState.api.sendSupportMessage
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseFirst = () => resolve({ success: true, message: message({ id: 'm5', body: 'First', createdAt: iso(0) }), conversation: { id: 'conversation-1', status: 'open' } });
+      }))
+      .mockResolvedValueOnce({ success: true, message: message({ id: 'm6', body: 'Second', createdAt: iso(0) }), conversation: { id: 'conversation-1', status: 'open' } });
+    const tree = render();
+
+    typeDraft(tree, 'First');
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    typeDraft(tree, 'Second');
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(authState.api.sendSupportMessage).toHaveBeenCalledTimes(1);
+
+    await act(async () => { releaseFirst(); });
+    const bodies = (authState.api.sendSupportMessage.mock.calls as unknown as Array<[{ body: string }]>).map(([request]) => request.body);
+    expect(bodies).toEqual(['First', 'Second']);
   });
 
   it('says the conversation is resolved, and that writing again reopens it', () => {
@@ -474,7 +561,12 @@ describe('photos in Message support', () => {
     const tree = render();
 
     await pick(tree);
-    expect(picker.launch).toHaveBeenCalledWith(expect.objectContaining({ mediaTypes: ['images'], allowsMultipleSelection: false }));
+    // An iPhone's HEIC comes as a JPEG: the compatible representation, whatever the quality.
+    expect(picker.launch).toHaveBeenCalledWith(expect.objectContaining({
+      mediaTypes: ['images'],
+      allowsMultipleSelection: false,
+      preferredAssetRepresentationMode: 'compatible',
+    }));
     expect(drawnText(tree)).toContain('IMG_0001.jpg');
     expect(tree.root.findByType('text-input' as never).props.placeholder).toBe('Add a caption');
     expect(sendButton(tree).props.disabled).toBe(false);
@@ -505,8 +597,7 @@ describe('photos in Message support', () => {
     await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
     expect(drawnText(tree)).toContain('Not sent. Tap to try again.');
 
-    const retry = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityHint === 'Sends this message again.');
-    await act(async () => { (retry.props.onPress as () => void)(); });
+    await chooseOnNotSent(tree, 'Try again');
     expect(upload.picked).toHaveBeenCalledTimes(1);
     const [first, second] = authState.api.sendSupportMessage.mock.calls as unknown as Array<[{ clientMessageId: string; photo: unknown }]>;
     expect(second[0].clientMessageId).toBe(first[0].clientMessageId);

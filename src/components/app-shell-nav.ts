@@ -228,6 +228,7 @@ const OWN_HEADING_PATHS = new Set([
   '/credits',
   '/pricing',
   '/templates',
+  '/support',
 ]);
 const OWN_HEADING_SECTIONS = ['/profile', '/models', '/marketplace/sell', '/post', '/developers'];
 

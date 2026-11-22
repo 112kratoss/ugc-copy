@@ -122,6 +122,7 @@ import type {
   SupportMessageResponse,
   SupportMessageUpdateResponse,
   SupportReactionEmoji,
+  SupportReadRequest,
   SupportReadResponse,
 } from './support-conversation-policy/support-conversation-policy';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
@@ -1327,8 +1328,12 @@ export function createApiClient({
         body: JSON.stringify(body),
       }),
     /** The account has read its support thread: both sides' read times after it. */
-    markSupportConversationRead: () =>
-      request<SupportReadResponse>('/api/support/conversation/read', { method: 'POST' }),
+    markSupportConversationRead: (upToMessageId: string | null = null) =>
+      request<SupportReadResponse>('/api/support/conversation/read', {
+        method: 'POST',
+        // Up to the newest message drawn, so one kept after it is not read unseen.
+        body: JSON.stringify({ upToMessageId } satisfies SupportReadRequest),
+      }),
     /** The account is typing in its support thread (for a few seconds). */
     setSupportTyping: (typing: boolean) =>
       request<{ success: true }>('/api/support/conversation/typing', {

@@ -15,6 +15,7 @@ import {
   supportShouldPingTyping,
   supportThreadSignature,
   supportUnreadMessages,
+  withoutKeptPendingMessages,
   withStableSupportPhotoLinks,
   withSupportConversationRef,
   withSupportMessage,
@@ -38,6 +39,13 @@ import {
  * putting it back if the server refuses. A photo is drawn from the device
  * while it goes, and kept for a retry. Each side brings its transport: the
  * account's routes, or the console's.
+ *
+ * A read that left before a change this side drew (a send kept, an edit, a
+ * delete, a reaction, a status switch) is older than what is on screen: its
+ * answer is dropped and the thread read again. Sends go one at a time, in the
+ * order they were written, so a photo and the words after it are kept in that
+ * order. A message a read shows was kept under its client id settles the copy
+ * drawn as on its way, though the send's own answer was lost.
  */
 
 /** A photo the viewer picked: the file, and what the thread draws until the server's copy comes. */
@@ -52,7 +60,7 @@ export type SupportChatLoadResult =
 
 export type SupportChatActionResult<T> =
   | { ok: true; value: T }
-  | { ok: false; error: string | null; signedOut?: boolean };
+  | { ok: false; error: string | null; signedOut?: boolean; code?: string | null };
 
 export type SupportChatTransport = {
   load(): Promise<SupportChatLoadResult>;
@@ -65,8 +73,11 @@ export type SupportChatTransport = {
   edit(messageId: string, body: string): Promise<SupportChatActionResult<{ message: SupportMessage }>>;
   remove(messageId: string): Promise<SupportChatActionResult<{ message: SupportMessage }>>;
   react(messageId: string, emoji: SupportReactionEmoji | null): Promise<SupportChatActionResult<{ message: SupportMessage }>>;
-  markRead(): Promise<SupportChatActionResult<{ userLastReadAt: string | null; staffLastReadAt: string | null }>>;
+  /** Marks the thread read up to the newest message drawn. */
+  markRead(upToMessageId: string | null): Promise<SupportChatActionResult<{ userLastReadAt: string | null; staffLastReadAt: string | null }>>;
   typing(typing: boolean): Promise<void>;
+  /** A message not sent was let go: what the transport kept for its retry goes too. */
+  forget?(clientMessageId: string): void;
 };
 
 export type SupportChatState =
@@ -94,6 +105,12 @@ export function useSupportChat({
   const [unreadMark, setUnreadMark] = useState<SupportUnreadMark | undefined>(undefined);
   const transportRef = useRef(transport);
   const loadingRef = useRef(false);
+  // A read asked for while one was on its way: run once that one lands.
+  const readAgainRef = useRef(false);
+  // Counts the changes this side drew; a read that left before the latest is dropped.
+  const changeCountRef = useRef(0);
+  // The sends, one after another: each waits for the one before to settle.
+  const sendQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const markingRef = useRef(false);
   const signatureRef = useRef('');
   const lastActivityRef = useRef(0);
@@ -128,6 +145,15 @@ export function useSupportChat({
         conversation: result.conversation,
         messages: withStableSupportPhotoLinks(current.kind === 'ready' ? current.messages : [], result.messages),
       }));
+      // A message kept under its client id is the thread's now, whatever its
+      // send answered: its copy on the way, or marked not sent, goes.
+      for (const message of result.messages) {
+        const photo = message.clientMessageId ? photosRef.current.get(message.clientMessageId) : undefined;
+        if (!photo || !message.clientMessageId) continue;
+        URL.revokeObjectURL(photo.preview.localUri);
+        photosRef.current.delete(message.clientMessageId);
+      }
+      setPending((current) => withoutKeptPendingMessages(current, result.messages));
       setUnreadMark((current) => {
         if (current !== undefined) return current;
         const lastReadAt = viewer === 'user' ? result.conversation?.userLastReadAt : result.conversation?.staffLastReadAt;
@@ -145,16 +171,44 @@ export function useSupportChat({
   }, [viewer]);
 
   const load = useCallback(async () => {
-    if (loadingRef.current) return;
+    if (loadingRef.current) {
+      // One read at a time: the one asked for now runs once this one lands.
+      readAgainRef.current = true;
+      return;
+    }
     loadingRef.current = true;
     try {
-      applyLoad(await transportRef.current.load());
-    } catch {
-      applyLoad({ kind: 'failed' });
+      do {
+        readAgainRef.current = false;
+        const changesAtStart = changeCountRef.current;
+        let result: SupportChatLoadResult;
+        try {
+          result = await transportRef.current.load();
+        } catch {
+          result = { kind: 'failed' };
+        }
+        // A change drawn since this read left is newer than what it read.
+        if (changeCountRef.current !== changesAtStart) {
+          readAgainRef.current = true;
+          continue;
+        }
+        applyLoad(result);
+      } while (readAgainRef.current);
     } finally {
       loadingRef.current = false;
     }
   }, [applyLoad]);
+
+  /** Something this side drew changed the thread: a read already on its way is older. */
+  const noteChange = useCallback(() => {
+    changeCountRef.current += 1;
+  }, []);
+
+  /** Reads the thread now, for a change made elsewhere on this page (the console's status switch, a retry). */
+  const reload = useCallback(() => {
+    noteChange();
+    return load();
+  }, [load, noteChange]);
 
   // The thread is read again while the tab is visible, and at once when it
   // comes back; nothing is asked while it is hidden.
@@ -210,7 +264,8 @@ export function useSupportChat({
     if (supportUnreadMessages(state.messages, viewer, lastReadAt).length === 0) return;
 
     markingRef.current = true;
-    void transportRef.current.markRead()
+    // Read up to the newest message on screen, never one kept after it.
+    void transportRef.current.markRead(state.messages[state.messages.length - 1]?.id ?? null)
       .then((result) => {
         if (!result.ok) return;
         setState((current) => (current.kind === 'ready'
@@ -231,7 +286,8 @@ export function useSupportChat({
 
   /**
    * Sends a message, or tries one that was not sent again (the same client id,
-   * whose photo is kept from the first try).
+   * whose photo is kept from the first try). It is drawn at once, and goes to
+   * the server after the sends written before it have settled.
    */
   const send = useCallback(async (
     body: string,
@@ -253,30 +309,36 @@ export function useSupportChat({
       photo: photo?.preview ?? null,
     }));
 
-    let result: Awaited<ReturnType<SupportChatTransport['send']>>;
-    try {
-      result = await transportRef.current.send({
-        body,
-        clientMessageId,
-        replyToMessageId: replyTo?.id ?? null,
-        photo: photo?.file ?? null,
-      });
-    } catch {
-      result = { ok: false, error: null };
-    }
+    const post = async (): Promise<Awaited<ReturnType<SupportChatTransport['send']>>> => {
+      try {
+        return await transportRef.current.send({
+          body,
+          clientMessageId,
+          replyToMessageId: replyTo?.id ?? null,
+          photo: photo?.file ?? null,
+        });
+      } catch {
+        return { ok: false, error: null };
+      }
+    };
+    const turn = sendQueueRef.current.then(post);
+    sendQueueRef.current = turn;
+    const result = await turn;
 
     if (!result.ok) {
+      // Kept as not sent, for a retry once signed in again too.
+      setPending((current) => failPendingSupportMessage(current, clientMessageId, result.code ?? null));
       if (result.signedOut) {
         setState({ kind: 'signed-out' });
         return;
       }
-      setPending((current) => failPendingSupportMessage(current, clientMessageId));
       setError(result.error ?? SUPPORT_WORDS.sendFailed);
       return;
     }
 
     const { message, conversation } = result.value;
     hasConversationRef.current = true;
+    noteChange();
     noteActivity();
     if (photo) {
       photosRef.current.delete(clientMessageId);
@@ -291,7 +353,19 @@ export function useSupportChat({
         messages: withSupportMessage(current.messages, message),
       }
       : current));
-  }, [noteActivity]);
+  }, [noteActivity, noteChange]);
+
+  /** Lets a message that was not sent go: from the thread, with its photo and anything kept for its retry. */
+  const discard = useCallback((clientMessageId: string) => {
+    setPending((current) => settlePendingSupportMessage(current, clientMessageId));
+    const photo = photosRef.current.get(clientMessageId);
+    if (photo) {
+      URL.revokeObjectURL(photo.preview.localUri);
+      photosRef.current.delete(clientMessageId);
+    }
+    transportRef.current.forget?.(clientMessageId);
+    setError(null);
+  }, []);
 
   /** Runs a change drawn at once, and puts the message back if the server refuses it. */
   const change = useCallback(async (
@@ -301,6 +375,7 @@ export function useSupportChat({
   ) => {
     setError(null);
     lastActivityRef.current = Date.now();
+    noteChange();
     applyMessage(drawn);
     let result: SupportChatActionResult<{ message: SupportMessage }>;
     try {
@@ -308,6 +383,7 @@ export function useSupportChat({
     } catch {
       result = { ok: false, error: null };
     }
+    noteChange();
     if (result.ok) {
       applyMessage(result.value.message);
       noteActivity();
@@ -320,7 +396,7 @@ export function useSupportChat({
     applyMessage(before);
     setError(result.error ?? SUPPORT_WORDS.actionFailed);
     return false;
-  }, [applyMessage, noteActivity]);
+  }, [applyMessage, noteActivity, noteChange]);
 
   const react = useCallback((message: SupportMessage, emoji: SupportReactionEmoji) => {
     const toggled = supportReactionToggle(message, viewer, emoji);
@@ -351,8 +427,9 @@ export function useSupportChat({
     error,
     setError,
     unreadMark: unreadMark ?? null,
-    reload: load,
+    reload,
     send,
+    discard,
     react,
     edit,
     remove,

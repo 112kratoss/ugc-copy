@@ -3,6 +3,7 @@
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 
 import {
+  isSupportPhotoRefusal,
   readSupportConversationResponse,
   readSupportMessageResponse,
   readSupportMessageUpdateResponse,
@@ -44,7 +45,12 @@ async function action<T>(
     const json = await readJson(response);
     if (response.status === 401) return { ok: false, error: null, signedOut: true };
     const value = response.ok ? read(json) : null;
-    return value ? { ok: true, value } : { ok: false, error: refusalWords(response, json) };
+    if (value) return { ok: true, value };
+    return {
+      ok: false,
+      error: refusalWords(response, json),
+      code: response.status < 500 && typeof json?.code === 'string' ? json.code : null,
+    };
   } catch {
     return { ok: false, error: null };
   }
@@ -105,9 +111,13 @@ export function createAccountSupportTransport(
         }),
         readSupportMessageResponse,
       );
-      // Kept, or refused for a staged photo that is gone: either way the next try uploads anew.
-      if (result.ok || result.error) stagedPhotos.delete(clientMessageId);
+      // Kept, or refused for the photo itself: the next try, if any, stages it
+      // anew. Any other refusal (a quote gone, too many at once) keeps it staged.
+      if (result.ok || isSupportPhotoRefusal(result.code)) stagedPhotos.delete(clientMessageId);
       return result;
+    },
+    forget(clientMessageId) {
+      stagedPhotos.delete(clientMessageId);
     },
     edit: (messageId, body) => action(
       () => jsonRequest(`/api/support/messages/${encodeURIComponent(messageId)}`, 'PATCH', { body }),
@@ -121,8 +131,8 @@ export function createAccountSupportTransport(
       () => jsonRequest(`/api/support/messages/${encodeURIComponent(messageId)}/reaction`, 'POST', { emoji }),
       readSupportMessageUpdateResponse,
     ),
-    markRead: () => action(
-      () => jsonRequest('/api/support/conversation/read', 'POST'),
+    markRead: (upToMessageId) => action(
+      () => jsonRequest('/api/support/conversation/read', 'POST', { upToMessageId }),
       readSupportReadResponse,
     ),
     async typing(typing) {
@@ -177,7 +187,7 @@ export function createAdminSupportTransport(conversationId: string): SupportChat
     edit: (messageId, body) => action(() => post({ action: 'edit', messageId, body }), readSupportMessageUpdateResponse),
     remove: (messageId) => action(() => post({ action: 'delete', messageId }), readSupportMessageUpdateResponse),
     react: (messageId, emoji) => action(() => post({ action: 'react', messageId, emoji }), readSupportMessageUpdateResponse),
-    markRead: () => action(() => post({ action: 'read' }), readSupportReadResponse),
+    markRead: (upToMessageId) => action(() => post({ action: 'read', upToMessageId }), readSupportReadResponse),
     async typing(typing) {
       await post({ action: 'typing', typing }).catch(() => undefined);
     },

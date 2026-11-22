@@ -31,7 +31,7 @@ const FUNCTIONS = [
   'edit_support_message(uuid, text, uuid, text)',
   'delete_support_message(uuid, text, uuid)',
   'set_support_message_reaction(uuid, text, uuid, text)',
-  'mark_support_conversation_read(uuid, text)',
+  'mark_support_conversation_read(uuid, text, uuid)',
   'set_support_conversation_typing(uuid, text, boolean)',
   'support_message_payload(uuid)',
 ];
@@ -134,7 +134,57 @@ describe('support conversations migration', () => {
     }
     expect(supportPart.match(/SECURITY DEFINER/g)).toHaveLength(6);
     expect(supportPart.match(/SET search_path = public, pg_temp/g)).toHaveLength(7);
-    expect(supportPart.match(/FOR UPDATE;/g)).toHaveLength(4);
+    expect(supportPart.match(/FOR UPDATE;/g)).toHaveLength(5);
+  });
+
+  it('waits at most five seconds for a lock on the tables it touches, before taking any', () => {
+    expect(migration.indexOf("SET LOCAL lock_timeout = '5s';")).toBeGreaterThan(0);
+    expect(migration.indexOf("SET LOCAL lock_timeout = '5s';")).toBeLessThan(migration.indexOf('CREATE TABLE'));
+  });
+
+  it('clears a deleted message\'s quotes through an index, not a scan per row', () => {
+    expect(migration).toContain('CREATE INDEX support_messages_reply_to_idx\n  ON public.support_messages (reply_to_message_id)\n  WHERE reply_to_message_id IS NOT NULL;');
+  });
+
+  it('answers a message\'s client id, which the server gives the side that wrote it', () => {
+    expect(functionText(migration, 'CREATE OR REPLACE FUNCTION public.support_message_payload(')).toContain("'client_message_id', m.client_message_id,");
+  });
+
+  it('stamps every change once the conversation is locked, so times follow the order kept', () => {
+    for (const name of ['send_support_message', 'edit_support_message', 'delete_support_message', 'set_support_message_reaction']) {
+      const body = functionText(migration, `CREATE OR REPLACE FUNCTION public.${name}(`);
+      const locked = body.indexOf('FOR UPDATE;');
+      expect(locked, name).toBeGreaterThan(0);
+      expect(body.indexOf('v_now := clock_timestamp();', locked), name).toBeGreaterThan(locked);
+    }
+  });
+
+  it('counts a deleted message out of the unread badges and of what waits on whom', () => {
+    const deletion = functionText(migration, 'CREATE OR REPLACE FUNCTION public.delete_support_message(');
+    for (const column of ['last_user_message_at', 'last_staff_message_at', 'user_unread_count', 'staff_unread_count']) {
+      expect(deletion).toContain(`${column} = (`);
+    }
+    expect(deletion).toContain("WHERE m.conversation_id = c.id AND m.author = 'user' AND m.deleted_at IS NULL");
+  });
+
+  it('marks read up to a message the reader was shown, never past it, counting what is left unread', () => {
+    const read = functionText(migration, 'CREATE OR REPLACE FUNCTION public.mark_support_conversation_read(');
+    expect(read).toContain('p_up_to_message_id uuid DEFAULT NULL');
+    expect(read).toContain('AND conversation_id = v_conversation.id;');
+    expect(read).toContain('greatest(');
+    expect(read).toContain('AND m.deleted_at IS NULL AND m.created_at > v_read_at');
+    expect(read).not.toContain('_unread_count = CASE WHEN p_reader = \'user\' THEN 0');
+  });
+
+  it('refuses a support photo written into a deleted account\'s folder, changing nothing else in the guard', () => {
+    const header = 'CREATE OR REPLACE FUNCTION public.guard_upload_storage_object_write()';
+    const replaced = functionText(migration, header);
+    const previous = functionText(readMigration('20260819071500_complete_upload_capability_state_machine.sql'), header);
+    const before = "'template_inputs'\n    ) AND EXISTS";
+    const after = "'template_inputs', 'support_attachments'\n    ) AND EXISTS";
+    expect(previous.split(before)).toHaveLength(3);
+    expect(replaced.split(after).join(before)).toBe(previous);
+    expect(migration).toContain('REVOKE ALL ON FUNCTION public.guard_upload_storage_object_write()\n  FROM PUBLIC, anon, authenticated, service_role;');
   });
 
   it('says which conversations wait on support from the row itself', () => {

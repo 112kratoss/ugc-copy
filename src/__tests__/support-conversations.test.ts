@@ -22,6 +22,7 @@ import {
   deleteSupportMessage,
   editSupportMessage,
   getSupportConversation,
+  loadSupportMessages,
   markSupportConversationRead,
   replyToSupportConversation,
   sendSupportMessage,
@@ -48,7 +49,13 @@ function fakeSupabase({
   reactions = [] as Row[],
   rpcResults = {} as Record<string, unknown>,
   rpcError = null as unknown,
+  /** The HTTP status a failed call answers with: a 4xx is a refusal, anything else a lost answer. */
+  rpcStatus = 500,
+  /** Calls that fail by name, whatever `rpcError` says of the rest. */
+  rpcFailures = {} as Record<string, { error: unknown; status: number }>,
   updatedIds = null as string[] | null,
+  /** Reads of these tables fail. */
+  failingReads = [] as string[],
 } = {}) {
   const calls: Array<{ kind: string; table?: string; args?: unknown }> = [];
   const tables: Record<string, Row[]> = {
@@ -86,6 +93,7 @@ function fakeSupabase({
           };
         },
         async maybeSingle() {
+          if (failingReads.includes(table)) return { data: null, error: { message: 'read failed' } };
           return { data: rows()[0] ?? null, error: null };
         },
         then(resolve: (value: { data: Row[]; error: null }) => void) {
@@ -96,11 +104,20 @@ function fakeSupabase({
           return {
             eq(column: string, value: unknown) {
               calls.push({ kind: 'update-where', table, args: [column, value] });
-              return {
+              const filtered = {
+                is(filterColumn: string, filterValue: unknown) {
+                  calls.push({ kind: 'update-is', table, args: [filterColumn, filterValue] });
+                  return filtered;
+                },
+                or(filter: string) {
+                  calls.push({ kind: 'update-or', table, args: filter });
+                  return filtered;
+                },
                 async select() {
                   return { data: (updatedIds ?? [value]).map((id) => ({ id })), error: null };
                 },
               };
+              return filtered;
             },
           };
         },
@@ -109,7 +126,9 @@ function fakeSupabase({
     },
     async rpc(name: string, args: unknown) {
       calls.push({ kind: 'rpc', args: { name, ...(args as object) } });
-      return { data: rpcResults[name] ?? null, error: rpcError };
+      const failure = rpcFailures[name];
+      if (failure) return { data: null, ...failure };
+      return { data: rpcResults[name] ?? null, error: rpcError, status: rpcError ? rpcStatus : 200 };
     },
   };
 
@@ -226,6 +245,54 @@ describe('reading a conversation', () => {
     expect(calls).toContainEqual({ kind: 'in', table: 'support_messages', args: ['id', ['ancient']] });
   });
 
+  it('reads a long thread\'s reactions a hundred messages at a time, to keep each URL short', async () => {
+    const messages = Array.from({ length: 250 }, (_, index) => ({
+      id: `m-${String(index).padStart(3, '0')}`,
+      conversation_id: 'conversation-1',
+      author: 'user',
+      client_message_id: null,
+      body: `Message ${index}`,
+      created_at: new Date(Date.UTC(2026, 10, 21, 9, 0, index)).toISOString(),
+      edited_at: null,
+      deleted_at: null,
+      reply_to_message_id: null,
+      attachment_kind: null,
+    }));
+    const { client, calls } = fakeSupabase({ conversations: [conversationRow()], messages });
+
+    const read = await loadSupportMessages(client, 'conversation-1', 'staff', 500);
+
+    const reactionReads = calls.filter((call) => call.kind === 'in' && call.table === 'support_message_reactions');
+    expect(reactionReads.map((call) => (call.args as [string, string[]])[1].length)).toEqual([100, 100, 50]);
+    expect(read).toHaveLength(250);
+  });
+
+  it('answers a message\'s client id to the side that wrote it only', async () => {
+    const row = (id: string, author: string, clientId: string | null, second: number) => ({
+      id,
+      conversation_id: 'conversation-1',
+      author,
+      client_message_id: clientId,
+      body: id,
+      created_at: `2026-11-21T09:00:0${second}+00:00`,
+      edited_at: null,
+      deleted_at: null,
+      reply_to_message_id: null,
+      attachment_kind: null,
+    });
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      messages: [row('mine', 'user', 'msg:account-12345', 1), row('theirs', 'staff', 'msg:console-12345', 2)],
+    });
+
+    const { messages } = await getSupportConversation({ adminSupabase: client, userId: 'user-1' });
+
+    expect(messages.map((message) => [message.id, message.clientMessageId])).toEqual([
+      ['mine', 'msg:account-12345'],
+      ['theirs', null],
+    ]);
+  });
+
   it('says typing only while the time is still to come', () => {
     const row = conversationRow({ user_typing_until: '2026-11-21T10:00:05Z' });
     expect(toSupportConversationSummary(row, Date.parse('2026-11-21T10:00:04Z')).userTyping).toBe(true);
@@ -248,7 +315,7 @@ describe('sending', () => {
           status: 'sent',
           conversation_id: 'conversation-1',
           conversation_status: 'open',
-          message: payload({ reply_to: { id: 'staff-1', author: 'staff', body: 'Which one?', deleted_at: null } }),
+          message: payload({ client_message_id: 'msg:abc-12345', reply_to: { id: 'staff-1', author: 'staff', body: 'Which one?', deleted_at: null } }),
         },
       },
     });
@@ -280,6 +347,7 @@ describe('sending', () => {
       message: {
         id: 'message-1',
         author: 'user',
+        clientMessageId: 'msg:abc-12345',
         body: 'My credits did not come back.',
         createdAt: '2026-11-21T09:00:00+00:00',
         editedAt: null,
@@ -386,7 +454,18 @@ describe('read receipts and typing', () => {
     });
     await expect(markSupportConversationRead({ adminSupabase: client, userId: 'user-1', reader: 'user' }))
       .resolves.toEqual({ ok: true, userLastReadAt: '2026-11-21T10:00:00Z', staffLastReadAt: null });
-    expect(calls[0]).toEqual({ kind: 'rpc', args: { name: 'mark_support_conversation_read', p_user_id: 'user-1', p_reader: 'user' } });
+    expect(calls[0]).toEqual({
+      kind: 'rpc',
+      args: { name: 'mark_support_conversation_read', p_user_id: 'user-1', p_reader: 'user', p_up_to_message_id: null },
+    });
+  });
+
+  it('marks read up to the newest message the reader was shown', async () => {
+    const { client, calls } = fakeSupabase({
+      rpcResults: { mark_support_conversation_read: { status: 'read', user_last_read_at: null, staff_last_read_at: '2026-11-21T10:00:00Z' } },
+    });
+    await markSupportConversationRead({ adminSupabase: client, userId: 'user-1', reader: 'staff', upToMessageId: 'message-7' });
+    expect(calls[0].args).toMatchObject({ p_reader: 'staff', p_up_to_message_id: 'message-7' });
   });
 
   it('says typing, and answers no conversation yet without a fault', async () => {
@@ -444,10 +523,28 @@ describe('the operator\'s reply', () => {
     });
   });
 
-  it('does not tell the account twice about a retried reply', async () => {
+  it('makes sure a retried reply was announced: its first answer may have been lost after the reply was kept', async () => {
+    // The alert is written under the reply's own key, so this is never a second alert.
     const { client } = fakeSupabase({
       conversations: [conversationRow()],
-      rpcResults: { send_support_message: { status: 'duplicate', conversation_id: 'conversation-1', conversation_status: 'open', message: payload({ author: 'staff' }) } },
+      rpcResults: { send_support_message: { status: 'duplicate', conversation_id: 'conversation-1', conversation_status: 'open', message: payload({ id: 'reply-1', author: 'staff', body: 'Fixed' }) } },
+    });
+    const notify = vi.fn().mockResolvedValue(undefined);
+    await replyToSupportConversation({ adminSupabase: client, conversationId: 'conversation-1', body: 'Fixed', notify });
+    expect(notify).toHaveBeenCalledWith(client, expect.objectContaining({ messageId: 'reply-1', replyBody: 'Fixed' }));
+  });
+
+  it('does not announce a retried reply support has deleted since', async () => {
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      rpcResults: {
+        send_support_message: {
+          status: 'duplicate',
+          conversation_id: 'conversation-1',
+          conversation_status: 'open',
+          message: payload({ author: 'staff', body: null, deleted_at: '2026-11-21T09:01:00+00:00' }),
+        },
+      },
     });
     const notify = vi.fn();
     await replyToSupportConversation({ adminSupabase: client, conversationId: 'conversation-1', body: 'x', notify });
@@ -482,6 +579,86 @@ describe('resolving', () => {
     const { client } = fakeSupabase({ updatedIds: [] });
     await expect(setSupportConversationStatus({ adminSupabase: client, conversationId: 'conversation-9', status: 'resolved' }))
       .resolves.toMatchObject({ ok: false, code: 'CONVERSATION_NOT_FOUND' });
+  });
+
+  it('resolves only while the account\'s latest message is the one the operator was shown', async () => {
+    const { client, calls } = fakeSupabase();
+    await setSupportConversationStatus({
+      adminSupabase: client,
+      conversationId: 'conversation-1',
+      status: 'resolved',
+      seenLastUserMessageAt: '2026-11-21T09:30:00.123456+00:00',
+    });
+    // The time exactly as the API answered it, quoted for PostgREST.
+    expect(calls.find((call) => call.kind === 'update-or')?.args)
+      .toBe('last_user_message_at.is.null,last_user_message_at.lte."2026-11-21T09:30:00.123456+00:00"');
+
+    const none = fakeSupabase();
+    await setSupportConversationStatus({ adminSupabase: none.client, conversationId: 'conversation-1', status: 'resolved', seenLastUserMessageAt: null });
+    expect(none.calls.find((call) => call.kind === 'update-is')?.args).toEqual(['last_user_message_at', null]);
+
+    // A reopen is not held to anything.
+    const reopen = fakeSupabase();
+    await setSupportConversationStatus({ adminSupabase: reopen.client, conversationId: 'conversation-1', status: 'open', seenLastUserMessageAt: null });
+    expect(reopen.calls.some((call) => call.kind === 'update-is' || call.kind === 'update-or')).toBe(false);
+  });
+
+  it('refuses a resolve a newer message overtook, leaving the conversation waiting on support', async () => {
+    const { client } = fakeSupabase({ conversations: [conversationRow()], updatedIds: [] });
+    await expect(setSupportConversationStatus({
+      adminSupabase: client,
+      conversationId: 'conversation-1',
+      status: 'resolved',
+      seenLastUserMessageAt: '2026-11-21T09:30:00+00:00',
+    })).resolves.toMatchObject({ ok: false, code: 'CONVERSATION_CHANGED' });
+  });
+
+  it('refuses a seen time it could not carry back exactly, before writing', async () => {
+    const { client, calls } = fakeSupabase();
+    await expect(setSupportConversationStatus({
+      adminSupabase: client,
+      conversationId: 'conversation-1',
+      status: 'resolved',
+      seenLastUserMessageAt: '2026-11-21T09:30:00Z,status.eq.open',
+    })).resolves.toMatchObject({ ok: false, code: 'CONVERSATION_CHANGED' });
+    expect(calls.some((call) => call.kind === 'update')).toBe(false);
+  });
+});
+
+describe('the alert a reply sent', () => {
+  it('goes from the account\'s Alerts when support deletes the reply, and stays for the account\'s own deletes', async () => {
+    const deleted = { status: 'deleted', message: payload({ author: 'staff', body: null, deleted_at: '2026-11-21T09:06:00+00:00' }), removed_paths: [] };
+    const staff = fakeSupabase({ rpcResults: { delete_support_message: deleted } });
+    const withdrawAlert = vi.fn().mockResolvedValue(undefined);
+    await deleteSupportMessage({ adminSupabase: staff.client, userId: 'user-1', author: 'staff', messageId: 'reply-1', withdrawAlert });
+    expect(withdrawAlert).toHaveBeenCalledWith(staff.client, { userId: 'user-1', messageId: 'reply-1' });
+
+    const account = fakeSupabase({ rpcResults: { delete_support_message: { ...deleted, message: payload({ body: null, deleted_at: '2026-11-21T09:06:00+00:00' }) } } });
+    const untouched = vi.fn();
+    await deleteSupportMessage({ adminSupabase: account.client, userId: 'user-1', author: 'user', messageId: 'message-1', withdrawAlert: untouched });
+    expect(untouched).not.toHaveBeenCalled();
+  });
+
+  it('says what an edited reply says now', async () => {
+    const { client } = fakeSupabase({
+      rpcResults: { edit_support_message: { status: 'edited', message: payload({ id: 'reply-1', author: 'staff', body: 'Credits are back now.' }) } },
+    });
+    const rewordAlert = vi.fn().mockResolvedValue(undefined);
+    await editSupportMessage({ adminSupabase: client, userId: 'user-1', author: 'staff', messageId: 'reply-1', body: ' Credits are back now. ', rewordAlert });
+    expect(rewordAlert).toHaveBeenCalledWith(client, { userId: 'user-1', messageId: 'reply-1', replyBody: 'Credits are back now.', hasPhoto: false });
+  });
+
+  it('never fails the delete or the edit over the alert', async () => {
+    const { client } = fakeSupabase({
+      rpcResults: { delete_support_message: { status: 'deleted', message: payload({ author: 'staff', body: null, deleted_at: '2026-11-21T09:06:00+00:00' }), removed_paths: [] } },
+    });
+    await expect(deleteSupportMessage({
+      adminSupabase: client,
+      userId: 'user-1',
+      author: 'staff',
+      messageId: 'reply-1',
+      withdrawAlert: vi.fn().mockRejectedValue(new Error('alerts unavailable')),
+    })).resolves.toMatchObject({ ok: true });
   });
 });
 
@@ -644,18 +821,79 @@ describe('photos', () => {
     expect(photos.settleStagedSupportPhoto).not.toHaveBeenCalled();
   });
 
-  it('removes the copies and gives the upload back when the send fails, and says so', async () => {
+  const sendStagedPhoto = (client: SupabaseClient) => sendSupportMessage({
+    adminSupabase: client,
+    userId: 'user-1',
+    author: 'user',
+    body: 'x',
+    clientMessageId: 'msg:photo-12345',
+    photo: { kind: 'staged', storagePath: 'uploads/user-1/upload-1-photo.jpg' },
+  });
+
+  it('removes the copies and gives the upload back when the database refused the send, and says so', async () => {
     stagePhoto();
-    const { client } = fakeSupabase({ rpcError: { message: 'connection reset' } });
-    await expect(sendSupportMessage({
-      adminSupabase: client,
-      userId: 'user-1',
-      author: 'user',
-      body: 'x',
-      photo: { kind: 'staged', storagePath: 'uploads/user-1/upload-1-photo.jpg' },
-    })).rejects.toBeInstanceOf(SupportConversationError);
+    const { client } = fakeSupabase({ conversations: [conversationRow()], rpcError: { message: 'bad request' }, rpcStatus: 400 });
+    await expect(sendStagedPhoto(client)).rejects.toBeInstanceOf(SupportConversationError);
     expect(photos.removeSupportPhotoCopies).toHaveBeenCalledWith(client, [stored.path, stored.previewPath]);
     expect(photos.releaseStagedSupportPhoto).toHaveBeenCalledWith(client, staged.claim);
+  });
+
+  it('keeps the photo of a message kept before its answer was lost, and answers that message', async () => {
+    stagePhoto();
+    // Not there when the send began; there once its answer was lost.
+    const messages: Row[] = [];
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      messages,
+      rpcResults: { support_message_payload: payload({ body: null, attachment: attachmentPayload }) },
+      rpcFailures: { send_support_message: { error: { message: 'gateway timeout' }, status: 504 } },
+    });
+    vi.mocked(photos.storeSupportPhoto).mockImplementation(async () => {
+      messages.push({ id: 'message-1', conversation_id: 'conversation-1', client_message_id: 'msg:photo-12345' });
+      return stored;
+    });
+
+    await expect(sendStagedPhoto(client)).resolves.toMatchObject({ ok: true, created: true, message: { id: 'message-1', attachment: { width: 1080 } } });
+    expect(photos.removeSupportPhotoCopies).not.toHaveBeenCalled();
+    expect(photos.releaseStagedSupportPhoto).not.toHaveBeenCalled();
+    expect(photos.settleStagedSupportPhoto).toHaveBeenCalledWith(client, { staged, userId: 'user-1' });
+  });
+
+  it('lets the copies go when an answer was lost and the message is not there', async () => {
+    stagePhoto();
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      rpcFailures: { send_support_message: { error: { message: 'connection reset' }, status: 0 } },
+    });
+    await expect(sendStagedPhoto(client)).rejects.toBeInstanceOf(SupportConversationError);
+    expect(photos.removeSupportPhotoCopies).toHaveBeenCalledWith(client, [stored.path, stored.previewPath]);
+    expect(photos.releaseStagedSupportPhoto).toHaveBeenCalledWith(client, staged.claim);
+  });
+
+  it('touches nothing when whether the message was kept cannot be told', async () => {
+    stagePhoto();
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      rpcFailures: { send_support_message: { error: { message: 'connection reset' }, status: 0 } },
+    });
+    // The look-up after the lost answer cannot read the conversation either.
+    vi.mocked(photos.storeSupportPhoto).mockImplementation(async () => {
+      vi.spyOn(client, 'from').mockImplementation(() => {
+        throw new Error('database unreachable');
+      });
+      return stored;
+    });
+    await expect(sendStagedPhoto(client)).rejects.toBeInstanceOf(SupportConversationError);
+    expect(photos.removeSupportPhotoCopies).not.toHaveBeenCalled();
+    expect(photos.releaseStagedSupportPhoto).not.toHaveBeenCalled();
+  });
+
+  it('answers a kept photo message though settling its staged upload failed, removing nothing', async () => {
+    stagePhoto();
+    vi.mocked(photos.settleStagedSupportPhoto).mockRejectedValue(new Error('lease gone'));
+    const { client } = fakeSupabase({ rpcResults: { send_support_message: sentPhoto() } });
+    await expect(sendStagedPhoto(client)).resolves.toMatchObject({ ok: true, created: true });
+    expect(photos.removeSupportPhotoCopies).not.toHaveBeenCalled();
   });
 
   it('sends the console\'s photo from its bytes into the account\'s folder, and the alert says Photo', async () => {

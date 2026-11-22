@@ -29,6 +29,8 @@ import {
   notifyPostSocialActivity,
   notifySupportReplied,
   processMobilePushMaintenance,
+  rewordSupportReplyNotification,
+  withdrawSupportReplyNotification,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
   sendExpoPushNotificationBatch,
@@ -2657,6 +2659,39 @@ describe('what each alert opens and says', () => {
         dedupe_key: 'support-reply:message-2',
         body: `${'x'.repeat(139)}…`,
       }),
+    ]);
+  });
+
+  it('takes a reply\'s alert away when support deletes the reply, and rewords it when support edits it', async () => {
+    const calls: Array<{ op: string; values?: unknown; filters: Array<[string, unknown]> }> = [];
+    const written = (op: string, values?: unknown) => {
+      const call = { op, values, filters: [] as Array<[string, unknown]> };
+      calls.push(call);
+      const chain = {
+        eq(column: string, value: unknown) {
+          call.filters.push([column, value]);
+          return Object.assign(Promise.resolve({ error: null }), chain);
+        },
+      };
+      return chain;
+    };
+    const client = {
+      from: (table: string) => {
+        if (table !== 'mobile_notifications') throw new Error(`Unexpected table: ${table}`);
+        return { delete: () => written('delete'), update: (values: unknown) => written('update', values) };
+      },
+    } as unknown as SupabaseClient;
+
+    await withdrawSupportReplyNotification(client, { userId: 'account-1', messageId: 'message-1' });
+    await rewordSupportReplyNotification(client, { userId: 'account-1', messageId: 'message-2', replyBody: 'Fixed now', hasPhoto: true });
+
+    expect(calls).toEqual([
+      { op: 'delete', values: undefined, filters: [['user_id', 'account-1'], ['dedupe_key', 'support-reply:message-1']] },
+      {
+        op: 'update',
+        values: { title: 'Support replied', body: '📷 Fixed now' },
+        filters: [['user_id', 'account-1'], ['dedupe_key', 'support-reply:message-2']],
+      },
     ]);
   });
 

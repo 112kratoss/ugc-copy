@@ -237,8 +237,22 @@ async function handleRead(request: Request, dependencies: Resolved) {
   const limited = await limit(adminSupabase, dependencies, SUPPORT_SIGNAL_RATE_LIMIT, user.id, 'Failed to mark your messages read.');
   if (limited) return limited;
 
+  // How far the reader has read: the newest message it was shown. An app from
+  // before 2026-11-23 sends no body, and reads the whole thread as it did then.
+  let upToMessageId: string | null = null;
+  if (request.body) {
+    const bodyResult = await dependencies.readBoundedJsonBody(request, SUPPORT_SMALL_BODY_MAX_BYTES);
+    if (!bodyResult.ok && bodyResult.reason === 'too_large') {
+      return NextResponse.json({ error: 'Invalid request body.' }, { status: 413 });
+    }
+    const value = bodyResult.ok && bodyResult.value && typeof bodyResult.value === 'object'
+      ? (bodyResult.value as Record<string, unknown>).upToMessageId
+      : undefined;
+    if (isSupportMessageId(value)) upToMessageId = value;
+  }
+
   try {
-    const result = await dependencies.markSupportConversationRead({ adminSupabase, userId: user.id, reader: 'user' });
+    const result = await dependencies.markSupportConversationRead({ adminSupabase, userId: user.id, reader: 'user', upToMessageId });
     if (!result.ok) {
       return NextResponse.json({ error: result.error, code: result.code }, { status: 404 });
     }

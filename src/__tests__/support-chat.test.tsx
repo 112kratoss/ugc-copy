@@ -11,6 +11,7 @@ import { useSupportChat, type SupportChatTransport } from '@/components/support-
 
 import {
   SUPPORT_REFUSAL_WORDS,
+  SUPPORT_WORDS,
   type SupportConversationSummary,
   type SupportMessage,
   type SupportPhoto,
@@ -22,6 +23,7 @@ const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOStr
 function message(overrides: Partial<SupportMessage> & Pick<SupportMessage, 'id'>): SupportMessage {
   return {
     author: 'user',
+    clientMessageId: null,
     body: 'Hello',
     createdAt: iso(60),
     editedAt: null,
@@ -293,11 +295,190 @@ describe('photos in the web chat', () => {
     const { unmount } = await renderChat();
     const field = screen.getByLabelText('Message');
     const file = new File([new Uint8Array([4, 5])], 'image.png', { type: 'image/png' });
-    fireEvent.paste(field, { clipboardData: { files: [file] } });
+    fireEvent.paste(field, { clipboardData: { files: [file], getData: () => '' } });
     expect(screen.getByRole('button', { name: 'Remove photo' })).toBeInTheDocument();
     fireEvent.keyDown(field, { key: 'Escape' });
     expect(screen.queryByRole('button', { name: 'Remove photo' })).not.toBeInTheDocument();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:picked-1');
+    unmount();
+  });
+
+  it('pastes text that comes with a picture of itself as the text', async () => {
+    // Cells copied from a spreadsheet: their text, and an image of them.
+    const { unmount } = await renderChat();
+    const field = screen.getByLabelText('Message');
+    const file = new File([new Uint8Array([4, 5])], 'image.png', { type: 'image/png' });
+    const pasted = fireEvent.paste(field, {
+      clipboardData: { files: [file], getData: (type: string) => (type === 'text/plain' ? 'Order 1042\tFailed' : '') },
+    });
+    expect(pasted).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Remove photo' })).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it('keeps a dropped file that is not a photo from opening in the tab, and says why', async () => {
+    const { container, transport, unmount } = await renderChat();
+    const chat = container.querySelector('section') as HTMLElement;
+    const pdf = new File(['%PDF'], 'invoice.pdf', { type: 'application/pdf' });
+
+    expect(fireEvent.dragOver(chat, { dataTransfer: { types: ['Files'], files: [pdf] } })).toBe(false);
+    expect(fireEvent.drop(chat, { dataTransfer: { types: ['Files'], files: [pdf] } })).toBe(false);
+    expect(screen.getByRole('alert')).toHaveTextContent(SUPPORT_REFUSAL_WORDS.PHOTO_UNREADABLE);
+    expect(screen.queryByRole('button', { name: 'Remove photo' })).not.toBeInTheDocument();
+    expect(transport.send).not.toHaveBeenCalled();
+    unmount();
+  });
+});
+
+describe('the web chat when things go wrong', () => {
+  const sent = (id: string, body: string, clientMessageId: string | null = null) => ({
+    ok: true as const,
+    value: {
+      message: message({ id, body, createdAt: new Date().toISOString(), clientMessageId }),
+      conversation: { id: 'conversation-1', status: 'open' as const },
+    },
+  });
+
+  async function write(text: string) {
+    const field = screen.getByLabelText('Message');
+    fireEvent.change(field, { target: { value: text } });
+    await act(async () => { fireEvent.keyDown(field, { key: 'Enter' }); });
+  }
+
+  it('does not send on the Enter that ends an input method\'s word in Safari', async () => {
+    const { transport, unmount } = await renderChat();
+    const field = screen.getByLabelText('Message');
+    fireEvent.change(field, { target: { value: 'にほんご' } });
+    // Safari says the composition is over, but keeps keyCode 229 on that Enter.
+    fireEvent.keyDown(field, { key: 'Enter', keyCode: 229 });
+    expect(transport.send).not.toHaveBeenCalled();
+    expect(field).toHaveValue('にほんご');
+    unmount();
+  });
+
+  it('keeps the unsent draft aside while a message is edited, and a refused edit\'s new text', async () => {
+    const { transport, unmount } = await renderChat();
+    const field = screen.getByLabelText('Message');
+    fireEvent.change(field, { target: { value: 'A long question I was writing' } });
+
+    fireEvent.click(within(bubbleRow('Thanks!')).getByRole('button', { name: 'Message actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    expect(field).toHaveValue('Thanks!');
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(field).toHaveValue('A long question I was writing');
+
+    // An edit the server refuses keeps its text in the composer, still editing.
+    transport.edit.mockImplementationOnce((async () => ({ ok: false, error: SUPPORT_REFUSAL_WORDS.EDIT_TOO_LATE })) as never);
+    fireEvent.click(within(bubbleRow('Thanks!')).getByRole('button', { name: 'Message actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    fireEvent.change(field, { target: { value: 'Thanks so much!' } });
+    await act(async () => { fireEvent.keyDown(field, { key: 'Enter' }); });
+    expect(screen.getByRole('alert')).toHaveTextContent(SUPPORT_REFUSAL_WORDS.EDIT_TOO_LATE);
+    expect(field).toHaveValue('Thanks so much!');
+    expect(screen.getByRole('button', { name: 'Cancel edit' })).toBeInTheDocument();
+
+    // Saved, the draft written before the edit comes back.
+    await act(async () => { fireEvent.keyDown(field, { key: 'Enter' }); });
+    expect(transport.edit).toHaveBeenLastCalledWith('m4', 'Thanks so much!');
+    expect(field).toHaveValue('A long question I was writing');
+    unmount();
+  });
+
+  it('sends one message at a time, in the order written', async () => {
+    const transport = fakeTransport();
+    let releaseFirst: () => void = () => undefined;
+    transport.send
+      .mockImplementationOnce((({ body }: { body: string }) => new Promise((resolve) => {
+        releaseFirst = () => resolve(sent('m5', body));
+      })) as never)
+      .mockImplementationOnce((async ({ body }: { body: string }) => sent('m6', body)) as never);
+    const { unmount } = await renderChat(transport);
+
+    await write('A screenshot first');
+    await write('then the words about it');
+    expect(transport.send).toHaveBeenCalledTimes(1);
+
+    await act(async () => { releaseFirst(); });
+    await waitFor(() => expect(transport.send).toHaveBeenCalledTimes(2));
+    expect(transport.send.mock.calls.map(([input]) => input.body)).toEqual(['A screenshot first', 'then the words about it']);
+    unmount();
+  });
+
+  it('drops a read that left before a send it could not see, and reads again', async () => {
+    const transport = fakeTransport();
+    const kept = message({ id: 'm5', body: 'Sent while reading', createdAt: iso(1) });
+    let releaseStale: () => void = () => undefined;
+    transport.load
+      .mockImplementationOnce(async () => ({ kind: 'ok' as const, conversation: summary, messages: thread }))
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseStale = () => resolve({ kind: 'ok' as const, conversation: summary, messages: thread });
+      }))
+      .mockImplementation(async () => ({ kind: 'ok' as const, conversation: summary, messages: [...thread, kept] }));
+    transport.send.mockImplementation((async () => sent('m5', 'Sent while reading')) as never);
+    const { unmount } = await renderChat(transport);
+
+    // A read leaves as the tab comes back into view, and is still on its way...
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(transport.load).toHaveBeenCalledTimes(2));
+    // ...when a message is sent and kept.
+    await write('Sent while reading');
+    expect(screen.getByText('Sent while reading')).toBeInTheDocument();
+
+    // The old read lands: it is dropped, never drawn over the send (checked at
+    // once, before the next regular read could draw the message back), and
+    // the thread is read again.
+    await act(async () => { releaseStale(); });
+    expect(screen.getByText('Sent while reading')).toBeInTheDocument();
+    await waitFor(() => expect(transport.load).toHaveBeenCalledTimes(3));
+    expect(screen.getByText('Sent while reading')).toBeInTheDocument();
+    unmount();
+  });
+
+  it('settles a message whose answer was lost, once a read shows it kept', async () => {
+    const transport = fakeTransport();
+    transport.send.mockImplementation((async () => ({ ok: false, error: null })) as never);
+    const { unmount } = await renderChat(transport);
+
+    await write('Did it go?');
+    expect(await screen.findByRole('button', { name: SUPPORT_WORDS.notSent })).toBeInTheDocument();
+    const { clientMessageId } = transport.send.mock.calls[0][0];
+
+    transport.load.mockImplementation(async () => ({
+      kind: 'ok' as const,
+      conversation: summary,
+      messages: [...thread, message({ id: 'm5', body: 'Did it go?', createdAt: iso(0), clientMessageId })],
+    }));
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(screen.queryByRole('button', { name: SUPPORT_WORDS.notSent })).not.toBeInTheDocument());
+    expect(screen.getAllByText('Did it go?')).toHaveLength(1);
+    unmount();
+  });
+
+  it('lets a message that was not sent go, with what was kept for its retry', async () => {
+    const transport = { ...fakeTransport(), forget: vi.fn() };
+    transport.send.mockImplementation((async () => ({ ok: false, error: null })) as never);
+    const { unmount } = await renderChat(transport);
+
+    await write('Never mind');
+    const { clientMessageId } = transport.send.mock.calls[0][0];
+    fireEvent.click(await screen.findByRole('button', { name: `${SUPPORT_WORDS.delete}: ${SUPPORT_WORDS.notSentActions}` }));
+    expect(screen.queryByText('Never mind')).not.toBeInTheDocument();
+    expect(transport.forget).toHaveBeenCalledWith(clientMessageId);
+    unmount();
+  });
+
+  it('sends a reply whose quote was deleted on its own when tried again', async () => {
+    const transport = fakeTransport();
+    transport.send
+      .mockImplementationOnce((async () => ({ ok: false, error: SUPPORT_REFUSAL_WORDS.REPLY_NOT_FOUND, code: 'REPLY_NOT_FOUND' })) as never);
+    const { unmount } = await renderChat(transport);
+
+    fireEvent.click(within(bubbleRow(/The credits are back/)).getByRole('button', { name: 'Reply' }));
+    await write('Which video?');
+    expect(transport.send).toHaveBeenLastCalledWith(expect.objectContaining({ replyToMessageId: 'm2' }));
+
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: SUPPORT_WORDS.notSent })); });
+    expect(transport.send).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Which video?', replyToMessageId: null }));
     unmount();
   });
 });

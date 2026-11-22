@@ -31,6 +31,12 @@
 -- and add them. Deleting the account deletes its conversation (ON DELETE
 -- CASCADE from auth.users).
 
+-- The locks this takes are on tables written all day (auth.users for the
+-- foreign keys, mobile_notifications and media_upload_intents for their
+-- checks): a release waits at most five seconds for one, and fails rather
+-- than queueing every write behind it.
+SET LOCAL lock_timeout = '5s';
+
 CREATE TABLE public.support_conversations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL UNIQUE REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -136,6 +142,13 @@ COMMENT ON TABLE public.support_messages IS
 CREATE INDEX support_messages_conversation_created_idx
   ON public.support_messages (conversation_id, created_at, id);
 
+-- A reply points at the message it quotes: deleting messages (an account's
+-- deletion takes its whole conversation) clears those pointers through this
+-- index rather than a scan of every message per row.
+CREATE INDEX support_messages_reply_to_idx
+  ON public.support_messages (reply_to_message_id)
+  WHERE reply_to_message_id IS NOT NULL;
+
 -- One reaction per side on a message, from the quick set the clients offer.
 CREATE TABLE public.support_message_reactions (
   message_id uuid NOT NULL REFERENCES public.support_messages(id) ON DELETE CASCADE,
@@ -192,7 +205,9 @@ SET name = EXCLUDED.name,
 
 -- A message as the functions answer it: the API's shape, with its photo, the
 -- message it replies to and its reactions. The photo's paths go to the server
--- only, which answers clients with signed links instead.
+-- only, which answers clients with signed links instead, and the client's own
+-- id only to the side that wrote the message, which settles its copy on the
+-- way by it.
 CREATE OR REPLACE FUNCTION public.support_message_payload(p_message_id uuid)
 RETURNS jsonb
 LANGUAGE sql
@@ -202,6 +217,7 @@ AS $$
   SELECT jsonb_build_object(
     'id', m.id,
     'author', m.author,
+    'client_message_id', m.client_message_id,
     'body', m.body,
     'created_at', m.created_at,
     'edited_at', m.edited_at,
@@ -278,7 +294,8 @@ DECLARE
   v_attachment_bytes integer;
   v_attachment_thumbhash text;
   -- The wall clock, not the transaction's start: a thread is read in this
-  -- order, and two messages written in one transaction must not tie.
+  -- order, and two messages written in one transaction must not tie. Taken
+  -- again once the conversation is locked (below).
   v_now timestamptz := clock_timestamp();
   v_conversation public.support_conversations%ROWTYPE;
   v_message public.support_messages%ROWTYPE;
@@ -348,6 +365,11 @@ BEGIN
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'not_found');
   END IF;
+
+  -- Stamped once the conversation is locked, so messages are timed in the
+  -- order they are kept: a side that has read up to one message has never
+  -- passed over another kept after it with an earlier time.
+  v_now := clock_timestamp();
 
   IF v_client_message_id IS NOT NULL THEN
     SELECT * INTO v_message
@@ -461,6 +483,8 @@ BEGIN
     RETURN jsonb_build_object('status', 'not_found');
   END IF;
 
+  v_now := clock_timestamp();
+
   SELECT * INTO v_message
   FROM public.support_messages
   WHERE id = p_message_id
@@ -547,6 +571,8 @@ BEGIN
     RETURN jsonb_build_object('status', 'not_found');
   END IF;
 
+  v_now := clock_timestamp();
+
   SELECT * INTO v_message
   FROM public.support_messages
   WHERE id = p_message_id
@@ -593,6 +619,30 @@ BEGIN
         last_message_has_photo = false
     WHERE id = v_conversation.id;
   END IF;
+
+  -- A deleted message waits on nobody: each side's latest message and unread
+  -- count are counted again without it. A deleted question leaves "Waiting on
+  -- us" and its unread badge; a deleted reply puts the question back.
+  UPDATE public.support_conversations AS c
+  SET last_user_message_at = (
+        SELECT max(m.created_at) FROM public.support_messages AS m
+        WHERE m.conversation_id = c.id AND m.author = 'user' AND m.deleted_at IS NULL
+      ),
+      last_staff_message_at = (
+        SELECT max(m.created_at) FROM public.support_messages AS m
+        WHERE m.conversation_id = c.id AND m.author = 'staff' AND m.deleted_at IS NULL
+      ),
+      user_unread_count = (
+        SELECT count(*) FROM public.support_messages AS m
+        WHERE m.conversation_id = c.id AND m.author = 'staff' AND m.deleted_at IS NULL
+          AND (c.user_last_read_at IS NULL OR m.created_at > c.user_last_read_at)
+      ),
+      staff_unread_count = (
+        SELECT count(*) FROM public.support_messages AS m
+        WHERE m.conversation_id = c.id AND m.author = 'user' AND m.deleted_at IS NULL
+          AND (c.staff_last_read_at IS NULL OR m.created_at > c.staff_last_read_at)
+      )
+  WHERE c.id = v_conversation.id;
 
   RETURN jsonb_build_object(
     'status', 'deleted',
@@ -648,6 +698,8 @@ BEGIN
     RETURN jsonb_build_object('status', 'not_found');
   END IF;
 
+  v_now := clock_timestamp();
+
   SELECT * INTO v_message
   FROM public.support_messages
   WHERE id = p_message_id
@@ -685,11 +737,16 @@ GRANT EXECUTE ON FUNCTION public.set_support_message_reaction(uuid, text, uuid, 
 COMMENT ON FUNCTION public.set_support_message_reaction(uuid, text, uuid, text) IS
   'Service-role-only: sets or clears a side''s quick reaction on a support message.';
 
--- A side has read the whole thread: its read time moves on (never back) and
--- its unread count goes to zero.
+-- A side has read the thread up to a message it was shown
+-- (p_up_to_message_id), or all of it without one: its read time moves on to
+-- that message's time (never back), so a message kept after the reader's last
+-- look is not read unseen, and its unread count is what the other side wrote
+-- after that and still stands. An id of no message of the conversation
+-- changes nothing.
 CREATE OR REPLACE FUNCTION public.mark_support_conversation_read(
   p_user_id uuid,
-  p_reader text
+  p_reader text,
+  p_up_to_message_id uuid DEFAULT NULL
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -697,23 +754,52 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_now timestamptz := clock_timestamp();
+  v_read_at timestamptz;
   v_conversation public.support_conversations%ROWTYPE;
 BEGIN
   IF p_user_id IS NULL OR p_reader IS NULL OR p_reader NOT IN ('user', 'staff') THEN
     RETURN jsonb_build_object('status', 'invalid', 'error', 'an account and a reader of user or staff are required');
   END IF;
 
-  UPDATE public.support_conversations
-  SET user_last_read_at = CASE WHEN p_reader = 'user' THEN greatest(coalesce(user_last_read_at, v_now), v_now) ELSE user_last_read_at END,
-      staff_last_read_at = CASE WHEN p_reader = 'staff' THEN greatest(coalesce(staff_last_read_at, v_now), v_now) ELSE staff_last_read_at END,
-      user_unread_count = CASE WHEN p_reader = 'user' THEN 0 ELSE user_unread_count END,
-      staff_unread_count = CASE WHEN p_reader = 'staff' THEN 0 ELSE staff_unread_count END
+  SELECT * INTO v_conversation
+  FROM public.support_conversations
   WHERE user_id = p_user_id
-  RETURNING * INTO v_conversation;
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('status', 'not_found');
+  END IF;
+
+  IF p_up_to_message_id IS NULL THEN
+    v_read_at := clock_timestamp();
+  ELSE
+    SELECT created_at INTO v_read_at
+    FROM public.support_messages
+    WHERE id = p_up_to_message_id
+      AND conversation_id = v_conversation.id;
+  END IF;
+
+  IF v_read_at IS NOT NULL THEN
+    v_read_at := greatest(
+      coalesce(CASE WHEN p_reader = 'user' THEN v_conversation.user_last_read_at ELSE v_conversation.staff_last_read_at END, v_read_at),
+      v_read_at
+    );
+
+    UPDATE public.support_conversations
+    SET user_last_read_at = CASE WHEN p_reader = 'user' THEN v_read_at ELSE user_last_read_at END,
+        staff_last_read_at = CASE WHEN p_reader = 'staff' THEN v_read_at ELSE staff_last_read_at END,
+        user_unread_count = CASE WHEN p_reader = 'user' THEN (
+          SELECT count(*) FROM public.support_messages AS m
+          WHERE m.conversation_id = v_conversation.id AND m.author = 'staff'
+            AND m.deleted_at IS NULL AND m.created_at > v_read_at
+        ) ELSE user_unread_count END,
+        staff_unread_count = CASE WHEN p_reader = 'staff' THEN (
+          SELECT count(*) FROM public.support_messages AS m
+          WHERE m.conversation_id = v_conversation.id AND m.author = 'user'
+            AND m.deleted_at IS NULL AND m.created_at > v_read_at
+        ) ELSE staff_unread_count END
+    WHERE id = v_conversation.id
+    RETURNING * INTO v_conversation;
   END IF;
 
   RETURN jsonb_build_object(
@@ -724,13 +810,13 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.mark_support_conversation_read(uuid, text)
+REVOKE ALL ON FUNCTION public.mark_support_conversation_read(uuid, text, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.mark_support_conversation_read(uuid, text)
+GRANT EXECUTE ON FUNCTION public.mark_support_conversation_read(uuid, text, uuid)
   TO service_role;
 
-COMMENT ON FUNCTION public.mark_support_conversation_read(uuid, text) IS
-  'Service-role-only: records that the account or support has read its support conversation.';
+COMMENT ON FUNCTION public.mark_support_conversation_read(uuid, text, uuid) IS
+  'Service-role-only: records how far the account or support has read its support conversation.';
 
 -- "typing…": a side is writing for the next 8 seconds, or has stopped.
 CREATE OR REPLACE FUNCTION public.set_support_conversation_typing(
@@ -974,6 +1060,105 @@ BEGIN
   );
 END;
 $$;
+
+-- Storage refuses a write into an account's folder once its deletion has
+-- blocked the owner, so nothing lands after the sweep proved the folder
+-- empty. The guard of 20260819071500_complete_upload_capability_state_machine.sql,
+-- unchanged but for support_attachments in its two lists of the buckets
+-- kept under an account's folder.
+CREATE OR REPLACE FUNCTION public.guard_upload_storage_object_write()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_old_key text;
+  v_new_key text;
+  v_old_owner text;
+  v_new_owner text;
+BEGIN
+  v_new_owner := split_part(NEW.name, '/', 1);
+  v_old_owner := CASE WHEN TG_OP = 'UPDATE'
+    THEN split_part(OLD.name, '/', 1) ELSE v_new_owner END;
+
+  -- Account deletion takes owner then path locks. Storage must use the same
+  -- order so even a service-created object with no reservation cannot commit
+  -- after the deletion sweep has proven the prefix empty.
+  IF v_old_owner ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    AND v_new_owner ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    AND v_old_owner <> v_new_owner THEN
+    IF v_old_owner < v_new_owner THEN
+      PERFORM public.lock_upload_owner(v_old_owner::uuid);
+      PERFORM public.lock_upload_owner(v_new_owner::uuid);
+    ELSE
+      PERFORM public.lock_upload_owner(v_new_owner::uuid);
+      PERFORM public.lock_upload_owner(v_old_owner::uuid);
+    END IF;
+  ELSIF v_new_owner ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    PERFORM public.lock_upload_owner(v_new_owner::uuid);
+  ELSIF v_old_owner ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    PERFORM public.lock_upload_owner(v_old_owner::uuid);
+  END IF;
+
+  IF TG_OP = 'UPDATE' THEN
+    v_old_key := OLD.bucket_id || '/' || OLD.name;
+    v_new_key := NEW.bucket_id || '/' || NEW.name;
+    IF v_old_key <= v_new_key THEN
+      PERFORM public.lock_upload_storage_path(OLD.bucket_id, OLD.name);
+      IF v_new_key <> v_old_key THEN
+        PERFORM public.lock_upload_storage_path(NEW.bucket_id, NEW.name);
+      END IF;
+    ELSE
+      PERFORM public.lock_upload_storage_path(NEW.bucket_id, NEW.name);
+      PERFORM public.lock_upload_storage_path(OLD.bucket_id, OLD.name);
+    END IF;
+  ELSE
+    PERFORM public.lock_upload_storage_path(NEW.bucket_id, NEW.name);
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM public.upload_path_tombstones AS tombstone
+    WHERE (tombstone.bucket_id, tombstone.storage_path)
+      IN ((NEW.bucket_id, NEW.name),
+          (CASE WHEN TG_OP = 'UPDATE' THEN OLD.bucket_id ELSE NEW.bucket_id END,
+           CASE WHEN TG_OP = 'UPDATE' THEN OLD.name ELSE NEW.name END))
+  ) THEN
+    RAISE EXCEPTION 'Upload path has been permanently revoked'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF (
+    NEW.bucket_id IN (
+      'profiles', 'uploads', 'generated_images', 'generated_videos',
+      'generated_audio', 'generation_inputs', 'post_resource_files',
+      'template_inputs', 'support_attachments'
+    ) AND EXISTS (
+      SELECT 1 FROM public.blocked_upload_owners AS blocked
+      WHERE v_new_owner ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        AND blocked.owner_user_id = v_new_owner::uuid
+    )
+  ) OR (
+    TG_OP = 'UPDATE'
+    AND OLD.bucket_id IN (
+      'profiles', 'uploads', 'generated_images', 'generated_videos',
+      'generated_audio', 'generation_inputs', 'post_resource_files',
+      'template_inputs', 'support_attachments'
+    ) AND EXISTS (
+      SELECT 1 FROM public.blocked_upload_owners AS blocked
+      WHERE v_old_owner ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        AND blocked.owner_user_id = v_old_owner::uuid
+    )
+  ) THEN
+    RAISE EXCEPTION 'Upload owner has been permanently blocked'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.guard_upload_storage_object_write()
+  FROM PUBLIC, anon, authenticated, service_role;
 
 -- The account is told when support answers (support_reply, written by
 -- notifySupportReplied). The type check last widened in

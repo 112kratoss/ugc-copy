@@ -5566,6 +5566,7 @@
           {
             "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
             "author": "user",
+            "clientMessageId": "msg:1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
             "body": "My video failed but the credits did not come back.",
             "createdAt": "2026-11-21T09:00:00.000Z",
             "editedAt": null,
@@ -5582,6 +5583,7 @@
           {
             "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
             "author": "staff",
+            "clientMessageId": null,
             "body": "Sorry about that. The 40 credits are back in your balance.",
             "createdAt": "2026-11-21T10:30:00.000Z",
             "editedAt": "2026-11-21T10:32:00.000Z",
@@ -5599,6 +5601,7 @@
           {
             "id": "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f",
             "author": "user",
+            "clientMessageId": "msg:3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f",
             "body": null,
             "createdAt": "2026-11-21T10:31:00.000Z",
             "editedAt": null,
@@ -5629,6 +5632,7 @@
             {
               "id": "5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b",
               "author": "user",
+              "clientMessageId": "msg:1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a",
               "body": null,
               "createdAt": "2026-11-21T11:20:00.000Z",
               "editedAt": null,
@@ -5648,6 +5652,7 @@
             {
               "id": "6f7a8b9c-0d1e-4f2a-9b3c-5d6e7f8a9b0c",
               "author": "staff",
+              "clientMessageId": null,
               "body": "Here is where your credits show.",
               "createdAt": "2026-11-21T11:25:00.000Z",
               "editedAt": null,
@@ -5680,7 +5685,8 @@
       "typing": "staffTyping is true for 8 seconds after support's latest typing ping; userTyping is the account's own, for the console.",
       "polling": "An open thread reads this again every 3 s while something changed in the last minute, every 5 s for the next four (inside the 8 s a typing ping lasts), every 20 s after five quiet minutes, and not at all in the background.",
       "deletedMessages": "A message deleted for everyone keeps its place with body null, deletedAt set and no reactions.",
-      "photos": "A message may carry one photo (attachment, null for none and once deleted), with its caption in body or body null. previewUrl is a 720 px WebP for the thread and url the picture at up to 2560 px for the full-screen view, both signed links to the private support_attachments bucket that last 3 hours (expiresAt); a link is null when its copy could not be signed, and the client then says the photo could not be loaded. width and height are the picture's, upright. Each read signs anew: a client keeps the links it drew while they have more than 15 minutes left. A quote of a photo says hasPhoto."
+      "photos": "A message may carry one photo (attachment, null for none and once deleted), with its caption in body or body null. previewUrl is a 720 px WebP for the thread and url the picture at up to 2560 px for the full-screen view, both signed links to the private support_attachments bucket that last 3 hours (expiresAt); a link is null when its copy could not be signed, and the client then says the photo could not be loaded. width and height are the picture's, upright. Each read signs anew: a client keeps the links it drew while they have more than 15 minutes left. A quote of a photo says hasPhoto.",
+      "clientMessageIds": "clientMessageId is the id the account's own app sent a message under (null on support's messages, and on one sent without one): a message a read shows kept under the id of one the app still draws as on its way, or as not sent after a lost answer, is the thread's now, and the copy on its way goes."
     },
     "sendSupportMessage": {
       "method": "POST",
@@ -5707,6 +5713,7 @@
         "message": {
           "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
           "author": "user",
+          "clientMessageId": "msg:0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
           "body": "Thank you, I can see them now.",
           "createdAt": "2026-11-21T10:40:00.000Z",
           "editedAt": null,
@@ -5732,6 +5739,7 @@
           "message": {
             "id": "5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b",
             "author": "user",
+            "clientMessageId": "msg:1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a",
             "body": null,
             "createdAt": "2026-11-21T11:20:00.000Z",
             "editedAt": null,
@@ -5813,6 +5821,9 @@
       "path": "/api/support/conversation/read",
       "auth": "required",
       "cacheControl": "private, no-store",
+      "request": {
+        "upToMessageId": "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f"
+      },
       "response": {
         "success": true,
         "userLastReadAt": "2026-11-21T10:41:00.000Z",
@@ -5827,7 +5838,8 @@
             "code": "CONVERSATION_NOT_FOUND"
           }
         }
-      }
+      },
+      "requestNote": "upToMessageId is the newest message the thread drew: the read time moves to that message's time (never back), so a message kept after the last read is not marked read unseen. An app from before 2026-11-23 sends no body, and reads the whole thread."
     },
     "setSupportTyping": {
       "method": "POST",
@@ -5855,6 +5867,7 @@
         "message": {
           "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
           "author": "user",
+          "clientMessageId": "msg:4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
           "body": "Thank you, I can see all 40 now.",
           "createdAt": "2026-11-21T10:40:00.000Z",
           "editedAt": "2026-11-21T10:44:00.000Z",
@@ -5912,6 +5925,7 @@
         "message": {
           "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
           "author": "user",
+          "clientMessageId": "msg:4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
           "body": null,
           "createdAt": "2026-11-21T10:40:00.000Z",
           "editedAt": null,
@@ -5970,6 +5984,7 @@
         "message": {
           "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
           "author": "staff",
+          "clientMessageId": null,
           "body": "Sorry about that. The 40 credits are back in your balance.",
           "createdAt": "2026-11-21T10:30:00.000Z",
           "editedAt": "2026-11-21T10:32:00.000Z",

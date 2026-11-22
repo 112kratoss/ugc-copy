@@ -7,7 +7,6 @@ export const USER_SCOPED_STORAGE_BUCKETS = new Set<string>([
   'profiles',
   'post_resource_files',
   'template_inputs',
-  'support_attachments',
 ]);
 
 export type UserOwnedStorageLocation = {

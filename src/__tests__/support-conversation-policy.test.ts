@@ -31,6 +31,9 @@ import {
   checkSupportMessage,
   createSupportClientMessageId,
   failPendingSupportMessage,
+  isSupportPhotoRefusal,
+  supportInitials,
+  withoutKeptPendingMessages,
   isSupportClientMessageId,
   isSupportMessageId,
   isSupportPhotoType,
@@ -72,12 +75,14 @@ import {
   withSupportReadTimes,
   type SupportConversationSummary,
   type SupportMessage,
+  type SupportPendingMessage,
   type SupportPhoto,
 } from '../../ugc-mobile/lib/support-conversation-policy/support-conversation-policy';
 
 function message(overrides: Partial<SupportMessage> & Pick<SupportMessage, 'id'>): SupportMessage {
   return {
     author: 'user',
+    clientMessageId: null,
     body: 'Hello',
     createdAt: '2026-11-21T09:00:00.000Z',
     editedAt: null,
@@ -520,4 +525,60 @@ describe('photos', () => {
 
 it('names the support mail the web names', () => {
   expect(SUPPORT_EMAIL).toBe(siteConfig.supportEmail);
+});
+
+describe('settling, failing and letting go of messages on their way', () => {
+  const pending = (clientMessageId: string, overrides: Partial<SupportPendingMessage> = {}): SupportPendingMessage => ({
+    clientMessageId,
+    body: 'On its way',
+    createdAt: '2026-11-21T09:00:00.000Z',
+    state: 'sending',
+    replyTo: null,
+    photo: null,
+    ...overrides,
+  });
+
+  it('settles every copy on its way or not sent whose message a read shows kept under its client id', () => {
+    const waiting = [pending('msg:kept-0000001', { state: 'failed' }), pending('msg:still-0000002')];
+    const settled = withoutKeptPendingMessages(waiting, [
+      message({ id: 'm9', clientMessageId: 'msg:kept-0000001' }),
+      message({ id: 'm10', author: 'staff', clientMessageId: null }),
+    ]);
+    expect(settled.map((item) => item.clientMessageId)).toEqual(['msg:still-0000002']);
+    // Nothing kept: the same list, so a screen draws nothing anew.
+    expect(withoutKeptPendingMessages(waiting, [message({ id: 'm11' })])).toBe(waiting);
+  });
+
+  it('lets a quote that was deleted go from a message refused for it, so a retry sends it on its own', () => {
+    const quoted = { id: 'm2', author: 'staff' as const, body: 'Which one?', deleted: false, hasPhoto: false };
+    const [refused] = failPendingSupportMessage([pending('msg:reply-0000001', { replyTo: quoted })], 'msg:reply-0000001', 'REPLY_NOT_FOUND');
+    expect(refused).toMatchObject({ state: 'failed', replyTo: null });
+    const [lost] = failPendingSupportMessage([pending('msg:reply-0000002', { replyTo: quoted })], 'msg:reply-0000002', null);
+    expect(lost).toMatchObject({ state: 'failed', replyTo: quoted });
+  });
+
+  it('stages a photo anew only for a refusal of the photo itself', () => {
+    for (const code of ['PHOTO_NOT_FOUND', 'PHOTO_UNREADABLE', 'PHOTO_TOO_LARGE']) expect(isSupportPhotoRefusal(code)).toBe(true);
+    for (const code of ['REPLY_NOT_FOUND', 'RATE_LIMITED', null, undefined]) expect(isSupportPhotoRefusal(code)).toBe(false);
+  });
+});
+
+describe('a message as both clients read it', () => {
+  it('reads the client id the writer sent it under, and nothing that is not one', () => {
+    const base = { id: 'm1', author: 'user', body: 'Hi', createdAt: '2026-11-21T09:00:00Z' };
+    expect(readSupportMessage({ ...base, clientMessageId: 'msg:abc-12345' })?.clientMessageId).toBe('msg:abc-12345');
+    expect(readSupportMessage(base)?.clientMessageId).toBeNull();
+    expect(readSupportMessage({ ...base, clientMessageId: 42 })?.clientMessageId).toBeNull();
+  });
+});
+
+describe('an account\'s initials', () => {
+  it('takes the first letter of the first two words, whole when it is an emoji or a flag', () => {
+    expect(supportInitials('Asha Rao')).toBe('AR');
+    expect(supportInitials('@asha')).toBe('A');
+    expect(supportInitials('😀 Bob')).toBe('😀B');
+    expect(supportInitials('Bob 😀')).toBe('B😀');
+    expect(supportInitials('🇮🇳 India')).toBe('🇮🇳I');
+    expect(supportInitials('   ')).toBe('?');
+  });
 });

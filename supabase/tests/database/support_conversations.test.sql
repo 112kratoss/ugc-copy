@@ -11,7 +11,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(108);
+select plan(121);
 
 -- Row-level security and indexes.
 select ok((select relrowsecurity from pg_class where oid = 'public.support_conversations'::regclass), 'support_conversations has row-level security enabled');
@@ -42,14 +42,14 @@ select ok(not has_function_privilege('authenticated', 'public.send_support_messa
 select ok(not has_function_privilege('authenticated', 'public.edit_support_message(uuid, text, uuid, text)', 'EXECUTE'), 'authenticated cannot edit');
 select ok(not has_function_privilege('authenticated', 'public.delete_support_message(uuid, text, uuid)', 'EXECUTE'), 'authenticated cannot delete');
 select ok(not has_function_privilege('authenticated', 'public.set_support_message_reaction(uuid, text, uuid, text)', 'EXECUTE'), 'authenticated cannot react');
-select ok(not has_function_privilege('authenticated', 'public.mark_support_conversation_read(uuid, text)', 'EXECUTE'), 'authenticated cannot mark read');
+select ok(not has_function_privilege('authenticated', 'public.mark_support_conversation_read(uuid, text, uuid)', 'EXECUTE'), 'authenticated cannot mark read');
 select ok(not has_function_privilege('authenticated', 'public.set_support_conversation_typing(uuid, text, boolean)', 'EXECUTE'), 'authenticated cannot say typing');
 select ok(not has_function_privilege('anon', 'public.support_message_payload(uuid)', 'EXECUTE'), 'anon cannot read a message payload');
 select ok(has_function_privilege('service_role', 'public.send_support_message(uuid, text, text, text, uuid, jsonb)', 'EXECUTE'), 'the service role sends');
 select ok(has_function_privilege('service_role', 'public.edit_support_message(uuid, text, uuid, text)', 'EXECUTE'), 'the service role edits');
 select ok(has_function_privilege('service_role', 'public.delete_support_message(uuid, text, uuid)', 'EXECUTE'), 'the service role deletes');
 select ok(has_function_privilege('service_role', 'public.set_support_message_reaction(uuid, text, uuid, text)', 'EXECUTE'), 'the service role reacts');
-select ok(has_function_privilege('service_role', 'public.mark_support_conversation_read(uuid, text)', 'EXECUTE'), 'the service role marks read');
+select ok(has_function_privilege('service_role', 'public.mark_support_conversation_read(uuid, text, uuid)', 'EXECUTE'), 'the service role marks read');
 select ok(has_function_privilege('service_role', 'public.set_support_conversation_typing(uuid, text, boolean)', 'EXECUTE'), 'the service role says typing');
 
 -- created_at is explicit: auth.users has no default for it.
@@ -543,6 +543,82 @@ select ok(
   position('support_attachments' in pg_get_functiondef('public.prepare_account_deletion(uuid)'::regprocedure)) > 0,
   'the account''s erasure lists the photo bucket'
 );
+
+-- Read receipts and unread badges follow what was shown and what still stands.
+insert into auth.users (id, email, aud, role, is_anonymous, created_at, updated_at, raw_app_meta_data, raw_user_meta_data) values
+  ('5c400000-0000-4000-8000-000000000004'::uuid, 'support-third@example.invalid', 'authenticated', 'authenticated', false,
+   timezone('utc'::text, now()), timezone('utc'::text, now()), '{}'::jsonb, '{}'::jsonb);
+select public.send_support_message('5c400000-0000-4000-8000-000000000004', 'user', 'First question', 'd5400000-0000-4000-8000-000000000001');
+select public.send_support_message('5c400000-0000-4000-8000-000000000004', 'staff', 'First answer', 'd5400000-0000-4000-8000-000000000002');
+select public.send_support_message('5c400000-0000-4000-8000-000000000004', 'staff', 'Second answer', 'd5400000-0000-4000-8000-000000000003');
+select is(
+  public.support_message_payload((select id from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000001'))->>'client_message_id',
+  'd5400000-0000-4000-8000-000000000001',
+  'a message answers the id its client sent it under'
+);
+select is(
+  public.mark_support_conversation_read('5c400000-0000-4000-8000-000000000004', 'user',
+    (select id from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000002'))->>'status',
+  'read',
+  'the account reads up to the first answer it was shown'
+);
+select is(
+  (select user_unread_count from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  1,
+  'an answer kept after what was shown stays unread'
+);
+select is(
+  (select user_last_read_at from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  (select created_at from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000002'),
+  'the read time is the shown message''s time, not the read''s'
+);
+select is(
+  (public.mark_support_conversation_read('5c400000-0000-4000-8000-000000000004', 'user',
+    (select m.id from public.support_messages m join public.support_conversations c on c.id = m.conversation_id
+     where c.user_id = '5c200000-0000-4000-8000-000000000002' limit 1))->>'user_last_read_at')::timestamptz,
+  (select created_at from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000002'),
+  'a message of another conversation moves nothing'
+);
+select is(
+  (public.mark_support_conversation_read('5c400000-0000-4000-8000-000000000004', 'user',
+    (select id from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000001'))->>'user_last_read_at')::timestamptz,
+  (select created_at from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000002'),
+  'a read time never moves back'
+);
+select public.send_support_message('5c400000-0000-4000-8000-000000000004', 'user', 'Never mind, wrong place', 'd5400000-0000-4000-8000-000000000004');
+select ok(
+  (select awaiting_reply and staff_unread_count = 1 from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  'a new question waits on support, unread'
+);
+select public.delete_support_message('5c400000-0000-4000-8000-000000000004', 'user',
+  (select id from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000004'));
+select is(
+  (select staff_unread_count from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  0,
+  'a question deleted unread leaves support no unread badge'
+);
+select ok(
+  not (select awaiting_reply from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  'and no longer waits on support'
+);
+select public.delete_support_message('5c400000-0000-4000-8000-000000000004', 'staff',
+  (select id from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000003'));
+select public.delete_support_message('5c400000-0000-4000-8000-000000000004', 'staff',
+  (select id from public.support_messages where client_message_id = 'd5400000-0000-4000-8000-000000000002'));
+select ok(
+  (select awaiting_reply from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  'with its answers deleted, the question waits on support again'
+);
+select is(
+  (select user_unread_count from public.support_conversations where user_id = '5c400000-0000-4000-8000-000000000004'),
+  0,
+  'answers deleted unread leave the account no unread badge'
+);
+select ok(
+  position('support_attachments' in pg_get_functiondef('public.guard_upload_storage_object_write()'::regprocedure)) > 0,
+  'Storage refuses a support photo written into the folder of an account being deleted'
+);
+select has_index('public', 'support_messages', 'support_messages_reply_to_idx', 'a deleted message''s quotes are cleared through an index');
 
 -- The reply alert's type is allowed.
 select lives_ok(

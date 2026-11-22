@@ -197,8 +197,20 @@ describe('POST /api/support/conversation/read and /typing', () => {
       .POST(jsonRequest('/api/support/conversation/read', 'POST'));
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual(endpoints.markSupportConversationRead.response);
-    expect(deps.markSupportConversationRead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'account-1', reader: 'user' }));
+    expect(deps.markSupportConversationRead).toHaveBeenCalledWith(expect.objectContaining({ userId: 'account-1', reader: 'user', upToMessageId: null }));
     expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ scope: 'support:signal' }));
+  });
+
+  it('marks read up to the newest message the app drew, and takes an app\'s read with no body as before', async () => {
+    const deps = dependencies();
+    const handlers = createSupportConversationReadRouteHandlers({ dependencies: deps });
+    expect((await handlers.POST(jsonRequest('/api/support/conversation/read', 'POST', { upToMessageId: MESSAGE_ID }))).status).toBe(200);
+    expect(deps.markSupportConversationRead).toHaveBeenLastCalledWith(expect.objectContaining({ upToMessageId: MESSAGE_ID }));
+    // Not a message id: the whole thread, never a refusal of the read.
+    expect((await handlers.POST(jsonRequest('/api/support/conversation/read', 'POST', { upToMessageId: '../x' }))).status).toBe(200);
+    expect(deps.markSupportConversationRead).toHaveBeenLastCalledWith(expect.objectContaining({ upToMessageId: null }));
+    expect((await handlers.POST(jsonRequest('/api/support/conversation/read', 'POST'))).status).toBe(200);
+    expect(deps.markSupportConversationRead).toHaveBeenLastCalledWith(expect.objectContaining({ upToMessageId: null }));
   });
 
   it('answers a read with no conversation 404', async () => {

@@ -2,6 +2,7 @@ import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { runPagedQuery } from '@/lib/admin-paged-query';
 import {
   SupportConversationError,
   loadSupportMessages,
@@ -142,53 +143,84 @@ function failed(what: string): never {
   throw new SupportConversationError(`Failed to load ${what}.`);
 }
 
+/** A page of one of the console's lists, with how many the whole list holds. */
+export type AdminSupportConversationPage = {
+  conversations: AdminSupportConversation[];
+  total: number;
+  /** Where the page landed: the first page when the one asked for is past the end. */
+  offset: number;
+};
+
+/**
+ * One page of a list, by offset. A page past the end (an operator on page 2
+ * whose conversations moved to another list meanwhile, or an old link) lands
+ * on the first page with the list's true size, never an error.
+ */
+async function pageOf(
+  client: SupabaseClient,
+  what: string,
+  build: (from: number, to: number) => PromiseLike<{ data: unknown; error: unknown; count: number | null; status: number }>,
+  { limit, offset, now }: { limit: number; offset: number; now: number },
+): Promise<AdminSupportConversationPage> {
+  let page: Awaited<ReturnType<typeof runPagedQuery<ConversationRow>>>;
+  try {
+    page = await runPagedQuery<ConversationRow>(
+      async (from, to) => {
+        const response = await build(from, to);
+        return { ...response, data: response.data as ConversationRow[] | null };
+      },
+      { offset, pageSize: limit },
+    );
+  } catch {
+    failed(what);
+  }
+  return {
+    conversations: await withProfiles(client, page.rows, now),
+    total: page.total,
+    offset: page.offset,
+  };
+}
+
 /** Waiting on support, the longest wait first. */
 export async function listSupportConversationsAwaitingReply(
   client: SupabaseClient,
-  { limit = 100, now = Date.now() }: { limit?: number; now?: number } = {},
+  { limit = 100, offset = 0, now = Date.now() }: { limit?: number; offset?: number; now?: number } = {},
 ) {
-  const { data, error } = await client
+  return pageOf(client, 'the conversations waiting on support', (from, to) => client
     .from('support_conversations')
-    .select(CONVERSATION_COLUMNS)
+    .select(CONVERSATION_COLUMNS, { count: 'exact' })
     .eq('awaiting_reply', true)
     .order('last_user_message_at', { ascending: true })
-    .limit(limit);
-  if (error) failed('the conversations waiting on support');
-  return withProfiles(client, (data ?? []) as unknown as ConversationRow[], now);
+    .order('id', { ascending: true })
+    .range(from, to), { limit, offset, now });
 }
 
 /** Open and answered: waiting on the account. Newest activity first. */
 export async function listAnsweredOpenSupportConversations(
   client: SupabaseClient,
-  { limit = 50, now = Date.now() }: { limit?: number; now?: number } = {},
+  { limit = 50, offset = 0, now = Date.now() }: { limit?: number; offset?: number; now?: number } = {},
 ) {
-  const { data, error } = await client
+  return pageOf(client, 'the answered conversations', (from, to) => client
     .from('support_conversations')
-    .select(CONVERSATION_COLUMNS)
+    .select(CONVERSATION_COLUMNS, { count: 'exact' })
     .eq('status', 'open')
     .eq('awaiting_reply', false)
     .order('last_message_at', { ascending: false })
-    .limit(limit);
-  if (error) failed('the answered conversations');
-  return withProfiles(client, (data ?? []) as unknown as ConversationRow[], now);
+    .order('id', { ascending: true })
+    .range(from, to), { limit, offset, now });
 }
 
 export async function listResolvedSupportConversations(
   client: SupabaseClient,
   { limit, offset, now = Date.now() }: { limit: number; offset: number; now?: number },
 ) {
-  const { data, error, count } = await client
+  return pageOf(client, 'the resolved conversations', (from, to) => client
     .from('support_conversations')
     .select(CONVERSATION_COLUMNS, { count: 'exact' })
     .eq('status', 'resolved')
     .order('last_message_at', { ascending: false })
-    .range(offset, offset + limit - 1);
-  if (error) failed('the resolved conversations');
-  return {
-    conversations: await withProfiles(client, (data ?? []) as unknown as ConversationRow[], now),
-    total: count ?? 0,
-    offset,
-  };
+    .order('id', { ascending: true })
+    .range(from, to), { limit, offset, now });
 }
 
 /** The count on the console's Support menu item. */
@@ -223,7 +255,7 @@ export async function getAdminSupportConversation(
 
   const row = data as unknown as ConversationRow;
   const [conversation] = await withProfiles(client, [row], now);
-  const messages = await loadSupportMessages(client, conversationId, ADMIN_SUPPORT_THREAD_MESSAGE_LIMIT);
+  const messages = await loadSupportMessages(client, conversationId, 'staff', ADMIN_SUPPORT_THREAD_MESSAGE_LIMIT);
   return {
     conversation,
     summary: toSupportConversationSummary(row, now),

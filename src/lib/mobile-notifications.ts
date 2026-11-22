@@ -2319,8 +2319,44 @@ export async function notifySupportReplied(
     deepLink: buildMobileNotificationDeepLink({ kind: 'support' }),
     objectType: 'support_conversation',
     objectId: params.conversationId,
-    dedupeKey: `support-reply:${params.messageId}`,
+    dedupeKey: supportReplyNotificationKey(params.messageId),
   });
+}
+
+/** The key a support reply's alert is written under: one alert per reply. */
+export function supportReplyNotificationKey(messageId: string) {
+  return `support-reply:${messageId}`;
+}
+
+/**
+ * Support deleted its reply for everyone: its alert goes from the account's
+ * Alerts too, which would otherwise keep the reply's first words. A push
+ * already shown on a phone stays there; nothing can call it back.
+ */
+export async function withdrawSupportReplyNotification(
+  adminSupabase: SupabaseClient,
+  params: { userId: string; messageId: string },
+) {
+  const { error } = await adminSupabase
+    .from('mobile_notifications')
+    .delete()
+    .eq('user_id', params.userId)
+    .eq('dedupe_key', supportReplyNotificationKey(params.messageId));
+  if (error) throw new MobileNotificationError('Failed to withdraw the support reply alert.', 500);
+}
+
+/** Support edited its reply: the alert says what the reply says now. */
+export async function rewordSupportReplyNotification(
+  adminSupabase: SupabaseClient,
+  params: { userId: string; messageId: string; replyBody: string; hasPhoto?: boolean },
+) {
+  const { title, body } = supportReplyAlertWords(params.replyBody, params.hasPhoto === true);
+  const { error } = await adminSupabase
+    .from('mobile_notifications')
+    .update({ title, body })
+    .eq('user_id', params.userId)
+    .eq('dedupe_key', supportReplyNotificationKey(params.messageId));
+  if (error) throw new MobileNotificationError('Failed to update the support reply alert.', 500);
 }
 
 export async function notifyCreatorFollowed(

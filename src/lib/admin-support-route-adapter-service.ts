@@ -35,9 +35,12 @@ import {
  *   with `replyToMessageId`) and tells the account, and sent as multipart form
  *   data it carries a photo (`photo`, which the console has shrunk under the
  *   host's request cap) with the text as its caption; `resolve` and `reopen`
- *   switch its status; `read` and `typing` are the operator's receipts and
- *   "typing…"; `edit`, `delete` and `react` change support's own message or
- *   react to any.
+ *   switch its status, a resolve naming the time of the account's latest
+ *   message the operator was shown (`seenLastUserMessageAt`) and refused with
+ *   409 CONVERSATION_CHANGED when a newer one came in; `read` (up to
+ *   `upToMessageId`, the newest message drawn) and `typing` are the
+ *   operator's receipts and "typing…"; `edit`, `delete` and `react` change
+ *   support's own message or react to any.
  *
  * Like every admin decision, the session is checked here, not trusted from the
  * proxy.
@@ -54,6 +57,8 @@ type SupportActionBody = {
   replyToMessageId?: unknown;
   emoji?: unknown;
   typing?: unknown;
+  seenLastUserMessageAt?: unknown;
+  upToMessageId?: unknown;
 };
 
 const SUPPORT_ACTIONS = ['reply', 'resolve', 'reopen', 'read', 'typing', 'edit', 'delete', 'react'] as const;
@@ -264,13 +269,20 @@ export async function postAdminSupportAction(
     }
 
     if (action === 'resolve' || action === 'reopen') {
+      const seen = body.seenLastUserMessageAt;
       const result = await (dependencies.setSupportConversationStatus ?? setSupportConversationStatus)({
         adminSupabase,
         conversationId,
         status: action === 'resolve' ? 'resolved' : 'open',
+        ...(action === 'resolve' && (seen === null || typeof seen === 'string') ? { seenLastUserMessageAt: seen } : {}),
       });
 
-      if (!result.ok) return conversationNotFound(headers);
+      if (!result.ok) {
+        if (result.code === 'CONVERSATION_CHANGED') {
+          return NextResponse.json({ error: result.error, code: result.code }, { status: 409, headers });
+        }
+        return conversationNotFound(headers);
+      }
       return NextResponse.json({ success: true }, { headers });
     }
 
@@ -283,6 +295,7 @@ export async function postAdminSupportAction(
         adminSupabase,
         userId: owner.userId,
         reader: 'staff',
+        upToMessageId: isSupportMessageId(body.upToMessageId) ? body.upToMessageId : null,
       });
       if (!result.ok) return conversationNotFound(headers);
       return NextResponse.json({

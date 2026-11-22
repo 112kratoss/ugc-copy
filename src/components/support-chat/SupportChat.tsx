@@ -191,6 +191,8 @@ function QuoteBlock({
 /** The thread draws a photo at most this wide and tall; a taller one is cut, as a chat app cuts a long screenshot. */
 const PHOTO_MAX_WIDTH = 288;
 const PHOTO_MAX_HEIGHT = 360;
+/** How long a photo that failed to load waits before it is tried once more by itself. */
+const PHOTO_RETRY_MS = 2500;
 
 /**
  * A photo in a bubble: the server's preview (the thumbhash under it while it
@@ -245,8 +247,42 @@ function SupportPhotoFrame({
   onOpen?: () => void;
   children?: ReactNode;
 }) {
+  // Each try is a new <img>: a link that failed once (a dropped connection)
+  // is tried again by itself a moment later, then on a press.
+  const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (!failed || attempt > 0) return undefined;
+    const timer = window.setTimeout(() => {
+      setFailed(false);
+      setAttempt(1);
+    }, PHOTO_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [attempt, failed]);
   const broken = failed || !source;
+  const className = 'relative block overflow-hidden rounded-xl bg-[var(--ui-surface-3)]';
+
+  if (failed && source && attempt > 0) {
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          setFailed(false);
+          setAttempt((current) => current + 1);
+        }}
+        className={clsx(className, 'ui-focus-ring')}
+        style={{ width, height }}
+      >
+        <span className="flex h-full w-full flex-col items-center justify-center gap-1.5 px-3 text-center text-xs text-[var(--ui-text-faint)]">
+          <ImageOff className="h-5 w-5" aria-hidden />
+          {SUPPORT_WORDS.photoLoadFailed}
+          <span className="font-semibold text-[var(--ui-text-secondary)]">{SUPPORT_WORDS.photoTryAgain}</span>
+        </span>
+        {children}
+      </button>
+    );
+  }
+
   const picture = broken ? (
     <span className="flex h-full w-full flex-col items-center justify-center gap-1.5 px-3 text-center text-xs text-[var(--ui-text-faint)]">
       <ImageOff className="h-5 w-5" aria-hidden />
@@ -255,6 +291,7 @@ function SupportPhotoFrame({
   ) : (
     // eslint-disable-next-line @next/next/no-img-element -- a signed link of a private bucket, already sized by the server
     <img
+      key={attempt}
       src={source}
       alt={SUPPORT_WORDS.photo}
       width={width}
@@ -264,7 +301,6 @@ function SupportPhotoFrame({
       style={placeholder ? { backgroundImage: `url(${placeholder})`, backgroundSize: 'cover' } : undefined}
     />
   );
-  const className = 'relative block overflow-hidden rounded-xl bg-[var(--ui-surface-3)]';
   return onOpen && !broken ? (
     <button
       type="button"
@@ -305,7 +341,7 @@ function SupportPhotoLightbox({ photo, onClose }: { photo: SupportPhoto; onClose
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
-      className="fixed inset-0 z-[70] m-0 flex h-full max-h-none w-full max-w-none items-center justify-center bg-black/80 p-4"
+      className="fixed inset-0 z-[70] m-0 flex h-full max-h-none w-full max-w-none items-center justify-center bg-[var(--ui-media-backdrop)] p-4"
     >
       <button
         type="button"
@@ -341,6 +377,7 @@ type BubbleProps = {
   onReply: (message: SupportMessage) => void;
   onReact: (message: SupportMessage, emoji: SupportReactionEmoji) => void;
   onRetry: (pending: SupportPendingMessage) => void;
+  onDiscard: (pending: SupportPendingMessage) => void;
   onOpenPhoto: (photo: SupportPhoto) => void;
 };
 
@@ -373,7 +410,19 @@ function BubbleMeta({
   );
 }
 
-function SupportBubble({ row, viewer, otherName, flashing, onOpenQuote, onOpenPanel, onReply, onReact, onRetry, onOpenPhoto }: BubbleProps) {
+function SupportBubble({
+  row,
+  viewer,
+  otherName,
+  flashing,
+  onOpenQuote,
+  onOpenPanel,
+  onReply,
+  onReact,
+  onRetry,
+  onDiscard,
+  onOpenPhoto,
+}: BubbleProps) {
   const mine = row.kind === 'pending' || row.mine;
   const message = row.kind === 'message' ? row.message : null;
   const pending = row.kind === 'pending' ? row.pending : null;
@@ -472,7 +521,7 @@ function SupportBubble({ row, viewer, otherName, flashing, onOpenQuote, onOpenPa
             >
               {caption ? null : (
                 // Over a photo without a caption, the time stands on a dark pill in its corner.
-                <span className="absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[11px] leading-none text-white">
+                <span className="absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 rounded-full bg-[var(--ui-media-scrim)] px-1.5 py-0.5 text-xs leading-none text-[var(--ui-text-primary)]">
                   <BubbleMeta message={message} pending={pending} failed={failed} time={time} row={row} deleted={deleted} />
                 </span>
               )}
@@ -490,7 +539,7 @@ function SupportBubble({ row, viewer, otherName, flashing, onOpenQuote, onOpenPa
           ) : null}
           {!hasPhoto || caption || deleted ? (
             <span className={clsx(
-              'float-right ml-2 mt-2 inline-flex translate-y-1 items-center gap-1 text-[11px] leading-none text-[var(--ui-text-faint)]',
+              'float-right ml-2 mt-2 inline-flex translate-y-1 items-center gap-1 text-xs leading-none text-[var(--ui-text-faint)]',
               hasPhoto && 'mb-1.5 mr-2',
             )}
             >
@@ -522,13 +571,23 @@ function SupportBubble({ row, viewer, otherName, flashing, onOpenQuote, onOpenPa
       </div>
 
       {failed && pending ? (
-        <button
-          type="button"
-          onClick={() => onRetry(pending)}
-          className="ui-focus-ring absolute right-1 top-full mt-0.5 rounded-lg text-xs font-semibold text-[var(--ui-accent-danger)] underline underline-offset-2"
-        >
-          {SUPPORT_WORDS.notSent}
-        </button>
+        <span className="absolute right-1 top-full mt-0.5 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onRetry(pending)}
+            className="ui-focus-ring rounded-lg text-xs font-semibold text-[var(--ui-accent-danger)] underline underline-offset-2"
+          >
+            {SUPPORT_WORDS.notSent}
+          </button>
+          <button
+            type="button"
+            onClick={() => onDiscard(pending)}
+            aria-label={`${SUPPORT_WORDS.delete}: ${SUPPORT_WORDS.notSentActions}`}
+            className="ui-focus-ring rounded-lg text-xs font-semibold text-[var(--ui-text-secondary)] underline underline-offset-2"
+          >
+            {SUPPORT_WORDS.delete}
+          </button>
+        </span>
       ) : null}
     </li>
   );
@@ -730,6 +789,10 @@ export function SupportChat({
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState<SupportQuotedMessage | null>(null);
   const [editing, setEditing] = useState<SupportMessage | null>(null);
+  // An edit on its way to the server: the composer keeps its text until the answer.
+  const [savingEdit, setSavingEdit] = useState(false);
+  // What the composer held when an edit began, given back when the edit ends.
+  const draftBeforeEditRef = useRef('');
   const [panel, setPanel] = useState<FloatingPanel | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [showJump, setShowJump] = useState(false);
@@ -844,27 +907,35 @@ export function SupportChat({
   // would go nowhere.
   const focusField = () => fieldRef.current?.focus();
 
+  /** Leaves an edit: the composer gets back what it held before the edit began. */
+  const endEdit = () => {
+    setEditing(null);
+    setDraft(draftBeforeEditRef.current);
+    draftBeforeEditRef.current = '';
+  };
+
   const startReply = (message: SupportMessage) => {
+    if (savingEdit) return;
     setPanel(null);
-    if (editing) {
-      setEditing(null);
-      setDraft('');
-    }
+    if (editing) endEdit();
     setReplyTo(supportQuoteOf(message));
     focusField();
   };
 
   const startEdit = (message: SupportMessage) => {
+    if (savingEdit) return;
     setPanel(null);
     setReplyTo(null);
+    // The unsent draft waits aside while the edit is written.
+    if (!editing) draftBeforeEditRef.current = draft;
     setEditing(message);
     setDraft(message.body ?? '');
     focusField();
   };
 
   const cancelCompose = () => {
-    if (editing) setDraft('');
-    setEditing(null);
+    if (savingEdit) return;
+    if (editing) endEdit();
     setReplyTo(null);
   };
 
@@ -941,18 +1012,31 @@ export function SupportChat({
     void chat.send(item.body, item.clientMessageId, item.replyTo);
   }, [chat]);
 
+  const discard = useCallback((item: SupportPendingMessage) => {
+    chat.discard(item.clientMessageId);
+  }, [chat]);
+
   const checked = checkSupportMessage(draft, { hasPhoto: photoDraft !== null && !editing });
   const length = supportMessageLength(draft);
-  const canSend = ready && checked.ok;
+  const canSend = ready && checked.ok && !savingEdit;
+
+  /** Saves an edit, keeping its text in the composer until the server has it: a refusal leaves it there to send again. */
+  const saveEdit = async (target: SupportMessage, body: string) => {
+    if (target.body === body) {
+      endEdit();
+      return;
+    }
+    setSavingEdit(true);
+    const saved = await chat.edit(target, body);
+    setSavingEdit(false);
+    if (saved) endEdit();
+  };
 
   const handleSubmit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!canSend || !checked.ok) return;
     if (editing) {
-      const target = editing;
-      setEditing(null);
-      setDraft('');
-      if (target.body !== checked.body) void chat.edit(target, checked.body);
+      void saveEdit(editing, checked.body);
       return;
     }
     const quoted = replyTo;
@@ -965,8 +1049,10 @@ export function SupportChat({
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends, as in a chat app; Shift with Enter starts a new line.
-    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+    // Enter sends, as in a chat app; Shift with Enter starts a new line. The
+    // Enter that ends an input method's word is not a send: Safari no longer
+    // says it composes then, but keeps keyCode 229.
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
       event.preventDefault();
       handleSubmit();
       return;
@@ -1008,14 +1094,22 @@ export function SupportChat({
 
   return (
     <section
+      // A file dropped anywhere on the chat is the chat's: never opened in the
+      // tab, which would leave the page and its draft.
       onDragOver={(event) => {
-        if (!editing && ready && Array.from(event.dataTransfer.types).includes('Files')) event.preventDefault();
+        if (Array.from(event.dataTransfer.types).includes('Files')) event.preventDefault();
       }}
       onDrop={(event) => {
-        const file = pickedImage(event.dataTransfer.files);
-        if (!file || editing || !ready) return;
+        if (!Array.from(event.dataTransfer.types).includes('Files')) return;
         event.preventDefault();
-        pickPhoto(file);
+        if (editing || !ready) return;
+        const file = pickedImage(event.dataTransfer.files);
+        if (file) {
+          pickPhoto(file);
+          return;
+        }
+        const dropped = event.dataTransfer.files[0];
+        chat.setError(supportPhotoPickRefusal({ type: dropped?.type ?? '', size: dropped?.size ?? 0 }));
       }}
       className={clsx(
         'flex h-[min(760px,calc(100dvh-200px))] min-h-[420px] flex-col overflow-hidden rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] shadow-[var(--ui-shadow-panel)]',
@@ -1092,6 +1186,7 @@ export function SupportChat({
                     onReply={startReply}
                     onReact={react}
                     onRetry={retry}
+                    onDiscard={discard}
                     onOpenPhoto={setViewingPhoto}
                   />
                 );
@@ -1114,7 +1209,7 @@ export function SupportChat({
           >
             <ArrowDown className="h-4 w-4" aria-hidden />
             {newCount > 0 ? (
-              <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--ui-primary)] px-1 text-[11px] font-semibold text-[var(--ui-primary-on)]">
+              <span className="absolute -top-2 -right-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--ui-primary)] px-1 text-xs font-semibold text-[var(--ui-primary-on)]">
                 {newCount}
               </span>
             ) : null}
@@ -1216,7 +1311,10 @@ export function SupportChat({
             }}
             onKeyDown={handleKeyDown}
             onPaste={(event) => {
-              // A screenshot pasted into the field goes as the photo.
+              // A screenshot pasted into the field goes as the photo. Text
+              // comes first: cells copied from a spreadsheet carry a picture
+              // of themselves beside their text, and paste as the text.
+              if (event.clipboardData?.getData('text/plain').trim()) return;
               const file = pickedImage(event.clipboardData?.files);
               if (!file || editing) return;
               event.preventDefault();
@@ -1242,7 +1340,7 @@ export function SupportChat({
           </p>
         ) : null}
         {error ? (
-          <p role="alert" className="mt-2 text-xs font-semibold leading-[17px] text-[var(--ui-accent-danger)]">{error}</p>
+          <p role="alert" className="mt-2 text-xs font-semibold text-[var(--ui-accent-danger)]">{error}</p>
         ) : null}
       </form>
 

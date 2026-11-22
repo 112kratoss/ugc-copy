@@ -131,6 +131,12 @@ export type SupportPhoto = {
 export type SupportMessage = {
   id: string;
   author: SupportMessageAuthor;
+  /**
+   * The id the reader's own client sent it under, by which a copy still
+   * drawn as on its way (its answer lost, or a read faster than the answer)
+   * is settled; null for the other side's messages and one sent without one.
+   */
+  clientMessageId: string | null;
   /** The text, or a photo's caption; null for a photo without one, and once its author deleted it for everyone. */
   body: string | null;
   createdAt: string;
@@ -204,6 +210,13 @@ export type SupportMessageUpdateResponse = {
   success: true;
   message: SupportMessage;
 };
+
+/**
+ * `POST /api/support/conversation/read`'s body: the newest message the reader
+ * was shown, so one kept after its last look is not marked read unseen.
+ * Without it (an app from before 2026-11-23 sends no body) the whole thread is.
+ */
+export type SupportReadRequest = { upToMessageId?: string | null };
 
 /** `POST /api/support/conversation/read`: both sides' read times after the read. */
 export type SupportReadResponse = {
@@ -298,7 +311,27 @@ export const SUPPORT_WORDS = {
   openPhoto: 'Open photo',
   closePhoto: 'Close photo',
   photoLoadFailed: 'The photo could not be loaded.',
+  photoTryAgain: 'Tap to try again',
+  tryAgain: 'Try again',
+  notSentActions: 'Your message was not sent',
 } as const;
+
+/**
+ * Up to two letters of a name for its round avatar: the first of each of its
+ * first two words, whole even when one is an emoji or a flag.
+ */
+export function supportInitials(name: string): string {
+  const Segmenter = typeof Intl === 'object' ? Intl.Segmenter : undefined;
+  const first = (word: string): string => {
+    if (Segmenter) {
+      for (const { segment } of new Segmenter(undefined, { granularity: 'grapheme' }).segment(word)) return segment;
+      return '';
+    }
+    return Array.from(word)[0] ?? '';
+  };
+  const letters = name.replace(/^@/, '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(first).join('');
+  return (letters || '?').toUpperCase();
+}
 
 /** "1 unread message", "3 unread messages": the divider above the first unread one. */
 export function supportUnreadWords(count: number): string {
@@ -667,20 +700,46 @@ export function startPendingSupportMessage(
   return [...pending, { clientMessageId, body, createdAt: now, state: 'sending', replyTo, photo }];
 }
 
-/** A send that did not go through: kept, with its text, for a retry. */
+/**
+ * A send that did not go through: kept, with its text, for a retry. Refused
+ * because the message it quotes was deleted (REPLY_NOT_FOUND), it lets the
+ * quote go, so the retry sends it on its own rather than being refused again.
+ */
 export function failPendingSupportMessage(
   pending: readonly SupportPendingMessage[],
   clientMessageId: string,
+  code: string | null = null,
 ): SupportPendingMessage[] {
-  return pending.map((item) => (item.clientMessageId === clientMessageId ? { ...item, state: 'failed' } : item));
+  return pending.map((item) => (item.clientMessageId === clientMessageId
+    ? { ...item, state: 'failed', replyTo: code === 'REPLY_NOT_FOUND' ? null : item.replyTo }
+    : item));
 }
 
-/** A send the server kept: it leaves the waiting list for the thread. */
+/** A send the server kept, or one not sent that the writer let go: it leaves the waiting list. */
 export function settlePendingSupportMessage(
   pending: readonly SupportPendingMessage[],
   clientMessageId: string,
 ): SupportPendingMessage[] {
   return pending.filter((item) => item.clientMessageId !== clientMessageId);
+}
+
+/**
+ * The waiting list once a read brought the thread: a message the server kept
+ * under its client id is the thread's now, on its way or marked not sent (its
+ * answer lost after it was kept), so it is not drawn twice or sent again.
+ */
+export function withoutKeptPendingMessages(
+  pending: readonly SupportPendingMessage[],
+  messages: readonly SupportMessage[],
+): SupportPendingMessage[] {
+  const kept = new Set(messages.map((message) => message.clientMessageId).filter((id): id is string => Boolean(id)));
+  if (kept.size === 0 || !pending.some((item) => kept.has(item.clientMessageId))) return pending as SupportPendingMessage[];
+  return pending.filter((item) => !kept.has(item.clientMessageId));
+}
+
+/** Whether a refusal is about the photo itself: a staged copy is staged anew only then. */
+export function isSupportPhotoRefusal(code: string | null | undefined): boolean {
+  return code === 'PHOTO_NOT_FOUND' || code === 'PHOTO_UNREADABLE' || code === 'PHOTO_TOO_LARGE';
 }
 
 function compareSupportMessages(a: SupportMessage, b: SupportMessage): number {
@@ -1001,6 +1060,7 @@ export function readSupportMessage(value: unknown): SupportMessage | null {
   return {
     id,
     author,
+    clientMessageId: isSupportClientMessageId(record.clientMessageId) ? record.clientMessageId : null,
     body,
     createdAt,
     editedAt: readString(record.editedAt),
