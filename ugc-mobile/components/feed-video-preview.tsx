@@ -8,6 +8,7 @@ import { ActivityIndicator, Platform, Pressable, Text, View, type DimensionValue
 import { FEED_VIDEO_VIEW_PROPS } from '@/components/feed-media-frame';
 import { FeedMediaPlate } from '@/components/feed-media-plate';
 import { StableMediaImage } from '@/components/media-preview';
+import { MediaLoadingSketch } from '@/components/media-sketch';
 import { useMediaZoomTileKey, useMediaZoomVideoOffer } from '@/lib/media-zoom-video-offer';
 import {
   acceptVideoReturn,
@@ -128,6 +129,7 @@ export function FeedVideoPreview({
   videoContentFit = 'contain',
   watchdog = false,
   diagnosticsSurface = 'feed',
+  loadingSketch = true,
   onPlaybackTime,
   retryable = true,
   metricsSurface = 'feed',
@@ -184,6 +186,12 @@ export function FeedVideoPreview({
   watchdog?: boolean;
   /** Where the tile is drawn, for the media diagnostics log. */
   diagnosticsSurface?: string;
+  /**
+   * The pencil sketch while the poster loads or the clip is slow to start
+   * (`MediaLoadingSketch`). Off where a caption already fills the middle of
+   * the tile (a Home shelf card): a slow start then shows the small spinner.
+   */
+  loadingSketch?: boolean;
   /**
    * Playback samples while this tile plays: seconds into the stream and the
    * stream's length. Home reports how far its inline clips play with them.
@@ -409,6 +417,9 @@ export function FeedVideoPreview({
           onError={() => setFailedPosterUrl(usablePreviewUrl)}
           watchdog={watchdog && posterVisible}
           diagnosticsSurface={diagnosticsSurface}
+          // Only while the poster is what the tile shows (under a playing clip it
+          // is hidden), and not while a slow start draws the tile's own sketch.
+          loadingSketch={loadingSketch && posterVisible && !slowStart}
           style={[absoluteFill, { backgroundColor: 'transparent', opacity: posterVisible ? 1 : 0 }]}
         />
       ) : null}
@@ -419,7 +430,10 @@ export function FeedVideoPreview({
         </View>
       ) : null}
 
-      {slowStart ? (
+      {slowStart && loadingSketch ? (
+        // A clip slow to start gets the same pencil as a picture slow to load.
+        <MediaLoadingSketch />
+      ) : slowStart ? (
         <View pointerEvents="none" style={[absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
           <View
             style={{

@@ -14,9 +14,10 @@ import {
   WandSparkles,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, RefreshControl, ScrollView, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { BookPullArea, RefreshBookChip, useBookPull } from '@/components/refresh-book';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, Card, IconButton, PrimaryButton, SecondaryButton, StatusBlock } from '@/components/ui';
 import { haptic } from '@/lib/haptics';
@@ -283,22 +284,23 @@ export default function StudioScreen() {
     void notificationsQuery.fetchNextPage();
   };
 
+  // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handlePullRefresh, enabled: Boolean(user) });
+  const attachPullScroll = pull.attachScroll;
+  const attachScroll = useCallback((scrollView: ScrollView | null) => {
+    scrollRef.current = scrollView;
+    attachPullScroll(scrollView);
+  }, [attachPullScroll]);
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <BookPullArea pull={pull}>
       <ScrollView
         keyboardShouldPersistTaps="never"
-        ref={scrollRef}
+        ref={attachScroll}
         contentInsetAdjustmentBehavior="never"
         showsVerticalScrollIndicator={false}
-        refreshControl={user ? (
-          <RefreshControl
-            refreshing={pullRefreshing}
-            onRefresh={handlePullRefresh}
-            tintColor={theme.colors.faint}
-            colors={[theme.colors.primary]}
-            progressBackgroundColor={theme.colors.panelSoft}
-          />
-        ) : undefined}
+        refreshControl={pull.refreshControl}
         style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentContainerStyle={{
           paddingTop: topInset + 18,
@@ -409,8 +411,11 @@ export default function StudioScreen() {
           </>
         )}
       </ScrollView>
+      </BookPullArea>
 
       <TopScrim topInset={topInset} />
+
+      <RefreshBookChip refreshing={pullRefreshing} pull={user ? pull : undefined} contentTop={topInset} />
     </View>
   );
 }

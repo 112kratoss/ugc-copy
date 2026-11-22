@@ -934,7 +934,7 @@ describe('Showcase screen', () => {
 
       // A refresh re-places every card anyway, so whatever still waits lands.
       await renderer.act(async () => {
-        listProps().onRefresh();
+        listProps().refreshControl.props.onRefresh();
       });
       expect(queryState.refetch).toHaveBeenCalledTimes(1);
       expect(applied()).toEqual({ 'post-5': 2, 'post-2': 0.5, 'post-0': 1.25 });
@@ -1015,7 +1015,7 @@ describe('Showcase screen', () => {
     it('takes the reader to the top and fetches page 1 again, without the pull spinner', async () => {
       queryState.dataUpdatedAt = fiveMinutesOld();
       const { list, tree, pill } = renderWithList();
-      const refreshing = () => hostElement(tree, 'flash-list').props.refreshing;
+      const refreshing = () => hostElement(tree, 'flash-list').props.refreshControl.props.refreshing;
       let finishRefetch: () => void = () => undefined;
       const heldRefetch = () => new Promise<void>((resolve) => {
         finishRefetch = resolve;
@@ -1053,7 +1053,7 @@ describe('Showcase screen', () => {
 
         // The same reading sees a pull's own spinner.
         queryState.refetch.mockImplementationOnce(heldRefetch);
-        renderer.act(() => hostElement(tree, 'flash-list').props.onRefresh());
+        renderer.act(() => hostElement(tree, 'flash-list').props.refreshControl.props.onRefresh());
         expect(refreshing()).toBe(true);
         finishRefetch();
         await settle();

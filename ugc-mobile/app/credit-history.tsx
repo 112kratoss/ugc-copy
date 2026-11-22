@@ -11,7 +11,9 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, View } from 'react-native';
+import { ActivityIndicator, FlatList, View } from 'react-native';
+
+import { BookPullArea, RefreshBookChip, useBookPull } from '@/components/refresh-book';
 
 import { FeedEndFooter, FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { CardListSkeleton } from '@/components/skeleton';
@@ -165,6 +167,13 @@ export default function CreditHistoryScreen() {
     />
   );
 
+  // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: refreshHistory, enabled: Boolean(identityUserId) });
+  const attachPullScroll = pull.attachScroll;
+  const attachList = useCallback((list: FlatList<CreditHistoryEntry> | null) => {
+    attachPullScroll(list?.getNativeScrollRef?.());
+  }, [attachPullScroll]);
+
   const footer = historyQuery.isFetchingNextPage ? (
     <View style={{ minHeight: 64, alignItems: 'center', justifyContent: 'center' }}>
       <ActivityIndicator accessibilityLabel="Loading older credit history" color={theme.colors.primary} />
@@ -199,7 +208,9 @@ export default function CreditHistoryScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <BookPullArea pull={pull}>
       <FlatList
+        ref={attachList}
         keyboardShouldPersistTaps="never"
         data={entries}
         keyExtractor={(entry) => entry.id}
@@ -215,15 +226,7 @@ export default function CreditHistoryScreen() {
         onEndReached={loadOlder}
         onEndReachedThreshold={1}
         initialNumToRender={12}
-        refreshControl={identityUserId ? (
-          <RefreshControl
-            refreshing={pullRefreshing}
-            onRefresh={refreshHistory}
-            tintColor={theme.colors.faint}
-            colors={[theme.colors.primary]}
-            progressBackgroundColor={theme.colors.panelSoft}
-          />
-        ) : undefined}
+        refreshControl={pull.refreshControl}
         contentInsetAdjustmentBehavior="automatic"
         style={{ flex: 1, backgroundColor: theme.colors.background }}
         contentContainerStyle={{
@@ -232,6 +235,8 @@ export default function CreditHistoryScreen() {
           paddingBottom: 36,
         }}
       />
+      </BookPullArea>
+      <RefreshBookChip refreshing={pullRefreshing} pull={identityUserId ? pull : undefined} />
     </View>
   );
 }

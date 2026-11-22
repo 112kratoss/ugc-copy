@@ -43,6 +43,22 @@ export function useSharedValue<T>(initial: T): SharedValue<T> {
   return makeMutable(initial);
 }
 
+/** A ref with Reanimated's shape: callable as a ref, with `current` and `observe`. */
+export function useAnimatedRef<T>() {
+  const ref = ((node?: T) => {
+    if (node) ref.current = node;
+    return null;
+  }) as ((node?: T) => null) & { current: T | null; observe: (observer: (tag: number | null) => void) => () => void };
+  ref.current = null;
+  ref.observe = () => () => {};
+  return ref;
+}
+
+/** No scroll ever happens in a rendered test tree: the offset stays at the top. */
+export function useScrollOffset(_ref?: unknown) {
+  return makeMutable(0);
+}
+
 export function useDerivedValue<T>(factory: () => T): SharedValue<T> {
   return makeMutable(factory());
 }
@@ -89,6 +105,15 @@ export function withSpring<T>(toValue: T) {
 
 export function withDelay<T>(_delay: number, animation: T) {
   return animation;
+}
+
+/** A loop never advances in a rendered test tree: the value is the first pass's end, like `withTiming`'s. */
+export function withRepeat<T>(animation: T, _count?: number, _reverse?: boolean) {
+  return animation;
+}
+
+export function withSequence<T>(...animations: T[]) {
+  return animations[animations.length - 1];
 }
 
 export function cancelAnimation(_value: SharedValue<unknown>) {}

@@ -15,14 +15,16 @@ describe('bottom-tab reselect scroll-to-top wiring', () => {
     const source = readSource(path);
 
     expect(source).toContain(`useScrollToTop(${refName})`);
-    expect(source).toContain(`ref={${refName}}`);
+    // The list takes the ref itself, or a callback ref that fills it (the pull
+    // to refresh reads the same list's scroll view, components/refresh-book.tsx).
+    expect(source).toMatch(new RegExp(`ref=\\{${refName}\\}|${refName}\\.current = list;`));
   });
 
   it('registers the Alerts ScrollView with the tab reselect hook', () => {
     const source = readSource('app/(tabs)/studio.tsx');
 
     expect(source).toContain('useScrollToTop(scrollRef)');
-    expect(source).toContain('ref={scrollRef}');
+    expect(source).toMatch(/ref=\{scrollRef\}|scrollRef\.current = scrollView;/);
   });
 
   it('starts each Home feed lane from a fresh list origin', () => {

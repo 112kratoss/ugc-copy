@@ -101,6 +101,7 @@ vi.mock('react-native', () => ({
 }));
 
 import { FeedVideoPreview } from '../components/feed-video-preview';
+import { MediaLoadingSketch } from '../components/media-sketch';
 import { mediaColors } from '../lib/theme';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '../lib/media-recovery';
 import { clearPlaybackMetricsForTests, readPlaybackMetrics } from '../lib/playback-metrics';
@@ -824,31 +825,51 @@ describe('FeedVideoPreview', () => {
     vi.useRealTimers();
   });
 
-  it('does not dim an activating tile, and shows a spinner only for a slow start', () => {
+  it('does not dim an activating tile, and draws the pencil only for a slow start', () => {
     vi.useFakeTimers();
     let tree: renderer.ReactTestRenderer | undefined;
     const spinners = () => tree!.root.findAll((node) => String(node.type) === 'activity-indicator');
+    const sketches = () => tree!.root.findAllByType(MediaLoadingSketch);
 
     renderer.act(() => {
       tree = renderer.create(<FeedVideoPreview {...posterProps} active />);
     });
+    // The poster is on screen: what is left to wait for is the clip.
+    renderer.act(() => tree!.root.findAll((node) => String(node.type) === 'image')[0].props.onDisplay());
     // A normal start is the poster and then motion, with nothing flashed between.
-    expect(spinners()).toHaveLength(0);
+    expect(sketches()).toHaveLength(0);
     expect(posterOpacity(tree!)).toBe(1);
 
     renderer.act(() => {
       vi.advanceTimersByTime(999);
     });
-    expect(spinners()).toHaveLength(0);
+    expect(sketches()).toHaveLength(0);
     renderer.act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(spinners()).toHaveLength(1);
+    expect(sketches()).toHaveLength(1);
+    expect(spinners()).toHaveLength(0);
 
     renderer.act(() => {
       tree!.root.findByType('video-view' as never).props.onFirstFrameRender();
     });
-    expect(spinners()).toHaveLength(0);
+    expect(sketches()).toHaveLength(0);
+    vi.useRealTimers();
+  });
+
+  it('keeps the small spinner for a slow start where the tile turns the pencil off', () => {
+    vi.useFakeTimers();
+    let tree: renderer.ReactTestRenderer | undefined;
+    const spinners = () => tree!.root.findAll((node) => String(node.type) === 'activity-indicator');
+
+    renderer.act(() => {
+      tree = renderer.create(<FeedVideoPreview {...posterProps} active loadingSketch={false} />);
+    });
+    renderer.act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(spinners()).toHaveLength(1);
+    expect(tree!.root.findAllByType(MediaLoadingSketch)).toHaveLength(0);
     vi.useRealTimers();
   });
 

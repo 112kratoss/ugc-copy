@@ -1,5 +1,6 @@
 import { rememberDecodedImageAspectRatio } from '@/lib/decoded-image-aspect-ratio';
 import { Image, type ImageProps } from 'expo-image';
+import { MediaLoadingSketch } from '@/components/media-sketch';
 import { RecoverableVideoPreview } from '@/components/recoverable-video-preview';
 import { ImageOff, Play } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -9,6 +10,7 @@ import { useAppForeground } from '@/lib/app-foreground';
 import { env } from '@/lib/env';
 import { describeImageError, recordMediaDiagnostic } from '@/lib/media-diagnostics';
 import { imageRetryDelayMs } from '@/lib/media-performance';
+import { MEDIA_SKETCH_DELAY_MS } from '@/lib/media-sketch';
 import { getPrivateMediaExpiry } from '@/lib/media-url-expiry';
 import {
   MEDIA_DISPLAY_DEADLINE_MS,
@@ -173,6 +175,13 @@ type StableMediaImageProps = {
   watchdog?: boolean;
   /** Where the image is drawn, for the media diagnostics log. */
   diagnosticsSurface?: string;
+  /**
+   * Draws the loading sketch (`MediaLoadingSketch`) over the placeholder when
+   * the picture has not shown `MEDIA_SKETCH_DELAY_MS` after it began loading.
+   * As with `watchdog`, the parent must be the box the image fills: the sketch
+   * is centred in it.
+   */
+  loadingSketch?: boolean;
 };
 
 export function StableMediaImage(props: StableMediaImageProps) {
@@ -210,6 +219,7 @@ function StableMediaImageSession({
   resolveRetryUrl,
   watchdog = false,
   diagnosticsSurface = 'app',
+  loadingSketch = false,
 }: StableMediaImageProps) {
   // The address drawn: the parent's at first, then a renewal's
   // (`resolveRetryUrl`), or the parent's newer signature of the same file once
@@ -253,6 +263,18 @@ function StableMediaImageSession({
     && foreground
     && displayedAttemptKey !== attemptKey
     && (!latched || retryingBehindPlate);
+
+  // The loading sketch: up once the picture has kept the reader waiting, and
+  // gone the moment it shows or the plate takes its place. Keyed by source, not
+  // attempt, so a quiet retry of the same file keeps the pencil drawing.
+  const awaitingDisplay = displayedAttemptKey !== attemptKey && !latched;
+  const [sketchDueSourceId, setSketchDueSourceId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!loadingSketch || !awaitingDisplay) return undefined;
+    const timer = setTimeout(() => setSketchDueSourceId(sourceId), MEDIA_SKETCH_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [awaitingDisplay, loadingSketch, sourceId]);
+  const sketching = loadingSketch && awaitingDisplay && sketchDueSourceId === sourceId;
 
   // The parent's newer signature of the file drawn, when it has handed one
   // over. The address drawn stays while it has life left, and with it the
@@ -500,6 +522,7 @@ function StableMediaImageSession({
     <>
       {image}
       {plate}
+      {sketching ? <MediaLoadingSketch key="sketch" /> : null}
     </>
   );
 }

@@ -1,0 +1,218 @@
+(global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
+
+import React from 'react';
+import renderer from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
+const platform = vi.hoisted(() => ({ OS: 'ios' as string }));
+
+vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));
+
+vi.mock('react-native', () => ({
+  Platform: platform,
+  RefreshControl: (props: MockProps) => React.createElement('refresh-control', props, props.children),
+  StyleSheet: { hairlineWidth: 0.5 },
+  View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
+}));
+
+import { BookPullArea, PageFlipBook, RefreshBookChip, useBookPull, type BookPull } from '../components/refresh-book';
+import {
+  ANDROID_PULL_TRIGGER,
+  PULL_ACTIVATE_DISTANCE,
+  REFRESH_BOOK_MIN_VISIBLE_MS,
+  refreshBookChipTop,
+} from '../lib/refresh-book';
+
+const advance = (ms: number) => renderer.act(() => {
+  vi.advanceTimersByTime(ms);
+});
+
+type MockGesture = { kind: string; callbacks: Record<string, (...args: unknown[]) => void>; config: Record<string, unknown[]> };
+
+let pull!: BookPull;
+function PullHarness({ refreshing, onRefresh }: { refreshing: boolean; onRefresh: () => void }) {
+  const screenPull = useBookPull({ refreshing, onRefresh });
+  pull = screenPull;
+  return (
+    <BookPullArea pull={screenPull}>
+      {React.createElement('list')}
+    </BookPullArea>
+  );
+}
+
+function renderPull(refreshing: boolean, onRefresh: () => void) {
+  let tree!: renderer.ReactTestRenderer;
+  renderer.act(() => {
+    tree = renderer.create(<PullHarness refreshing={refreshing} onRefresh={onRefresh} />);
+  });
+  return tree;
+}
+
+function touch(x: number, y: number) {
+  return { allTouches: [{ id: 0, x, y, absoluteX: x, absoluteY: y }] };
+}
+
+describe('the pull on iOS', () => {
+  it('keeps the platform pull, its spinner drawn clear, and adds no gesture over the list', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(true, onRefresh);
+    const control = pull.refreshControl!;
+    expect(control.props.refreshing).toBe(true);
+    expect(pull.gesture).toBeNull();
+    expect(tree.root.findAll((node) => String(node.type) === 'gesture-detector')).toHaveLength(0);
+
+    let controlTree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      controlTree = renderer.create(control);
+    });
+    expect(controlTree.root.findByType('refresh-control' as never).props.tintColor).toBe('transparent');
+  });
+
+  it('refreshes through the screen handler when the platform pull fires', () => {
+    const onRefresh = vi.fn();
+    renderPull(false, onRefresh);
+    renderer.act(() => pull.refreshControl!.props.onRefresh!());
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the pull on Android', () => {
+  beforeEach(() => {
+    platform.OS = 'android';
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    platform.OS = 'ios';
+    vi.useRealTimers();
+  });
+
+  function gestureOf(tree: renderer.ReactTestRenderer) {
+    return tree.root.find((node) => String(node.type) === 'gesture-detector').props.gesture as MockGesture;
+  }
+
+  function pullDown(gesture: MockGesture, by: number, atTop = true) {
+    pull.offset.value = atTop ? 0 : 300;
+    const manager = { activate: vi.fn(), fail: vi.fn(), begin: vi.fn(), end: vi.fn() };
+    gesture.callbacks.onTouchesDown(touch(200, 300));
+    gesture.callbacks.onTouchesMove(touch(200, 300 + PULL_ACTIVATE_DISTANCE), manager);
+    if (manager.activate.mock.calls.length > 0) {
+      gesture.callbacks.onUpdate({ translationY: PULL_ACTIVATE_DISTANCE + by });
+      gesture.callbacks.onEnd({});
+    }
+    return manager;
+  }
+
+  it('replaces the platform pull with its own pan over the list, which waits for the finger to decide', () => {
+    const tree = renderPull(false, vi.fn());
+    expect(pull.refreshControl).toBeUndefined();
+    const gesture = gestureOf(tree);
+    expect(gesture.kind).toBe('pan');
+    expect(gesture.config.manualActivation).toEqual([true]);
+    expect(tree.root.findAll((node) => String(node.type) === 'list')).toHaveLength(1);
+  });
+
+  it('takes a pull down at the list top, and refreshes when let go past the trigger', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh);
+    const manager = pullDown(gestureOf(tree), ANDROID_PULL_TRIGGER + 10);
+    expect(manager.activate).toHaveBeenCalledTimes(1);
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    // The circle is held at rest until the screen says it is refreshing.
+    expect(pull.released.value).toBe(true);
+  });
+
+  it('goes back up without refreshing when let go short of the trigger', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh);
+    pullDown(gestureOf(tree), ANDROID_PULL_TRIGGER - 10);
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(pull.released.value).toBe(false);
+  });
+
+  it('leaves a touch to the list once it is scrolled away from its top', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh);
+    const manager = pullDown(gestureOf(tree), 200, false);
+    expect(manager.fail).toHaveBeenCalledTimes(1);
+    expect(manager.activate).not.toHaveBeenCalled();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('takes no second pull while a refresh runs', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(true, onRefresh);
+    const manager = pullDown(gestureOf(tree), 200);
+    expect(manager.fail).toHaveBeenCalledTimes(1);
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('lets the circle go if the screen turns the refresh down', () => {
+    const tree = renderPull(false, () => {});
+    pullDown(gestureOf(tree), ANDROID_PULL_TRIGGER + 10);
+    expect(pull.released.value).toBe(true);
+    advance(400);
+    expect(pull.released.value).toBe(false);
+  });
+});
+
+describe('RefreshBookChip', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const chipIn = (tree: renderer.ReactTestRenderer) => tree.root.findAllByType(PageFlipBook);
+
+  it('is always there under a pull, to be pulled down', () => {
+    renderPull(false, () => {});
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing={false} pull={pull} contentTop={59} />);
+    });
+    expect(chipIn(tree)).toHaveLength(1);
+  });
+
+  it('without a pull, is not drawn while nothing refreshes', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing={false} contentTop={59} />);
+    });
+    expect(chipIn(tree)).toHaveLength(0);
+  });
+
+  it('without a pull, comes up with a refresh below the content inset and stays at least one page turn', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing contentTop={59} />);
+    });
+    expect(chipIn(tree)).toHaveLength(1);
+    const placed = tree.root.findAll((node) => node.type === 'view' && node.props.style?.position === 'absolute' && node.props.style?.top !== undefined)[0];
+    expect(placed.props.style.top).toBe(refreshBookChipTop('ios', 59));
+
+    // An answer straight from the cache ends the refresh almost at once.
+    advance(50);
+    renderer.act(() => tree.update(<RefreshBookChip refreshing={false} contentTop={59} />));
+    advance(REFRESH_BOOK_MIN_VISIBLE_MS - 100);
+    expect(chipIn(tree)).toHaveLength(1);
+
+    // Held long enough, then out through its exit.
+    advance(100);
+    advance(400);
+    expect(chipIn(tree)).toHaveLength(0);
+  });
+
+  it('takes the place it is given for a refresh no pull started', () => {
+    renderPull(false, () => {});
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing pull={pull} contentTop={59} top={140} />);
+    });
+    const placed = tree.root.findAll((node) => node.type === 'view' && node.props.style?.top === 140);
+    expect(placed).toHaveLength(1);
+  });
+});

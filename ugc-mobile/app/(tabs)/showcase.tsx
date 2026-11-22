@@ -26,6 +26,7 @@ import { FeedFeedbackSheet } from '@/components/feed-feedback-sheet';
 import { FeedUndoNotice, type FeedUndoNoticeModel } from '@/components/feed-undo-notice';
 import { NativeMenu } from '@/components/native-menu';
 import { NewPostsPill } from '@/components/new-posts-pill';
+import { BookPullArea, RefreshBookChip, useBookPull } from '@/components/refresh-book';
 import { SEARCH_FIELD_LABEL, SEARCH_PLACEHOLDER } from '@/lib/public-search-policy/public-search-policy';
 import { openSearchScreenFrom } from '@/lib/open-search-screen';
 import { PinBadge, VideoCornerPlay, VideoPinPreview, VisualFallbackPreview } from '@/components/showcase-pin-marks';
@@ -308,6 +309,9 @@ export default function ShowcaseScreen() {
   // whether the list has scrolled past them: the compact search button stands
   // in for the header's own once it has (`CompactSearchButton`).
   const [listHeaderHeight, setListHeaderHeight] = useState(0);
+  // Under the header's chips as they sit at rest: where the "New posts" pill
+  // floats, and where Android's refresh circle and the refresh book come to rest.
+  const newPostsPillTop = topInset + LIST_HEADER_TOP_GAP + listHeaderHeight + appTheme.spacing.compact;
   const [listHeaderScrolledOff, setListHeaderScrolledOff] = useState(false);
   const listHeaderScrolledOffRef = useRef(false);
   const loadingMoreRef = useRef(false);
@@ -530,6 +534,9 @@ export default function ShowcaseScreen() {
   // put it back unless the list is at the top, so a background refetch — a save
   // used to fire one — walks the feed downward a notch at a time.
   const [pullRefreshing, setPullRefreshing] = useState(false);
+  // The "New posts" tap's own refresh: the refresh book shows for it where the
+  // pill was, with the control left out of it.
+  const [pillRefreshing, setPillRefreshing] = useState(false);
   // "New posts" (product decision D2): on a return to the app five minutes or
   // more after the lane was fetched, the server is asked whether it has a post
   // newer than any the lane holds, and nothing is fetched into the lane until
@@ -664,8 +671,18 @@ export default function ShowcaseScreen() {
     haptic.light();
     newPosts.dismiss();
     feedRef.current?.scrollToOffset({ offset: 0, animated: false });
-    void refetchFirstPage();
+    setPillRefreshing(true);
+    void refetchFirstPage().finally(() => setPillRefreshing(false));
   };
+
+  // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
+  // Not while a card's media is being swiped, which stops the grid scrolling too.
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handleRefresh, enabled: !isSwipingMedia });
+  const attachPullScroll = pull.attachScroll;
+  const attachFeed = useCallback((list: FlashListRef<ShowcaseMasonryCard> | null) => {
+    feedRef.current = list;
+    attachPullScroll(list?.getNativeScrollRef?.());
+  }, [attachPullScroll]);
 
   // Scroll events arrive every frame; only the moment the header passes under
   // the status bar, one way or the other, reaches React.
@@ -937,9 +954,10 @@ export default function ShowcaseScreen() {
     <MediaZoomSurface>
     <WorkspaceSideMenuGestureLayer bottomOffset={tabBarMetrics.contentBottomPadding} enabled={!isSwipingMedia}>
       <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+        <BookPullArea pull={pull}>
         <FlashList
         keyboardShouldPersistTaps="never"
-        ref={feedRef}
+        ref={attachFeed}
         contentInsetAdjustmentBehavior="never"
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
@@ -973,8 +991,7 @@ export default function ShowcaseScreen() {
         // half-screen runway is enough to hide the next-page round trip without
         // prefetching as aggressively as the temporary filtered-feed tuning.
         onEndReachedThreshold={0.5}
-        onRefresh={handleRefresh}
-        refreshing={pullRefreshing}
+        refreshControl={pull.refreshControl}
         renderItem={renderCard}
         scrollEnabled={!isSwipingMedia}
         showsVerticalScrollIndicator={false}
@@ -1090,14 +1107,23 @@ export default function ShowcaseScreen() {
         }
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         />
+        </BookPullArea>
 
         <TopScrim topInset={topInset} />
+
+        <RefreshBookChip
+          refreshing={pullRefreshing || pillRefreshing}
+          pull={pull}
+          contentTop={topInset}
+          androidRestTop={newPostsPillTop}
+          top={pillRefreshing && !pullRefreshing ? newPostsPillTop : undefined}
+        />
 
         {/* Under the chips as they sit at rest, over the grid once they scroll. */}
         <NewPostsPill
           visible={newPosts.hasNewer}
           onPress={showNewPosts}
-          topOffset={topInset + LIST_HEADER_TOP_GAP + listHeaderHeight + appTheme.spacing.compact}
+          topOffset={newPostsPillTop}
         />
 
         {/* Centred on the header's last control as it sat at rest. */}

@@ -191,6 +191,7 @@ function MediaLightboxContent({
               cacheKey={`lightbox:${item.id}`}
               resolveRetryUrl={item.resolveRetryUrl}
               contentFit="contain"
+              loadingSketch
               style={{ width: '100%', height: stageHeight }}
             />
           )}

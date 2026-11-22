@@ -2246,7 +2246,7 @@ function ResourceScopePicker({
             >
               <View style={{ height: 82, borderRadius: appTheme.radii.sm, borderCurve: 'continuous', overflow: 'hidden', borderWidth: selected ? 2 : 1, borderColor: selected ? theme.colors.image : theme.colors.border, backgroundColor: theme.colors.surfaceInset }}>
                 {item.mediaKind === 'image' ? (
-                  <StableMediaImage url={item.previewUrl ?? item.uri} cacheKey={`scope:${mediaKey}`} contentFit="cover" style={{ position: 'absolute', inset: 0 }} />
+                  <StableMediaImage url={item.previewUrl ?? item.uri} cacheKey={`scope:${mediaKey}`} contentFit="cover" loadingSketch style={{ position: 'absolute', inset: 0 }} />
                 ) : (
                   <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}><Play size={24} color={theme.colors.textSecondary} /></View>
                 )}
