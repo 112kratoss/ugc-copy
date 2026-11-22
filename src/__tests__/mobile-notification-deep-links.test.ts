@@ -41,6 +41,7 @@ describe('the links the server writes into notifications', () => {
       marketplaceResource: buildMobileNotificationDeepLink({ kind: 'marketplaceResource', resourceId: 'resource-1' }),
       creatorProfile: buildMobileNotificationDeepLink({ kind: 'creatorProfile', username: 'batman' }),
       sellerDashboard: buildMobileNotificationDeepLink({ kind: 'sellerDashboard' }),
+      support: buildMobileNotificationDeepLink({ kind: 'support' }),
       notifications: buildMobileNotificationDeepLink({ kind: 'notifications' }),
     }).toEqual({
       generation: deepLinks.generation,
@@ -51,6 +52,7 @@ describe('the links the server writes into notifications', () => {
       marketplaceResource: deepLinks.marketplaceResource,
       creatorProfile: deepLinks.creatorProfile,
       sellerDashboard: deepLinks.sellerDashboard,
+      support: deepLinks.support,
       notifications: deepLinks.notifications,
     });
   });
@@ -93,10 +95,13 @@ describe('the links the server writes into notifications', () => {
       marketplaceResource: '/marketplace/resource-1',
       creatorProfile: '/creators/batman',
       sellerDashboard: '/marketplace/sell',
+      // The conversation has the same path on the web.
+      support: '/support',
       notifications: null,
       profile: '/profile',
       invite: '/invite',
     });
+    expect(fs.existsSync(path.resolve('src/app/support/page.tsx'))).toBe(true);
     // A run has its own page on the web, so its link needs no translation.
     expect(fs.existsSync(path.resolve('src/app/template-runs/[runId]/page.tsx'))).toBe(true);
     // The web has no /seller-dashboard: its seller page, with the payouts, is here.

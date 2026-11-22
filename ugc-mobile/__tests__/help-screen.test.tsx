@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const openUrl = vi.hoisted(() => vi.fn());
+const routerPush = vi.hoisted(() => vi.fn());
 const VERSION_LABEL = 'Version 0.1.8 (59) · update a79c7580';
 const versionLabel = vi.hoisted(() => ({ value: null as string | null }));
 const updateRuntime = vi.hoisted(() => ({ value: { runtimeVersion: null as string | null, channel: null as string | null } }));
@@ -20,10 +21,14 @@ vi.mock('react-native', () => ({
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
 }));
 
+vi.mock('expo-router', () => ({ router: { push: routerPush } }));
+
 vi.mock('lucide-react-native', () => {
   const icon = (name: string) => (props: Record<string, unknown>) => React.createElement('icon', { name, ...props });
   return {
     ArrowUpRight: icon('ArrowUpRight'),
+    ChevronRight: icon('ChevronRight'),
+    LifeBuoy: icon('LifeBuoy'),
     Mail: icon('Mail'),
     MessageCircle: icon('MessageCircle'),
     ShieldCheck: icon('ShieldCheck'),
@@ -68,6 +73,7 @@ function contactSupport(tree: renderer.ReactTestRenderer) {
 
 beforeEach(() => {
   openUrl.mockClear();
+  routerPush.mockClear();
   versionLabel.value = VERSION_LABEL;
   updateRuntime.value = { runtimeVersion: '0.1.8', channel: 'production' };
   resetCreatorSessionForTests();
@@ -80,7 +86,21 @@ describe('help screen', () => {
 
     expect(tree.root.findByType('section-title' as never).props.body)
       .toBe('Find quick guidance for creations, recipes, and contacting support.');
-    expect(cardTitles(tree)).toEqual(['Creation help', 'Recipes and sales', 'Contact support']);
+    expect(cardTitles(tree)).toEqual(['Message support', 'Creation help', 'Recipes and sales', 'Contact support']);
+  });
+
+  // Owner, 2026-11-21: support in the app, a simple version first. The mail stays for anyone without an account.
+  it('opens the conversation with support from its first card, inside the app', () => {
+    const tree = renderScreen();
+    const card = tree.root.findAll((node) => String(node.type) === 'pressable')
+      .find((node) => String(node.props.accessibilityLabel).startsWith('Message support.'));
+    if (!card) throw new Error('No Message support card');
+
+    expect(card.props.accessibilityRole).toBe('button');
+    renderer.act(() => { (card.props.onPress as () => void)(); });
+
+    expect(routerPush).toHaveBeenCalledWith('/support');
+    expect(openUrl).not.toHaveBeenCalled();
   });
 
   // Settings builds these lines for support, and the mail never carried them.

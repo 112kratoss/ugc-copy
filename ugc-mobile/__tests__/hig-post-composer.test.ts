@@ -65,16 +65,18 @@ describe('S11 — the reorder can finish', () => {
 
   /**
    * The option removes a system gesture, so it is not a default to sprinkle.
-   * Two routes have earned it: this composer, whose reorder the pan terminated,
-   * and `create/[tool]`, whose exit has to flush an unsaved draft that a native
-   * pop would skip. Naming them makes a third use argue for itself here.
+   * Three routes have earned it: this composer, whose reorder the pan terminated;
+   * `create/[tool]`, whose exit has to flush an unsaved draft that a native
+   * pop would skip; and `support`, where a message is pulled right to reply to
+   * it as in a chat app (2026-11-22), a drag the full-screen pan would take.
+   * Naming them makes a fourth use argue for itself here.
    */
   it('leaves every other route on the platform default', () => {
     const guarded = [...layout.matchAll(/fullScreenGestureEnabled:/g)].map((match) => {
       const before = layout.slice(0, match.index);
       return before.slice(before.lastIndexOf('name="')).match(/name="([^"]+)"/)?.[1];
     });
-    expect(guarded.sort()).toEqual(['create/[tool]', 'post/new']);
+    expect(guarded.sort()).toEqual(['create/[tool]', 'post/new', 'support']);
   });
 });
 

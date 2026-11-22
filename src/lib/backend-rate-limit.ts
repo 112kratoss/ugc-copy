@@ -60,6 +60,30 @@ export const CONTACT_SUBMISSION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// An account's messages to support, keyed by the account: room for a person
+// who writes in several short lines, not for a script.
+export const SUPPORT_MESSAGE_RATE_LIMIT = {
+  scope: 'support:message',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
+// Edits, deletes for everyone and reactions in a support conversation, by
+// either side's account: a person tidying a few messages, not a script.
+export const SUPPORT_ACTION_RATE_LIMIT = {
+  scope: 'support:action',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+// "typing…" pings (one every 3 s while the text changes) and read receipts
+// from an open support thread: a person typing for most of ten minutes fits.
+export const SUPPORT_SIGNAL_RATE_LIMIT = {
+  scope: 'support:signal',
+  limit: 400,
+  windowSeconds: 10 * 60,
+} as const;
+
 // Browsers can emit several violations during one page load, so this is high
 // enough for diagnostics while still bounding a public unauthenticated sink.
 export const CSP_REPORT_RATE_LIMIT = {

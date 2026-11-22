@@ -27,6 +27,7 @@ import {
   notifyMobilePurchasesRestored,
   notifyPostResourceUnlockCompleted,
   notifyPostSocialActivity,
+  notifySupportReplied,
   processMobilePushMaintenance,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
@@ -2618,6 +2619,45 @@ describe('what each alert opens and says', () => {
     expect(unreadable.sent.filter((row) => row.user_id === 'creator-1').map((row) => [row.title, row.body])).toEqual(unnamed);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed_to_load_alert_profile'));
     errorSpy.mockRestore();
+  });
+
+  it('tells an account support replied, with the start of the reply, and opens the conversation', async () => {
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+
+    await notifySupportReplied(client, {
+      userId: 'account-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      replyBody: 'Sorry about that.\n\nThe 40 credits are back in your balance.',
+    });
+    await notifySupportReplied(client, {
+      userId: 'account-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-2',
+      replyBody: 'x'.repeat(300),
+    });
+
+    expect(history.sent.map(({ user_id, type, category, title, body, deep_link, object_type, object_id, dedupe_key }) => (
+      { user_id, type, category, title, body, deep_link, object_type, object_id, dedupe_key }
+    ))).toEqual([
+      {
+        user_id: 'account-1',
+        type: 'support_reply',
+        // Never muted with a category switch: the account asked for this answer.
+        category: 'system',
+        title: 'Support replied',
+        body: 'Sorry about that. The 40 credits are back in your balance.',
+        deep_link: '/support',
+        object_type: 'support_conversation',
+        object_id: 'conversation-1',
+        dedupe_key: 'support-reply:message-1',
+      },
+      expect.objectContaining({
+        dedupe_key: 'support-reply:message-2',
+        body: `${'x'.repeat(139)}…`,
+      }),
+    ]);
   });
 
   it('tells a seller their payout was sent, or not sent and why, and opens Your Sales', async () => {

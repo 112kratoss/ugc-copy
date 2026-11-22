@@ -1,0 +1,185 @@
+'use client';
+
+import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
+
+import {
+  readSupportConversationResponse,
+  readSupportMessageResponse,
+  readSupportMessageUpdateResponse,
+  readSupportReadResponse,
+} from '../../../ugc-mobile/lib/support-conversation-policy/support-conversation-policy';
+
+import { shrinkConsolePhoto } from './shrink-console-photo';
+import type { SupportChatActionResult, SupportChatLoadResult, SupportChatTransport } from './use-support-chat';
+
+/**
+ * How each side of a support thread talks to the server: the account through
+ * `/api/support/*` with its session's bearer token, the operator through
+ * `/api/admin/support` with the console's cookie. The account's photo is
+ * staged like any upload and named in the send; the console's goes with its
+ * send, shrunk under the host's request cap.
+ */
+
+async function readJson(response: Response): Promise<Record<string, unknown> | null> {
+  try {
+    const value = await response.json();
+    return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A refusal the person should read (the server's words), or null for a fault of ours. */
+function refusalWords(response: Response, json: Record<string, unknown> | null): string | null {
+  if (response.status >= 500) return null;
+  return typeof json?.error === 'string' ? json.error : null;
+}
+
+async function action<T>(
+  request: () => Promise<Response>,
+  read: (json: Record<string, unknown> | null) => T | null,
+): Promise<SupportChatActionResult<T>> {
+  try {
+    const response = await request();
+    const json = await readJson(response);
+    if (response.status === 401) return { ok: false, error: null, signedOut: true };
+    const value = response.ok ? read(json) : null;
+    return value ? { ok: true, value } : { ok: false, error: refusalWords(response, json) };
+  } catch {
+    return { ok: false, error: null };
+  }
+}
+
+function readLoad(response: Response, json: Record<string, unknown> | null): SupportChatLoadResult {
+  if (response.status === 401) return { kind: 'signed-out' };
+  if (response.status === 403 && json?.code === 'REGISTRATION_REQUIRED') return { kind: 'registration-required' };
+  if (response.status === 404) return { kind: 'not-found' };
+  const parsed = response.ok ? readSupportConversationResponse(json) : null;
+  return parsed ? { kind: 'ok', ...parsed } : { kind: 'failed' };
+}
+
+/** The account's own thread, with the session's token read fresh for every request. */
+export function createAccountSupportTransport(
+  authHeaders: () => Promise<Record<string, string>>,
+): SupportChatTransport {
+  const jsonRequest = async (path: string, method: string, body?: unknown) => fetch(path, {
+    method,
+    headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(await authHeaders()) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    cache: 'no-store',
+  });
+  // Photos staged for a send that did not go through, by the send's client id.
+  const stagedPhotos = new Map<string, string>();
+
+  return {
+    async load() {
+      try {
+        const response = await jsonRequest('/api/support/conversation', 'GET');
+        return readLoad(response, await readJson(response));
+      } catch {
+        return { kind: 'failed' };
+      }
+    },
+    async send({ body, clientMessageId, replyToMessageId, photo }) {
+      let storagePath: string | null = null;
+      if (photo) {
+        // A retry names the photo already staged rather than sending it again.
+        storagePath = stagedPhotos.get(clientMessageId) ?? null;
+        if (!storagePath) {
+          try {
+            storagePath = (await uploadMediaToTemporaryStorage(photo)).storagePath;
+          } catch {
+            // The picker already held the type and size to the rule: what is
+            // left is a lost connection or a fault, the general line's case.
+            return { ok: false, error: null };
+          }
+          stagedPhotos.set(clientMessageId, storagePath);
+        }
+      }
+      const result = await action(
+        () => jsonRequest('/api/support/conversation', 'POST', {
+          body,
+          clientMessageId,
+          replyToMessageId,
+          ...(storagePath ? { photo: { storagePath } } : {}),
+        }),
+        readSupportMessageResponse,
+      );
+      // Kept, or refused for a staged photo that is gone: either way the next try uploads anew.
+      if (result.ok || result.error) stagedPhotos.delete(clientMessageId);
+      return result;
+    },
+    edit: (messageId, body) => action(
+      () => jsonRequest(`/api/support/messages/${encodeURIComponent(messageId)}`, 'PATCH', { body }),
+      readSupportMessageUpdateResponse,
+    ),
+    remove: (messageId) => action(
+      () => jsonRequest(`/api/support/messages/${encodeURIComponent(messageId)}`, 'DELETE'),
+      readSupportMessageUpdateResponse,
+    ),
+    react: (messageId, emoji) => action(
+      () => jsonRequest(`/api/support/messages/${encodeURIComponent(messageId)}/reaction`, 'POST', { emoji }),
+      readSupportMessageUpdateResponse,
+    ),
+    markRead: () => action(
+      () => jsonRequest('/api/support/conversation/read', 'POST'),
+      readSupportReadResponse,
+    ),
+    async typing(typing) {
+      await jsonRequest('/api/support/conversation/typing', 'POST', { typing }).catch(() => undefined);
+    },
+  };
+}
+
+/** The console's view of one account's thread. */
+export function createAdminSupportTransport(conversationId: string): SupportChatTransport {
+  const post = (body: Record<string, unknown>) => fetch('/api/admin/support', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversationId, ...body }),
+    cache: 'no-store',
+  });
+
+  return {
+    async load() {
+      try {
+        const response = await fetch(`/api/admin/support?conversationId=${encodeURIComponent(conversationId)}`, { cache: 'no-store' });
+        return readLoad(response, await readJson(response));
+      } catch {
+        return { kind: 'failed' };
+      }
+    },
+    async send({ body, clientMessageId, replyToMessageId, photo }) {
+      if (!photo) {
+        return action(
+          () => post({ action: 'reply', body, clientMessageId, replyToMessageId }),
+          readSupportMessageResponse,
+        );
+      }
+      let shrunk: Blob;
+      try {
+        shrunk = await shrinkConsolePhoto(photo);
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : null };
+      }
+      const form = new FormData();
+      form.set('action', 'reply');
+      form.set('conversationId', conversationId);
+      form.set('body', body);
+      form.set('clientMessageId', clientMessageId);
+      if (replyToMessageId) form.set('replyToMessageId', replyToMessageId);
+      form.set('photo', shrunk, photo.name || 'photo');
+      return action(
+        () => fetch('/api/admin/support', { method: 'POST', body: form, cache: 'no-store' }),
+        readSupportMessageResponse,
+      );
+    },
+    edit: (messageId, body) => action(() => post({ action: 'edit', messageId, body }), readSupportMessageUpdateResponse),
+    remove: (messageId) => action(() => post({ action: 'delete', messageId }), readSupportMessageUpdateResponse),
+    react: (messageId, emoji) => action(() => post({ action: 'react', messageId, emoji }), readSupportMessageUpdateResponse),
+    markRead: () => action(() => post({ action: 'read' }), readSupportReadResponse),
+    async typing(typing) {
+      await post({ action: 'typing', typing }).catch(() => undefined);
+    },
+  };
+}

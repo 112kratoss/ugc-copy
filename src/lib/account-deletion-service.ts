@@ -20,6 +20,8 @@ const USER_PREFIX_BUCKETS = [
   'generation_inputs',
   'post_resource_files',
   'template_inputs',
+  // Help & support photos, under the account's folder whichever side sent them.
+  'support_attachments',
 ] as const;
 
 const TEMPLATE_ID_PATTERN =

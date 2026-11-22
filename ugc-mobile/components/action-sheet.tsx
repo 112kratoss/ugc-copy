@@ -97,6 +97,11 @@ function ActionSheetSurface({
     haptic.light();
     action.onPress?.();
   };
+  const chooseReaction = (option: string) => {
+    onAnswered();
+    haptic.select();
+    request.reactions?.onSelect(option);
+  };
 
   // The entrance and the drag share one transform entry, and the scrim thins
   // for both: a JS-driven value beside a native-driven one on the same view
@@ -186,6 +191,44 @@ function ActionSheetSurface({
               </Text>
             ) : null}
           </View>
+          {request.reactions ? (
+            <View
+              accessibilityLabel={request.reactions.label}
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                paddingHorizontal: 4,
+                paddingBottom: appTheme.spacing.gap,
+              }}
+            >
+              {request.reactions.options.map((option) => {
+                const selected = request.reactions?.selected === option;
+                return (
+                  <Pressable
+                    key={option}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${request.reactions?.label} ${option}`}
+                    accessibilityState={{ selected }}
+                    onPress={() => chooseReaction(option)}
+                    style={({ pressed }) => ({
+                      width: REACTION_BUTTON_SIZE,
+                      height: REACTION_BUTTON_SIZE,
+                      borderRadius: REACTION_BUTTON_SIZE / 2,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: selected
+                        ? theme.colors.selected
+                        : pressed
+                          ? theme.state.pressed.background
+                          : theme.colors.surface,
+                    })}
+                  >
+                    <Text style={{ fontSize: 26, lineHeight: 32 }}>{option}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
           <ScrollView
             {...drag.scrollProps}
             keyboardShouldPersistTaps="handled"
@@ -216,6 +259,8 @@ const CARD_SHADOW_CLEARANCE = 8;
 const ROW_RADIUS = CARD_RADIUS - CARD_PADDING;
 const ROW_PADDING = 16;
 const ROW_GAP = 6;
+// A quick reaction's round button: past the 44pt floor.
+const REACTION_BUTTON_SIZE = 48;
 
 function ActionRow({
   action,

@@ -289,6 +289,13 @@ const expectedEndpointKeys = [
   'getCreditHistory',
   'getHomeShelf',
   'requestCreatorPayout',
+  'getSupportConversation',
+  'sendSupportMessage',
+  'markSupportConversationRead',
+  'setSupportTyping',
+  'editSupportMessage',
+  'deleteSupportMessage',
+  'reactToSupportMessage',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {

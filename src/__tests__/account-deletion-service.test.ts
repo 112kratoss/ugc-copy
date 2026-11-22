@@ -31,6 +31,7 @@ const storageManifest = {
     'generation_inputs',
     'post_resource_files',
     'template_inputs',
+    'support_attachments',
   ],
   showcase_media_paths: [`showcase/${GENERATION_ID}/output.webp`],
   template_asset_prefixes: ['2b2f4bb5-6ea8-4c44-a394-14cc777dcf52'],
