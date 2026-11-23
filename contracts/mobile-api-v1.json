@@ -752,6 +752,14 @@
       "path": "/api/showcase/feed",
       "auth": "optional",
       "cacheControl": "public, max-age=300, stale-while-revalidate=300",
+      "freshFirstPage": {
+        "description": "A reader's own refresh of a For you first page (a pull to refresh, \"New posts\", the end of the feed's Refresh): ranked afresh instead of served from a session ranked within the two-minute reuse window. Read only with sort for-you, no cursor and offset 0; ignored on any other request and for any value but 1.",
+        "query": {
+          "sort": "for-you",
+          "offset": "0",
+          "fresh": "1"
+        }
+      },
       "response": {
         "items": [
           {

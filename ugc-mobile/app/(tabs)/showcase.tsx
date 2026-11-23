@@ -68,6 +68,7 @@ import {
   type MobileShowcaseFeedFilterId,
   type ShowcaseFeedFilters,
 } from '@/lib/showcase-feed-query';
+import { runLaneRefresh, type LaneRefreshInFlight } from '@/lib/feed-fresh-ranking';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import {
   SHOWCASE_ONSCREEN_VIEWABILITY,
@@ -640,22 +641,30 @@ export default function ShowcaseScreen() {
   // tap and no page of the old session can be asked meanwhile. A ranked page
   // one waits for the queued impressions inside its own read
   // (`showcaseFeedLaneQueryOptions`), as a lane switch's does.
-  const refetchFirstPage = () => {
-    lastLoadMorePageCountRef.current = null;
-    lastLoadMoreAtRef.current = 0;
-    queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
-      if (!current?.pages.length) return current;
-      return {
-        pages: current.pages.slice(0, 1),
-        pageParams: current.pageParams.slice(0, 1),
-      };
-    });
-    return showcaseQuery.refetch().finally(() => {
-      // Cards that left through the top kept their placeholder height until
-      // now; the refreshed page re-places every card anyway.
-      releaseHeldAspectRatios('refresh');
-    });
-  };
+  // The reader asked, so the first page is ranked afresh, one refresh at a
+  // time (`runLaneRefresh` in lib/feed-fresh-ranking.ts).
+  const laneRefreshRef = useRef<LaneRefreshInFlight['current']>(null);
+  const refetchFirstPage = () => runLaneRefresh(laneRefreshRef, {
+    filters: queryFilters,
+    identityUserId,
+    lanePages: showcaseQuery.data?.pages.length ?? 0,
+    start: () => {
+      lastLoadMorePageCountRef.current = null;
+      lastLoadMoreAtRef.current = 0;
+      queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
+        if (!current?.pages.length) return current;
+        return {
+          pages: current.pages.slice(0, 1),
+          pageParams: current.pageParams.slice(0, 1),
+        };
+      });
+      return showcaseQuery.refetch().finally(() => {
+        // Cards that left through the top kept their placeholder height until
+        // now; the refreshed page re-places every card anyway.
+        releaseHeldAspectRatios('refresh');
+      });
+    },
+  });
 
   const handleRefresh = () => {
     haptic.light();

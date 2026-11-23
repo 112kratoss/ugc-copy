@@ -1899,6 +1899,43 @@ describe('showcase feed', () => {
     }
   });
 
+  // A pull to refresh came back with the same posts: the first page was served
+  // from the session ranked moments before. `fresh` must reach the ranking.
+  it.each([
+    ['a For you first page', { offset: 0 }, true],
+    ['a later page', { offset: 12 }, false],
+    ['a cursor page', { offset: 0, cursor: 'eyJzIjoiYSIsInAiOjEyfQ' }, false],
+  ])('hands a refresh on to the ranking only for %s', async (_case, page, expected) => {
+    postsState = [];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const asked: Array<boolean | undefined> = [];
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      asked.push(options.fresh);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({
+      category: 'all',
+      sort: 'for-you',
+      limit: 12,
+      viewerUserId: 'viewer-1',
+      bypassCache: true,
+      fresh: true,
+      ...page,
+    });
+
+    expect(asked).toHaveLength(1);
+    expect(Boolean(asked[0])).toBe(expected);
+  });
+
   // Home's Notes chip waited 1.9-3.4 s for an empty page (device sweep,
   // 2026-11-03): the ranked pool is retrieved for every category, and each
   // batch of media posts was hydrated in full before the text filter dropped it.

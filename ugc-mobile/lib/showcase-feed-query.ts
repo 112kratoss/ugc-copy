@@ -24,6 +24,8 @@ export interface ShowcaseFeedPageParams extends ShowcaseFeedFilters {
   offset?: number;
   /** A first page ranked ahead (`lib/explore-read-ahead.ts`), claimed by the read that shows it. */
   readAheadToken?: string | null;
+  /** A For you first page the reader asked for again: ranked afresh (`lib/feed-fresh-ranking.ts`). */
+  fresh?: boolean;
 }
 
 export interface ShowcaseFeedPageParam {
@@ -113,6 +115,7 @@ export function getShowcaseFeedPageParams(params: ShowcaseFeedPageParams = {}): 
   } else {
     query.offset = params.offset ?? 0;
     if (params.readAheadToken && query.offset === 0) query.readAheadToken = params.readAheadToken;
+    if (params.fresh && query.offset === 0 && sort === 'for-you') query.fresh = 1;
   }
 
   if (category !== 'all') query.category = category;

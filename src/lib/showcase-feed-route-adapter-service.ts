@@ -166,6 +166,10 @@ async function handleShowcaseFeedGET(
       && isShowcaseFeedReadAheadToken(readAheadTokenParam)
       ? readAheadTokenParam
       : null;
+    // The reader's own refresh of a For you first page (a pull, "New posts"):
+    // ranked afresh, where a first page read again within two minutes is
+    // otherwise served the same ranking. Anything else ignores it.
+    const fresh = searchParams.get('fresh') === '1' && sort === 'for-you' && !cursor && offset === 0;
     const anonymousIdentity = viewerUserId || sort !== 'for-you'
       ? null
       : dependencies.resolveFeedAnonymousIdentity(request);
@@ -253,6 +257,7 @@ async function handleShowcaseFeedGET(
       bypassCache: (sort === 'for-you' && !identityless) || Boolean(cursor),
       ...(readAheadToken ? { readAheadToken } : {}),
       ...(seedBucket === null ? {} : { seedBucket }),
+      ...(fresh ? { fresh } : {}),
       ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
     });
     recordPhase('feed_total', performance.now() - feedStartedAt);
