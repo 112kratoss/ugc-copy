@@ -26,6 +26,13 @@ vi.mock('@/lib/use-native-preview-playback', () => ({ useNativePreviewPlayback: 
 vi.mock('@react-navigation/native', () => ({ useIsFocused: () => state.focused }));
 vi.mock('@/lib/use-media-source', () => ({ useMediaSource: (url: string) => ({ source: { uri: state.sourceVersion ? `${url}?version=${state.sourceVersion}` : url } }) }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: (props: object) => React.createElement('retry-button', props) }));
+// The loading sparkle as a plain element: `loading` while the clip is awaited,
+// read as its label, and `sparkle-end` once the wait is over, saying how.
+vi.mock('@/components/media-loading-sparkle', () => ({
+  MediaLoadingSparkle: ({ state, label }: { state: string; label: string }) => (state === 'loading'
+    ? React.createElement('loading', { accessibilityLabel: label })
+    : React.createElement('sparkle-end', { state })),
+}));
 vi.mock('react-native', () => ({
   StyleSheet: { flatten: (style: unknown) => Object.assign({}, ...[style].flat()) },
   View: (props: object) => React.createElement('view', props),
@@ -95,6 +102,14 @@ it('shows loading feedback without starting a result preview automatically', () 
   expect(state.players[0].play).not.toHaveBeenCalled();
   renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
   expect(view.root.findAllByType('loading' as never)).toHaveLength(0);
+  // A clip that can play ends the wait with the sparkle's burst.
+  expect(view.root.findByType('sparkle-end' as never).props.state).toBe('ready');
+});
+it('ends the wait without a burst when the clip fails', () => {
+  const view = mount();
+  renderer.act(() => state.players[0].listener?.({ status: 'error' }));
+  expect(view.root.findAllByType('loading' as never)).toHaveLength(0);
+  expect(view.root.findByType('sparkle-end' as never).props.state).toBe('gone');
 });
 it('shows an error that occurred before the status listener attached', () => {
   state.initialStatus = 'error';
@@ -148,7 +163,7 @@ it('covers the Android player with the frame\'s own ground, under the spinner', 
   expect(holdsPlayer(player)).toBe(true);
   expect(cover).toEqual(playerCover(tree!));
   expect(cover.props.style).toEqual({ position: 'absolute', inset: 0, backgroundColor: '#050506' });
-  expect(spinner.children?.[0].type).toBe('loading');
+  expect(spinner.type).toBe('loading');
 });
 it('covers an Android player whose frame names no ground with the black a clip sits on', () => {
   state.os = 'android';
@@ -166,7 +181,8 @@ it('has the Android player mounted with its controls from the first render, and 
   expect(video.props.nativeControls).toBe(true);
   renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
   expect(view.root.findByType('video' as never)).toBe(video);
-  expect(layers(view).map(holdsPlayer)).toEqual([true]);
+  // The player alone, with the sparkle on its way out over it.
+  expect(layers(view).filter(layer => layer.type !== 'sparkle-end').map(holdsPlayer)).toEqual([true]);
   expect(video.props.nativeControls).toBe(true);
 });
 it('shows the Android player when its clip was ready before the status listener attached', () => {

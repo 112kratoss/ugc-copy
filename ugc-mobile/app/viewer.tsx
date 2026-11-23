@@ -37,6 +37,7 @@ import { createViewerPlaybackHandoff } from '@/lib/viewer-playback-handoff';
 import { isRemovedFromViewer, reconcileViewerSessionItems, removeViewerSessionItems } from '@/lib/viewer-session-items';
 import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
+import { MediaLoadingSparkle } from '@/components/media-loading-sparkle';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
@@ -1521,7 +1522,8 @@ function ImmersivePreviewViewer() {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
         {shellHidesBar}
-        <ActivityIndicator accessibilityLabel="Loading preview" color={theme.colors.primary} />
+        {/* The logo's sparkle on the black screen while the post is on its way (owner, 2026-11-23). */}
+        <MediaLoadingSparkle state="loading" label="Loading preview" />
       </ViewerShell>
     );
   }
@@ -2945,7 +2947,7 @@ function ImmersiveMedia({
         {mediaItem.previewUrl ? (
           <FeedMediaFrame
             kind="image"
-            // The clip's own spinner says it is loading; a pencil on its poster would draw under it.
+            // The clip's own loading sparkle says it is loading; a pencil on its poster would draw under it.
             loadingSketch={false}
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
@@ -3403,11 +3405,13 @@ function ActiveVideoAttempt({
         ) : null}
         {active && !isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
-      {zoomLanded && !playbackFailed && (status === 'loading' || status === 'idle') ? (
-        <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator accessibilityLabel="Loading video" color={theme.colors.primary} />
-        </View>
-      ) : null}
+      {/* The logo's sparkle until the clip can play, bursting as it does (owner, 2026-11-23). */}
+      <MediaLoadingSparkle
+        state={zoomLanded && !playbackFailed && (status === 'loading' || status === 'idle')
+          ? 'loading'
+          : status === 'readyToPlay' && !playbackFailed ? 'ready' : 'gone'}
+        label="Loading video"
+      />
       {/* Centred on the screen like the loading spinner and the paused badge.
           The trailing inset keeps the card clear of the rail, and the leading
           inset must match it or the card sits off-centre. */}
