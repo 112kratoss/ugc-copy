@@ -45,6 +45,7 @@ import {
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
 import { onHomeFeedRefresh } from '@/lib/home-feed-refresh';
+import { checkPostAvailability } from '@/lib/post-availability-client';
 import { removeFromHomeShelf } from '@/lib/home-shelf-removals';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { REMIX_UNLOCK_REQUIRED_CODE, requestShowcaseRemix, ShowcaseRemixRequestError } from '@/lib/showcase-remix-client';
@@ -107,7 +108,10 @@ type FeedbackNotice = { tone: 'success' | 'error'; message: string } | null;
 
 type HiddenFromLane = { postIds: Set<string>; creatorIds: Set<string> };
 
-/** A post the viewer removed this visit: not interested, hidden, reported or blocked. */
+/**
+ * A post the viewer removed this visit (not interested, hidden, reported or
+ * blocked), or one found gone when its media failed to load.
+ */
 function isHiddenFromLane(hidden: HiddenFromLane, item: ShowcaseFeedItem) {
     return hidden.postIds.has(item.id) || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id));
 }
@@ -1066,6 +1070,17 @@ export default function FeedClient({
             return open && predicate(open) ? null : current;
         });
     }, [setItems]);
+    // A card whose media failed: when the post has left public view since the
+    // lane loaded (archived, made private, hidden, deleted), the card goes
+    // quietly, as a feed drops a post that is no longer there; otherwise the
+    // card offers a retry (`post-availability-client.ts`).
+    const handleMediaUnavailable = useCallback(async (postId: string): Promise<'removed' | 'retry'> => {
+        if (await checkPostAvailability(postId, { accessToken }) !== 'gone') return 'retry';
+        removedForViewer.postIds.add(postId);
+        removeFromLane((item) => item.id === postId);
+        removeFromHomeShelf({ postId });
+        return 'removed';
+    }, [accessToken, removeFromLane, removedForViewer]);
     const clearNotice = useCallback(() => setFeedbackNotice(null), []);
     const showOutcome = useCallback((outcome: FeedSafetyOutcome) => {
         if (outcome.status === 'cancelled') return;
@@ -1296,6 +1311,7 @@ export default function FeedClient({
                                     onShared={handleShared}
                                     onCommentCountChange={applyCommentCount}
                                     onOpenMedia={handleOpenMedia}
+                                    onMediaUnavailable={handleMediaUnavailable}
                                     onOpenPost={handleOpenPost}
                                     onRecordOpen={recordOpen}
                                     onPrefetchPost={handlePrefetchPost}

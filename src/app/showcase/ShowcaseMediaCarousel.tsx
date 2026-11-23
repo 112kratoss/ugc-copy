@@ -42,6 +42,14 @@ interface ShowcaseMediaCarouselProps {
   onMediaError?: (item: ShowcaseMediaItem) => void;
   onMediaRetry?: (item: ShowcaseMediaItem) => void;
   /**
+   * Asked when the active media fails to load, before the retry is offered: a
+   * feed whose post has left public view removes the card instead and answers
+   * `removed`. The frame keeps its placeholder until the answer; `retry`, or a
+   * question that fails, offers the retry. Without it a failed feed image keeps
+   * its placeholder, as Explore's and a profile's tiles do.
+   */
+  onMediaUnavailable?: (item: ShowcaseMediaItem) => Promise<'removed' | 'retry'>;
+  /**
    * Playback position samples for the active video, as a share of the post's
    * video (0..1) and its length in ms. A feed teaser is measured against the
    * source (`sourceVideoProgress`).
@@ -163,6 +171,7 @@ export default function ShowcaseMediaCarousel({
   onMediaReady,
   onMediaError,
   onMediaRetry,
+  onMediaUnavailable,
   onVideoProgress,
   standIn = null,
 }: ShowcaseMediaCarouselProps) {
@@ -184,6 +193,8 @@ export default function ShowcaseMediaCarousel({
   const attachVideo = useInlineMediaPlayback(activeVideoRef);
   const lifecycleStatusRef = useRef<Map<string, 'ready' | 'error'>>(new Map());
   const [failedLoadKeys, setFailedLoadKeys] = useState<Set<string>>(new Set());
+  // The failed load whose retry waits on `onMediaUnavailable`'s answer.
+  const [askingLoadKey, setAskingLoadKey] = useState<string | null>(null);
   const [loadAttempts, setLoadAttempts] = useState<Record<string, number>>({});
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
   const requestedAutoPlay = autoPlayVideo ?? mode !== 'feed';
@@ -233,6 +244,7 @@ export default function ShowcaseMediaCarousel({
     ? JSON.stringify([activeItem.id, activePlaybackUrl, activeLoadAttempt])
     : '';
   const hasActiveMediaError = Boolean(activeLoadKey && failedLoadKeys.has(activeLoadKey));
+  const showsRetry = hasActiveMediaError && askingLoadKey !== activeLoadKey;
   const shouldActuallyPlayVideo = shouldPlayVideo && !hasActiveMediaError;
 
   const reportMediaReady = useCallback((mediaItem: ShowcaseMediaItem, loadKey: string) => {
@@ -290,7 +302,15 @@ export default function ShowcaseMediaCarousel({
       return nextKeys;
     });
     onMediaError?.(activeItem);
-  }, [activeItem, activeLoadKey, onMediaError]);
+    if (!onMediaUnavailable) return;
+    const failedLoadKey = activeLoadKey;
+    const offerRetry = () => setAskingLoadKey((current) => (current === failedLoadKey ? null : current));
+    setAskingLoadKey(failedLoadKey);
+    onMediaUnavailable(activeItem).then((answer) => {
+      // A removed card unmounts; its frame keeps the placeholder until then.
+      if (answer !== 'removed') offerRetry();
+    }, offerRetry);
+  }, [activeItem, activeLoadKey, onMediaError, onMediaUnavailable]);
 
   const retryActiveMedia = useCallback(() => {
     if (!activeItem || !activeSourceKey || !activeLoadKey) {
@@ -628,6 +648,9 @@ export default function ShowcaseMediaCarousel({
                 }
                 reportMediaReady(renderedActiveItem, activeLoadKey);
               }}
+              // Only a feed that asks why (`onMediaUnavailable`) hears of a
+              // failure; anywhere else the frame keeps its placeholder.
+              onError={onMediaUnavailable ? reportActiveMediaError : undefined}
               className={frameFit === 'cover' ? 'object-cover' : 'object-contain'}
             />
           ) : (
@@ -669,7 +692,7 @@ export default function ShowcaseMediaCarousel({
           )}
         </div>
 
-        {hasActiveMediaError ? (
+        {showsRetry ? (
           <div
             role="status"
             aria-live="polite"

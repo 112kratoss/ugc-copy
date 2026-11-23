@@ -87,6 +87,11 @@ interface FeedPostCardProps {
     onShared?: (postId: string, cardIndex: number) => void;
     onCommentCountChange: (postId: string, commentCount: number) => void;
     onOpenMedia: (postId: string, mediaIndex: number) => void;
+    /**
+     * The card's media failed to load: the lane removes the card when the post
+     * has left public view (`removed`), and the card offers a retry otherwise.
+     */
+    onMediaUnavailable?: (postId: string) => Promise<'removed' | 'retry'>;
     /** Opens the post page. Fired by a click on the card outside any control. */
     onOpenPost: (postId: string) => void;
     /**
@@ -138,6 +143,7 @@ function FeedPostCardView({
     onShared,
     onCommentCountChange,
     onOpenMedia,
+    onMediaUnavailable,
     onOpenPost,
     onRecordOpen,
     onPrefetchPost,
@@ -343,6 +349,7 @@ function FeedPostCardView({
                         // the tighter cap keeps the next post within reach.
                         viewportClassName="w-full max-h-[min(60vh,35rem)] rounded-2xl border border-[var(--ui-border-subtle)]"
                         onOpen={(mediaIndex) => onOpenMedia(item.id, mediaIndex)}
+                        onMediaUnavailable={onMediaUnavailable ? () => onMediaUnavailable(item.id) : undefined}
                         onVideoProgress={telemetry?.reportVideoProgress}
                     />
                 </div>
