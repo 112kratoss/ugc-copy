@@ -19,6 +19,9 @@
 // socket stays good until the server process ends (a memory-threshold restart ends every socket, as
 // before). `next start` takes `--keepAliveTimeout`, `next dev` takes no such option, so the server it
 // makes is changed here, the way the .env guard and the Supabase stub change what it reads.
+// Only `http.createServer` is wrapped, which is how `next dev` makes its server (start-server.js). A server
+// made with `new http.Server()` or with `https.createServer` (`next dev --experimental-https`, which this
+// suite does not use) keeps Node's default.
 // e2e-dev-server-keep-alive.test.ts runs the sequence with and without this file.
 'use strict';
 
