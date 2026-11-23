@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET, HEAD } from '@/app/api/showcase/feed/route';
 import { logBackendRouteError } from '@/lib/backend-logger';
 import { evaluateUserFacingRouteIdentity } from '@/lib/route-identity-admission';
-import { getShowcaseFeedPage } from '@/lib/showcase-feed';
+import { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
+import { recordShowcaseFeedReadAheadEvent } from '@/lib/showcase-feed-read-ahead-counts';
 
 // The real feed exports, admission and handler, with the network at the edges: the identity
 // client's two calls (local verification, the lifecycle round trip), the service client's read
@@ -43,6 +44,10 @@ vi.mock('@/lib/showcase-feed', () => ({
     pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 },
   })),
   prepareShowcaseFeedReadAhead: vi.fn(async () => null),
+}));
+// Explore's read-ahead counts (#907), kept after the answer like the read limit's release.
+vi.mock('@/lib/showcase-feed-read-ahead-counts', () => ({
+  recordShowcaseFeedReadAheadEvent: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/backend-logger', async (original) => ({
   ...await original<typeof import('@/lib/backend-logger')>(),
@@ -474,6 +479,60 @@ describe('the feed read limit beside route-owned admission', () => {
         { ...FOR_YOU_COUNT, p_subject_key: GUEST_ID },
         FOR_YOU_REFUND,
       ]);
+    });
+  });
+
+  // #907 counts Explore's read-ahead holds and claims in the same handler. Both counts run only
+  // once admission has passed; a refused request counts neither, and its read-limit count goes back.
+  describe('with Explore\'s read-ahead counts', () => {
+    const TOKEN = '0f8b6c7e-4a1d-4c2b-9e3f-5a6b7c8d9e0f';
+    const REVOKED = () => Promise.resolve({ data: { ...ACTIVE, session_valid: false }, error: null });
+    afterEach(() => {
+      vi.mocked(prepareShowcaseFeedReadAhead).mockImplementation(async () => null);
+    });
+
+    it('counts a hold after an admitted read-ahead, and keeps its read-limit count', async () => {
+      useIdentity(identityClient());
+      vi.mocked(prepareShowcaseFeedReadAhead).mockResolvedValueOnce({ token: TOKEN, expiresInMs: 120_000 } as never);
+
+      const response = await GET(feedRequest('sort=for-you&readAhead=1'));
+      await runAfterResponse();
+
+      expect(response.status).toBe(200);
+      expect(recordShowcaseFeedReadAheadEvent).toHaveBeenCalledWith('hold');
+      expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
+    });
+
+    it('counts a claim after an admitted read that brings its token, and keeps its read-limit count', async () => {
+      useIdentity(identityClient());
+      vi.mocked(getShowcaseFeedPage).mockImplementationOnce(async (options) => {
+        (options as { onReadAheadClaim?: (claimed: boolean) => void }).onReadAheadClaim?.(true);
+        return { items: [], pageInfo: { hasMore: false, nextOffset: null, limit: 12, offset: 0 } } as never;
+      });
+
+      const response = await GET(feedRequest(`sort=for-you&readAheadToken=${TOKEN}`));
+      await runAfterResponse();
+
+      expect(response.status).toBe(200);
+      expect(recordShowcaseFeedReadAheadEvent).toHaveBeenCalledWith('claim');
+      expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
+    });
+
+    it.each([
+      ['a read-ahead', 'sort=for-you&readAhead=1'],
+      ['a read that brings a read-ahead token', `sort=for-you&readAheadToken=${TOKEN}`],
+    ])('counts no hold or claim for %s whose admission is refused, and gives its read-limit count back', async (_case, query) => {
+      useIdentity(identityClient({ lifecycle: REVOKED }));
+      vi.mocked(prepareShowcaseFeedReadAhead).mockResolvedValue({ token: TOKEN, expiresInMs: 120_000 } as never);
+
+      const response = await GET(feedRequest(query));
+      await runAfterResponse();
+
+      expect(response.status).toBe(401);
+      expect(prepareShowcaseFeedReadAhead).not.toHaveBeenCalled();
+      expect(getShowcaseFeedPage).not.toHaveBeenCalled();
+      expect(recordShowcaseFeedReadAheadEvent).not.toHaveBeenCalled();
+      expect(countedUnder()).toEqual([FOR_YOU_COUNT, FOR_YOU_REFUND]);
     });
   });
 });
