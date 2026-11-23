@@ -408,3 +408,35 @@ filter), read the meaning list both ways, exact (`SET enable_indexscan = off`) a
 compare. Ship only if the indexed read returns as many rows as the exact one for every case and at
 least 99 in 100 of the same posts, and if `search_blended_posts.test.sql` and the relevance check
 still pass. The exact scan stays one `SET` away as the fallback.
+
+## Row pictures (thumbs, since 2026-11-23)
+
+A model's, a tool's or a search's row draws the cover of a post it opens, in a frame of 28 to 48 px
+(the typeahead, the start screen, the result list's models and tools). Since migration
+`20261123152813_post_media_search_thumbs.sql` that picture is the cover's row thumb where it has one:
+a WebP 144 px on its short side (48 px at 3x), about 5 KB, made from the 720 px preview's own bytes
+and stored beside it (`<source>.thumb.<hash>.webp`, `post_media.thumb_storage_path`). Where the
+cover has none, the row draws the preview as before. `search_post_picture` answers `thumb_path` only
+for a cover with a thumb, and `src/lib/search-thumbnail.ts` turns it into the `url` both clients
+draw, so an installed app draws it with no update.
+
+- **What makes one.** The preview sweep (`media-preview-repair.ts`, `withThumb: true`), for every
+  preview it makes in a creation's public folder: the covers of creation posts. The publish and edit
+  services keep a post's own media in the private bucket, which search never pictures, and make none.
+- **Where one may be.** Only in a creation's public folder (`showcase/<creation>/`, the pattern the
+  revocation queue takes) beside a public preview (`post_media_thumb_beside_public_preview_check`, and
+  `canStorePostMediaThumb` in the code), so no labelled post carries one, and none is ever in a post's
+  own folder, which account erasure and a media edit list by column and no queue takes.
+- **How it goes.** The trigger `post_media_thumb_follows_its_preview` drops a thumb when a write
+  changes its row's preview without naming one (labelling's private copy, a repointed cover), and
+  hands every thumb a row stops naming, by a write or by the row's delete, to the
+  showcase-media-revocations queue, which keeps what a serving post still names. Post delete,
+  takedown, a creation's deletion or unexposure and labelling also remove it at once with the rest
+  (`POST_MEDIA_PATH_COLUMNS` and the lists beside it).
+- **Covers made before it.** `npm run backfill:post-media-thumbs` reads each preview with no thumb in
+  a creation's public folder, of a post search can show (public, visible, not archived, not labelled,
+  not tombstoned), encodes the thumb exactly as the sweep does and records it only beside the preview
+  it was made from. It is a dry run by default: it counts every candidate and, for one pass (`--limit`,
+  default 200), reads the previews and reports the bytes it would read and write, writing nothing.
+  `--execute --project-ref=<ref>` writes; `--after=<post_media id>` resumes. Against production it
+  runs only on the owner's word.

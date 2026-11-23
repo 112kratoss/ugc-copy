@@ -81,6 +81,12 @@ const FUNCTIONS: Record<string, { signature: string; definer: boolean }> = {
   search_related_searches: { signature: 'public.search_related_searches(text, uuid, uuid[], text, integer)', definer: true },
 };
 
+// The functions a later migration re-created, by the migration that did.
+const RE_CREATED_SINCE: Record<string, string> = {
+  search_related_searches: '20261116200234_search_whole_words_first.sql',
+  search_post_picture: '20261123152813_post_media_search_thumbs.sql',
+};
+
 const BLOCKED_BY_VIEWER = (creator: string) => new RegExp(
   `AND NOT EXISTS \\(\\s+SELECT 1\\s+FROM public\\.user_blocks AS blocks\\s+WHERE blocks\\.blocker_user_id = p_viewer_user_id\\s+AND blocks\\.blocked_user_id = ${creator}\\s+\\)`,
 );
@@ -155,8 +161,9 @@ describe('search content suggestions migration', () => {
       expect(statements, name).toContain(`REVOKE ALL ON FUNCTION ${signature} FROM PUBLIC, anon, authenticated;`);
       expect(statements, name).toContain(`GRANT EXECUTE ON FUNCTION ${signature} TO service_role;`);
       // Related searches were re-created since to read only the posts about the
-      // search (20261116200234), whose test holds this file's rules to that definition.
-      expect(newestDefiner(name), name).toBe(name === 'search_related_searches' ? '20261116200234_search_whole_words_first.sql' : MIGRATION);
+      // search (20261116200234), and the picture to answer the cover's row thumb
+      // too (20261123152813); each one's test holds this file's rules to that definition.
+      expect(newestDefiner(name), name).toBe(RE_CREATED_SINCE[name] ?? MIGRATION);
     }
     // Every function that reads a post runs with its owner's rights; the
     // six that do not read a table need none, and the one call is the
@@ -372,9 +379,12 @@ describe('a picture is of a post the viewer may see', () => {
     for (const key of ['post_id', 'path', 'thumbhash', 'width', 'height', 'media_kind']) {
       expect(service, key).toContain(`row.${key}`);
     }
-    // The address is built by the function a post result's cover is built by, with no read of storage.
-    expect(service).toContain('postMediaReadUrl(client, row.path)');
-    expect(service).toContain('postMediaStorageBucket(row.path) === PRIVATE_POST_MEDIA_BUCKET');
+    // The address is built by the function a post result's cover is built by,
+    // with no read of storage, from the row thumb where there is one
+    // (20261123152813) and the preview otherwise, neither ever of the private bucket.
+    expect(service).toContain('postMediaReadUrl(client, publicPath(row.thumb_path) ?? previewPath)');
+    expect(service).toContain('const previewPath = publicPath(row.path);');
+    expect(service).toContain('postMediaStorageBucket(value) === PRIVATE_POST_MEDIA_BUCKET ? null : value');
     expect(service).not.toMatch(/createSignedUrl|\.download\(|\.list\(/);
   });
 

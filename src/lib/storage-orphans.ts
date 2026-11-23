@@ -282,7 +282,7 @@ const EXACT_PATH_COLUMNS: ReadonlyArray<{ table: string; columns: readonly strin
   { table: 'posts', columns: ['showcase_asset_path', 'output_url'] },
   {
     table: 'post_media',
-    columns: ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path'],
+    columns: ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path', 'thumb_storage_path'],
   },
   { table: 'generation_input_media', columns: ['storage_path'] },
   { table: 'post_resource_purchase_media', columns: ['storage_path', 'preview_storage_path', 'rendition_storage_path'] },
