@@ -894,6 +894,16 @@ describe('showcase feed route adapter service', () => {
         expect(dependencies.refundBackendRateLimit).not.toHaveBeenCalled();
       });
 
+      it('gives a count back at most once, however often and however concurrently it is released', async () => {
+        const dependencies = refundDependencies(async () => STATE);
+        const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;
+
+        await Promise.all([startedReadLimit.release(), startedReadLimit.release()]);
+        await startedReadLimit.release();
+
+        expect(dependencies.refundBackendRateLimit).toHaveBeenCalledOnce();
+      });
+
       it('leaves a count the handler claimed standing, whatever it said', async () => {
         const dependencies = refundDependencies(async () => STATE);
         const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;

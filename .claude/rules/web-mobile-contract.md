@@ -60,12 +60,13 @@ read waits for the slower of the two (`rate-limit` is the count's own time,
 `rate-limit-wait` what the round trip did not already cover). An admission
 refusal answers at once, exactly as before, and never reads the count; a count
 no handler claimed (an admission refusal, or a handler that answered before its
-limit step) is given back after the response, through `after()` and
-`refund_backend_rate_limit` (migration 20261123182749, service role only, the
-window the count was made in, never below zero), so a refused read spends
-nothing: a revoked token stops costing its account at once, and an outage of the
-lifecycle check leaves no one limited after it. The hook is told the verified
-subject alone, never the claims. The proxy-admitted routes keep admission and their limits one after the other:
+limit step) is given back after the response, best effort, through `after()`
+and `refund_backend_rate_limit` (migration 20261123182749, service role only,
+the window the count was made in, at most once, never below zero). A refused
+read therefore holds one count of its account's window only between the commit
+of its count and the commit of its refund; a refund that fails is logged and
+leaves the count standing, so the rule errs toward counting. The hook is told
+the verified subject alone, never the claims. The proxy-admitted routes keep admission and their limits one after the other:
 each adapter counts its own limit, with its own key and at its own point,
 after the proxy's admission has answered. For
 `/api/mcp` and its posting-only form `/api/mcp/posts` (every method) the MCP adapter runs it itself, because its refusals

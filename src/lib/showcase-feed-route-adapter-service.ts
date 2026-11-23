@@ -200,6 +200,7 @@ export function startShowcaseFeedReadLimit(
     }),
   );
   let claimed = false;
+  let released = false;
   return {
     scope: readRateLimit.scope,
     key: viewerUserId,
@@ -209,7 +210,9 @@ export function startShowcaseFeedReadLimit(
       return settled;
     },
     release: async () => {
-      if (claimed) return;
+      // Once, whoever calls it and however often: a count is given back at most once.
+      if (claimed || released) return;
+      released = true;
       const outcome = await settled;
       if (claimed) return;
       // The count is in whenever the limiter answered, allowed or over the limit. A failed check

@@ -6,7 +6,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(14);
+select plan(18);
 
 select has_function(
   'public', 'refund_backend_rate_limit', array['text', 'text', 'timestamp with time zone'],
@@ -44,13 +44,19 @@ select window_start
 from public.backend_rate_limits
 where scope = 'test:refund' and subject_key = 'subject-a';
 
+-- The next window's row, already populated: a refund named for this window must not touch it.
+insert into public.backend_rate_limits (scope, subject_key, window_start, request_count)
+select 'test:refund', 'subject-a', window_start + interval '600 seconds', 5
+from refund_window;
+
 select is(
   public.refund_backend_rate_limit('test:refund', 'subject-a', (select window_start from refund_window)),
   true,
   'a count in the named window is given back'
 );
 select is(
-  (select request_count from public.backend_rate_limits where scope = 'test:refund' and subject_key = 'subject-a'),
+  (select request_count from public.backend_rate_limits
+   where scope = 'test:refund' and subject_key = 'subject-a' and window_start = (select window_start from refund_window)),
   1,
   'one count of two is left'
 );
@@ -64,6 +70,13 @@ select is(
   1,
   'the same subject''s count in another scope is untouched'
 );
+select is(
+  (select request_count from public.backend_rate_limits
+   where scope = 'test:refund' and subject_key = 'subject-a'
+     and window_start = (select window_start from refund_window) + interval '600 seconds'),
+  5,
+  'the next window''s count is untouched by a refund named for this one'
+);
 
 select is(
   public.refund_backend_rate_limit('test:refund', 'subject-a', (select window_start from refund_window) - interval '600 seconds'),
@@ -71,7 +84,8 @@ select is(
   'a window the subject has no row in gives nothing back'
 );
 select is(
-  (select request_count from public.backend_rate_limits where scope = 'test:refund' and subject_key = 'subject-a'),
+  (select request_count from public.backend_rate_limits
+   where scope = 'test:refund' and subject_key = 'subject-a' and window_start = (select window_start from refund_window)),
   1,
   'and leaves the named window''s count alone'
 );
@@ -87,9 +101,29 @@ select is(
   'a window with nothing left gives nothing back'
 );
 select is(
-  (select request_count from public.backend_rate_limits where scope = 'test:refund' and subject_key = 'subject-a'),
+  (select request_count from public.backend_rate_limits
+   where scope = 'test:refund' and subject_key = 'subject-a' and window_start = (select window_start from refund_window)),
   0,
   'a count never goes below zero'
+);
+
+select is(
+  public.refund_backend_rate_limit('test:refund', 'subject-a', (select window_start from refund_window) + interval '600 seconds'),
+  true,
+  'a refund named for the next window takes from that window'
+);
+select is(
+  (select request_count from public.backend_rate_limits
+   where scope = 'test:refund' and subject_key = 'subject-a'
+     and window_start = (select window_start from refund_window) + interval '600 seconds'),
+  4,
+  'one count, from that window alone'
+);
+select is(
+  (select request_count from public.backend_rate_limits
+   where scope = 'test:refund' and subject_key = 'subject-a' and window_start = (select window_start from refund_window)),
+  0,
+  'and this window''s count stays where it was'
 );
 
 select * from finish();
