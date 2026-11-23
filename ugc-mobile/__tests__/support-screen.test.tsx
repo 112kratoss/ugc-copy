@@ -15,6 +15,26 @@ const confirmDialog = vi.hoisted(() => ({ show: vi.fn(async () => true) }));
 const clipboard = vi.hoisted(() => ({ copy: vi.fn(async () => undefined) }));
 const picker = vi.hoisted(() => ({ launch: vi.fn() }));
 const upload = vi.hoisted(() => ({ picked: vi.fn() }));
+// The documents-folder copy a picked photo waits in (`lib/support-photo-file.ts`, tested on its own),
+// over a set of the copies that exist, so a copy let go too early fails the send that needed it.
+const photoFiles = vi.hoisted(() => {
+  const live = new Set<string>();
+  const isCopy = (uri: string | null | undefined) => typeof uri === 'string' && uri.startsWith('file:///documents/support-photos/');
+  return {
+    live,
+    isCopy,
+    keep: vi.fn(async (_uri: string, name: string) => {
+      const copy = `file:///documents/support-photos/${name}`;
+      live.add(copy);
+      return copy;
+    }),
+    letGo: vi.fn(async (uri: string | null | undefined) => {
+      if (isCopy(uri)) live.delete(uri as string);
+    }),
+    isThere: vi.fn(async (uri: string) => !isCopy(uri) || live.has(uri)),
+    sweep: vi.fn(async () => undefined),
+  };
+});
 const authState = vi.hoisted(() => ({
   api: {
     getSupportConversation: vi.fn(),
@@ -61,6 +81,13 @@ vi.mock('expo-image-picker', () => ({
 }));
 vi.mock('@/components/media-lightbox', () => ({ MediaLightbox: (props: MockProps) => React.createElement('media-lightbox', props) }));
 vi.mock('@/lib/media', () => ({ uploadPickedMedia: upload.picked }));
+vi.mock('@/lib/support-photo-file', async () => ({
+  ...await vi.importActual<typeof import('@/lib/support-photo-file')>('@/lib/support-photo-file'),
+  keepSupportPhoto: photoFiles.keep,
+  letGoSupportPhoto: photoFiles.letGo,
+  supportPhotoIsThere: photoFiles.isThere,
+  sweepSupportPhotos: photoFiles.sweep,
+}));
 vi.mock('react-native', () => {
   class AnimatedValue {
     setValue() {}
@@ -228,7 +255,27 @@ beforeEach(() => {
   authState.user = { id: 'account-1' };
   query.data = conversation;
   query.isError = false;
+  photoFiles.live.clear();
 });
+
+/** An upload that reads its file, as `uploadPickedMedia` does: a copy no longer there fails it. */
+function uploadsFromLiveCopy(storagePath: string) {
+  return async (uri: string) => {
+    if (photoFiles.isCopy(uri) && !photoFiles.live.has(uri)) throw new Error('The selected file is no longer available. Choose it again.');
+    return { storagePath };
+  };
+}
+
+/** A promise held open by the test, settled when it says. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('Message support', () => {
   it('asks a guest to sign in, and offers the mail instead', () => {
@@ -578,7 +625,7 @@ describe('photos in Message support', () => {
   });
 
   it('attaches a photo from the library, stages it, and sends it with an empty caption', async () => {
-    upload.picked.mockResolvedValueOnce({ storagePath: 'uploads/account-1/u1-IMG_0001.jpg' });
+    upload.picked.mockImplementationOnce(uploadsFromLiveCopy('uploads/account-1/u1-IMG_0001.jpg'));
     authState.api.sendSupportMessage.mockResolvedValueOnce(keptPhoto());
     const tree = render();
 
@@ -594,7 +641,10 @@ describe('photos in Message support', () => {
     expect(sendButton(tree).props.disabled).toBe(false);
 
     await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
-    expect(upload.picked).toHaveBeenCalledWith(picked.uri, expect.objectContaining({
+    // Read from its own copy in the documents folder, never the picker's cache file.
+    const copy = await photoFiles.keep.mock.results[0].value;
+    expect(photoFiles.keep).toHaveBeenCalledWith(picked.uri, expect.stringMatching(/\.jpg$/));
+    expect(upload.picked).toHaveBeenCalledWith(copy, expect.objectContaining({
       api: authState.api,
       fileName: 'IMG_0001.jpg',
       mimeType: 'image/jpeg',
@@ -607,6 +657,138 @@ describe('photos in Message support', () => {
       replyToMessageId: null,
       photo: { storagePath: 'uploads/account-1/u1-IMG_0001.jpg' },
     });
+    // Sent: the copy goes.
+    expect(photoFiles.letGo).toHaveBeenCalledWith(copy);
+    expect(photoFiles.live.size).toBe(0);
+  });
+
+  it('tries a photo whose upload failed again from the same copy, still there', async () => {
+    upload.picked
+      .mockRejectedValueOnce(new TypeError('Network request failed'))
+      .mockImplementationOnce(uploadsFromLiveCopy('uploads/account-1/u1-IMG_0001.jpg'));
+    authState.api.sendSupportMessage.mockResolvedValueOnce(keptPhoto());
+    const tree = render();
+    await pick(tree);
+    const copy = await photoFiles.keep.mock.results[0].value;
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(drawnText(tree)).toContain('Not sent. Tap to try again.');
+    // Not sent, it keeps its copy for the next try.
+    expect(photoFiles.live.has(copy)).toBe(true);
+
+    await chooseOnNotSent(tree, 'Try again');
+    expect(upload.picked).toHaveBeenCalledTimes(2);
+    expect(upload.picked.mock.calls[1][0]).toBe(copy);
+    expect(authState.api.sendSupportMessage).toHaveBeenCalledTimes(1);
+    expect(photoFiles.live.size).toBe(0);
+  });
+
+  it('lets a copy go once a read shows its message was kept, though its answer was lost', async () => {
+    upload.picked.mockImplementationOnce(uploadsFromLiveCopy('uploads/account-1/u1-IMG_0001.jpg'));
+    authState.api.sendSupportMessage.mockRejectedValueOnce(new TypeError('Network request failed'));
+    const tree = render();
+    await pick(tree);
+    const copy = await photoFiles.keep.mock.results[0].value;
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(photoFiles.live.has(copy)).toBe(true);
+
+    const [[sent]] = authState.api.sendSupportMessage.mock.calls as unknown as Array<[{ clientMessageId: string }]>;
+    query.data = {
+      ...conversation,
+      messages: [...conversation.messages, message({ id: 'm5', body: null, clientMessageId: sent.clientMessageId, createdAt: new Date(NOW).toISOString(), attachment: photo })],
+    };
+    act(() => { tree.update(React.createElement(SupportScreen)); });
+    expect(photoFiles.live.has(copy)).toBe(false);
+    expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
+  });
+
+  it('lets the copy of a message not sent go as the screen closes, and keeps a send\'s copy until it settles', async () => {
+    // One photo not sent.
+    upload.picked.mockRejectedValueOnce(new TypeError('Network request failed'));
+    const tree = render();
+    await pick(tree);
+    const notSent = await photoFiles.keep.mock.results[0].value;
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+    expect(drawnText(tree)).toContain('Not sent. Tap to try again.');
+
+    // A second still on its way.
+    const onItsWay = deferred<{ storagePath: string }>();
+    upload.picked.mockImplementationOnce(() => onItsWay.promise);
+    await pick(tree, { ...picked, uri: 'file:///cache/ImagePicker/IMG_0004.jpg', fileName: 'IMG_0004.jpg' });
+    const sending = await photoFiles.keep.mock.results[1].value;
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+
+    act(() => { tree.unmount(); });
+    expect(photoFiles.live.has(notSent)).toBe(false);
+    expect(photoFiles.live.has(sending)).toBe(true);
+
+    // It fails after the screen closed: nothing can try it again, so its copy goes too.
+    await act(async () => { onItsWay.reject(new TypeError('Network request failed')); });
+    expect(photoFiles.live.has(sending)).toBe(false);
+  });
+
+  it('lets a copy go when the picker answers after the screen closed', async () => {
+    const answer = deferred<{ canceled: boolean; assets: Array<Record<string, unknown>> }>();
+    picker.launch.mockImplementationOnce(() => answer.promise);
+    const tree = render();
+    await act(async () => { (attachButton(tree).props.onPress as () => void)(); });
+    act(() => { tree.unmount(); });
+
+    await act(async () => { answer.resolve({ canceled: false, assets: [picked] }); });
+    expect(photoFiles.keep).toHaveBeenCalledTimes(1);
+    expect(photoFiles.live.size).toBe(0);
+  });
+
+  it('keeps a picked photo in a copy of its own until it is sent, taken off or replaced', async () => {
+    const tree = render();
+    expect(photoFiles.sweep).toHaveBeenCalledTimes(1);
+
+    await pick(tree);
+    const first = await photoFiles.keep.mock.results[0].value;
+    expect(photoFiles.letGo).not.toHaveBeenCalledWith(first);
+
+    // Another photo in its place lets the first copy go.
+    await pick(tree, { ...picked, uri: 'file:///cache/ImagePicker/IMG_0003.png', fileName: 'IMG_0003.png', mimeType: 'image/png' });
+    const second = await photoFiles.keep.mock.results[1].value;
+    expect(second).toMatch(/\.png$/);
+    expect(photoFiles.letGo).toHaveBeenCalledWith(first);
+
+    // Taken off the composer, its copy goes with it.
+    const remove = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Remove photo');
+    act(() => { (remove.props.onPress as () => void)(); });
+    expect(photoFiles.letGo).toHaveBeenCalledWith(second);
+    expect(drawnText(tree)).not.toContain('IMG_0003.png');
+  });
+
+  it('lets the draft\'s copy go when the screen closes with it still there', async () => {
+    const tree = render();
+    await pick(tree);
+    const copy = await photoFiles.keep.mock.results[0].value;
+    act(() => { tree.unmount(); });
+    expect(photoFiles.letGo).toHaveBeenCalledWith(copy);
+  });
+
+  it('says a photo no longer on the phone is gone, rather than to check the connection', async () => {
+    const tree = render();
+    await pick(tree);
+    const copy = await photoFiles.keep.mock.results[0].value;
+    photoFiles.isThere.mockResolvedValueOnce(false);
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+
+    expect(photoFiles.isThere).toHaveBeenCalledWith(copy);
+    expect(upload.picked).not.toHaveBeenCalled();
+    expect(authState.api.sendSupportMessage).not.toHaveBeenCalled();
+    expect(drawnText(tree)).toContain('This photo is no longer on your phone. Delete the message and choose the photo again.');
+    expect(drawnText(tree)).not.toContain('Your message was not sent. Check your connection, then try again.');
+
+    // No try can send it: the only choice is to let it go, and its copy with it.
+    const mark = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityHint === 'Try it again, or delete it.');
+    act(() => { (mark.props.onPress as () => void)(); });
+    const request = actionSheet.show.mock.calls.at(-1)?.[0] as { title: string; actions: Array<{ label: string; onPress: () => void }> };
+    expect(request.title).toBe('Your message was not sent');
+    expect(request.actions.map((action) => action.label)).toEqual(['Delete']);
+    await act(async () => { request.actions[0].onPress(); });
+    expect(photoFiles.letGo).toHaveBeenCalledWith(copy);
+    expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
   });
 
   it('tries a photo that was not sent again from where it was staged, without uploading it twice', async () => {

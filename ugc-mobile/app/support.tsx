@@ -99,6 +99,14 @@ import {
   supportMessageSheetTitle,
   supportSendFailureWords,
 } from '@/lib/support-conversation-view-model';
+import {
+  keepSupportPhoto,
+  letGoSupportPhoto,
+  supportPhotoCopyName,
+  supportPhotoIsThere,
+  SupportPhotoGoneError,
+  sweepSupportPhotos,
+} from '@/lib/support-photo-file';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -208,8 +216,38 @@ export default function SupportScreen() {
   const lastTypingRef = useRef<number | null>(null);
   const markingRef = useRef(false);
   const othersSeenRef = useRef<number | null>(null);
+  // The draft's photo, whose copy goes when the screen closes with it still there.
+  const photoDraftUriRef = useRef<string | null>(null);
+  // The client ids of sends on their way or waiting their turn: their copies outlive the screen until they settle.
+  const inFlightRef = useRef(new Set<string>());
+  // The client ids of messages whose photo is no longer on the phone: no try can send them.
+  const goneIdsRef = useRef(new Set<string>());
+  // Whether the screen is still open, for a send or a pick that answers after it closed.
+  const mountedRef = useRef(false);
 
   const data = conversation.data;
+
+  useEffect(() => {
+    photoDraftUriRef.current = photoDraft?.uri ?? null;
+  }, [photoDraft]);
+
+  // The photo copies go with the screen: the draft's, and those of messages not
+  // sent, which nothing can try again once it is closed. A send still on its
+  // way keeps its copy and lets it go as it settles. The sweep takes what an
+  // earlier run of the app left behind.
+  useEffect(() => {
+    mountedRef.current = true;
+    void sweepSupportPhotos();
+    const photos = photosRef.current;
+    const inFlight = inFlightRef.current;
+    return () => {
+      mountedRef.current = false;
+      void letGoSupportPhoto(photoDraftUriRef.current);
+      for (const [clientMessageId, photo] of photos) {
+        if (!inFlight.has(clientMessageId)) void letGoSupportPhoto(photo.uri);
+      }
+    };
+  }, []);
 
   // A reply may have come while the screen was away: read again on each
   // arrival, past the first, whose read is the query's own.
@@ -234,6 +272,7 @@ export default function SupportScreen() {
     for (const message of data.messages) {
       if (!message.clientMessageId) continue;
       keptIdsRef.current.add(message.clientMessageId);
+      void letGoSupportPhoto(photosRef.current.get(message.clientMessageId)?.uri);
       photosRef.current.delete(message.clientMessageId);
       stagedRef.current.delete(message.clientMessageId);
     }
@@ -289,6 +328,7 @@ export default function SupportScreen() {
     lastTypingRef.current = null;
     if (picked) photosRef.current.set(clientMessageId, picked);
     const photo = picked ?? photosRef.current.get(clientMessageId) ?? null;
+    inFlightRef.current.add(clientMessageId);
     setPending((current) => startPendingSupportMessage(current, {
       clientMessageId,
       body,
@@ -309,10 +349,15 @@ export default function SupportScreen() {
   ) => {
     // A read showed it kept while it waited its turn (a retry of a message
     // whose answer was lost): nothing is left to upload or send.
-    if (keptIdsRef.current.has(clientMessageId)) return;
+    if (keptIdsRef.current.has(clientMessageId)) {
+      inFlightRef.current.delete(clientMessageId);
+      return;
+    }
     try {
       let storagePath = photo ? stagedRef.current.get(clientMessageId) ?? null : null;
       if (photo && !storagePath) {
+        // A file the phone no longer has cannot be sent by any try: say so, not "check your connection".
+        if (!(await supportPhotoIsThere(photo.uri))) throw new SupportPhotoGoneError();
         const uploaded = await uploadPickedMedia(photo.uri, {
           api,
           fileName: photo.fileName ?? 'photo.jpg',
@@ -329,6 +374,8 @@ export default function SupportScreen() {
         replyToMessageId: quoted?.id ?? null,
         ...(storagePath ? { photo: { storagePath } } : {}),
       });
+      inFlightRef.current.delete(clientMessageId);
+      void letGoSupportPhoto(photo?.uri);
       photosRef.current.delete(clientMessageId);
       stagedRef.current.delete(clientMessageId);
       queryClient.setQueryData<SupportConversationResponse>(queryKey, (current) => supportConversationAfterSend(current, sent));
@@ -336,8 +383,16 @@ export default function SupportScreen() {
       // Read again now, and at the quick pace from here, rather than after an idle wait.
       void queryClient.invalidateQueries({ queryKey });
     } catch (error) {
+      inFlightRef.current.delete(clientMessageId);
       // A read showed it kept before this answer came: it is not "not sent".
       if (keptIdsRef.current.has(clientMessageId)) return;
+      // The screen closed while it was on its way: nothing can try it again, so its copy goes.
+      if (!mountedRef.current) {
+        void letGoSupportPhoto(photo?.uri);
+        photosRef.current.delete(clientMessageId);
+        return;
+      }
+      if (error instanceof SupportPhotoGoneError) goneIdsRef.current.add(clientMessageId);
       const code = error instanceof ApiError ? error.code ?? null : null;
       // A refusal of the photo itself means the next try stages it anew; any
       // other (a quote gone, too many at once) keeps the copy already staged.
@@ -349,21 +404,26 @@ export default function SupportScreen() {
 
   /** Lets a message that was not sent go, with its photo and where it was staged. */
   const discard = (clientMessageId: string) => {
+    void letGoSupportPhoto(photosRef.current.get(clientMessageId)?.uri);
     photosRef.current.delete(clientMessageId);
     stagedRef.current.delete(clientMessageId);
+    goneIdsRef.current.delete(clientMessageId);
     setPending((current) => settlePendingSupportMessage(current, clientMessageId));
     setSendError(null);
   };
 
-  /** A message not sent: try it again, or let it go. */
+  /** A message not sent: try it again, or let it go. One whose photo is gone can only go. */
   const openNotSentActions = (item: SupportPendingMessage) => {
     haptic.light();
+    const deleteAction = { label: SUPPORT_WORDS.delete, destructive: true, onPress: () => discard(item.clientMessageId) };
     showActionSheet({
       title: SUPPORT_WORDS.notSentActions,
-      actions: [
-        { label: SUPPORT_WORDS.tryAgain, onPress: () => void send(item.body, item.clientMessageId, item.replyTo) },
-        { label: SUPPORT_WORDS.delete, destructive: true, onPress: () => discard(item.clientMessageId) },
-      ],
+      actions: goneIdsRef.current.has(item.clientMessageId)
+        ? [deleteAction]
+        : [
+          { label: SUPPORT_WORDS.tryAgain, onPress: () => void send(item.body, item.clientMessageId, item.replyTo) },
+          deleteAction,
+        ],
     });
   };
 
@@ -401,8 +461,24 @@ export default function SupportScreen() {
       setSendError(refusal);
       return;
     }
+    // The picker's file sits in the cache folder, which Android empties by
+    // itself on a phone short of space: the draft waits in a copy of its own.
+    const kept = await keepSupportPhoto(picked.uri, supportPhotoCopyName(picked));
+    // The screen closed while the picker or the copy was open: the copy has no draft to wait in.
+    if (!mountedRef.current) {
+      void letGoSupportPhoto(kept);
+      return;
+    }
+    const replaced = photoDraftUriRef.current;
     setSendError(null);
-    setPhotoDraft(picked);
+    setPhotoDraft({ ...picked, uri: kept });
+    if (replaced && replaced !== kept) void letGoSupportPhoto(replaced);
+  };
+
+  /** Takes the picked photo off the composer, and its copy with it. */
+  const removePhotoDraft = () => {
+    void letGoSupportPhoto(photoDraftUriRef.current);
+    setPhotoDraft(null);
   };
 
   /** A change drawn at once, and put back if the server refuses it; says whether the server took it. */
@@ -849,7 +925,7 @@ export default function SupportScreen() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={SUPPORT_WORDS.removePhoto}
-              onPress={() => setPhotoDraft(null)}
+              onPress={removePhotoDraft}
               style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
             >
               <X size={appTheme.icon.sm} color={theme.colors.muted} />
