@@ -276,11 +276,12 @@ async function handleShowcaseFeedGET(
       // share the same base page instead of rebuilding it per request. An
       // identity-less For you first page is the cached bootstrap.
       bypassCache: (sort === 'for-you' && !identityless) || Boolean(cursor),
-      ...(readAheadToken
-        ? {
-          readAheadToken,
-          onReadAheadClaim: (claimed: boolean) => countReadAhead(claimed ? 'claim' : 'claim_miss'),
-        }
+      ...(readAheadToken ? { readAheadToken } : {}),
+      // Counted only for a reader with an account, a guest's included, as every
+      // hold is: a token sent without one is never the app's (it reads ahead
+      // only with a bearer token), so it cannot land among the misses.
+      ...(readAheadToken && viewerUserId
+        ? { onReadAheadClaim: (claimed: boolean) => countReadAhead(claimed ? 'claim' : 'claim_miss') }
         : {}),
       ...(seedBucket === null ? {} : { seedBucket }),
       ...(fresh ? { fresh } : {}),

@@ -657,6 +657,28 @@ describe('showcase feed route adapter service', () => {
       expect(calls.map((options) => 'onReadAheadClaim' in options)).toEqual([true, true, false, false]);
     });
 
+    it('counts no token sent without an account, which the app never sends', async () => {
+      const dependencies = readAheadDependencies({ userId: null });
+      vi.mocked(dependencies.getShowcaseFeedPage).mockImplementation(async (options) => {
+        options.onReadAheadClaim?.(false);
+        return createFeedPage();
+      });
+
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`),
+        dependencies,
+      });
+      await runAfterResponseTasks(dependencies);
+
+      expect(response.status).toBe(200);
+      const [options] = vi.mocked(dependencies.getShowcaseFeedPage).mock.calls[0];
+      // The read itself is as before; only the count is left out.
+      expect(options).toMatchObject({ viewerUserId: null, readAheadToken: TOKEN });
+      expect('onReadAheadClaim' in options).toBe(false);
+      expect(dependencies.runAfterResponse).not.toHaveBeenCalled();
+      expect(dependencies.recordShowcaseFeedReadAheadEvent).not.toHaveBeenCalled();
+    });
+
     it('answers the read whose count cannot be kept', async () => {
       const dependencies = readAheadDependencies();
       dependencies.runAfterResponse.mockImplementation(() => {
