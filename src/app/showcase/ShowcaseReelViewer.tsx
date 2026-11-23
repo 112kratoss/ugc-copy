@@ -78,6 +78,10 @@ import { noteFollowChange } from '@/lib/follow-changes';
 import { forgetViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import { tilePictureStandIn } from '@/app/showcase/tile-pictures';
 import { returnFocus, showsKeyboardFocus } from '@/app/showcase/reel-focus-return';
+import { reportPostView } from '@/app/showcase/post-view-reporter';
+import PostViewCount from '@/components/PostViewCount';
+
+import { isViewCountShown, postViewCountLabels } from '../../../ugc-mobile/lib/view-count/view-count';
 
 declare global {
   interface Window {
@@ -374,13 +378,38 @@ export default function ShowcaseReelViewer({
   const feedSessionIdRef = useRef(feedSessionId);
   const selectedIndexRef = useRef(selectedIndex);
   const sessionTokenRef = useRef(session?.access_token ?? null);
+  const authLoadingRef = useRef(isAuthLoading);
+  const viewerIdRef = useRef(user?.id ?? null);
   useEffect(() => {
     feedEventItemRef.current = item;
     accessTokenRef.current = accessToken;
     feedSessionIdRef.current = feedSessionId;
     selectedIndexRef.current = selectedIndex;
     sessionTokenRef.current = session?.access_token ?? null;
-  }, [accessToken, feedSessionId, item, selectedIndex, session?.access_token]);
+    authLoadingRef.current = isAuthLoading;
+    viewerIdRef.current = user?.id ?? null;
+  }, [accessToken, feedSessionId, isAuthLoading, item, selectedIndex, session?.access_token, user?.id]);
+  // The posts seen in the reel, a second on screen each (post view counts), waiting for the session
+  // to be known: a signed-in reader's view never goes as a guest's. Every reel reports, whatever it
+  // was opened from; the server keeps one view a reader, post and UTC day, and never the creator's.
+  const seenReelPostsRef = useRef<ShowcaseFeedItem[]>([]);
+  const reportSeenReelPosts = useCallback(() => {
+    if (authLoadingRef.current || seenReelPostsRef.current.length === 0) return;
+    const seen = seenReelPostsRef.current;
+    seenReelPostsRef.current = [];
+    const viewerId = viewerIdRef.current;
+    for (const seenItem of seen) {
+      if (!isViewCountShown(seenItem) || (viewerId && seenItem.creator.id === viewerId)) continue;
+      reportPostView({
+        postId: seenItem.id,
+        surface: 'reel',
+        accessToken: sessionTokenRef.current ?? accessTokenRef.current ?? null,
+      });
+    }
+  }, []);
+  useEffect(() => {
+    reportSeenReelPosts();
+  }, [isAuthLoading, reportSeenReelPosts]);
   const stopBundlePollRef = useRef<(() => void) | null>(null);
   // Remix is taking a free recipe on its way: a second tap waits for it, on
   // this post or another, since moving between posts re-enables the button.
@@ -652,6 +681,9 @@ export default function ShowcaseReelViewer({
     }, 0);
     const deliveryId = getShowcaseRecommendation(trackedItem)?.deliveryId ?? null;
     const sendImpressionTimer = window.setTimeout(() => {
+      // A second on screen: the post was seen, whatever the reel was opened from.
+      seenReelPostsRef.current.push(trackedItem);
+      reportSeenReelPosts();
       if (!deliveryId || impressionDeliveryIdsRef.current.has(deliveryId)) return;
       impressionDeliveryIdsRef.current.add(deliveryId);
       void sendShowcaseFeedEvent({ ...eventContext(), eventType: 'impression' }).catch(() => undefined);
@@ -673,7 +705,7 @@ export default function ShowcaseReelViewer({
         durationMs,
       }).catch(() => undefined);
     };
-  }, [isOpen, selectedFeedItemId]);
+  }, [isOpen, reportSeenReelPosts, selectedFeedItemId]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -1933,6 +1965,14 @@ export default function ShowcaseReelViewer({
               <span>{formatCompactCount(commentCount)}</span>
             </button>
           ) : null}
+
+          {/* The post's views beside its saves and comments: a count, so no tile's border, press or hover. */}
+          <PostViewCount
+            labels={postViewCountLabels(item)}
+            className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none items-center justify-center text-xs font-semibold text-zinc-300 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+            figureClassName="flex flex-col items-center justify-center gap-1"
+            iconClassName="h-5 w-5 shrink-0"
+          />
 
           <PublicShareButton
             generationId={item.id}

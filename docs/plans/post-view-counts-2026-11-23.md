@@ -1,7 +1,8 @@
 # Post view counts: counted where a post is shown large, shown to everyone
 
-Status: step 1 (counting, server only) built on 2026-11-23 on the branch
-`feat/post-view-counts`; steps 2 (web display) and 3 (app display) are open.
+Status: step 1 (counting, server only) shipped as #902 (`5d9366d98`), live
+2026-11-23; step 2 (web display and the web's views) built on 2026-11-23 on
+the branch `feat/post-view-counts-web`; step 3 (app display) is open.
 The owner made the decisions in the first section in the planning session on
 2026-11-23. The defaults after them were chosen in planning and are open to
 change. Paths are relative to `ugc-app/`; app paths are under `ugc-mobile/`.
@@ -274,9 +275,21 @@ at the level AGENTS.md sets.
    - **Review:** `max` (a migration and route admission).
    - **After the release:** a day of watching the numbers in /admin before
      anything is public.
-2. **Web display (size M).**
+2. **Web display (size M), built 2026-11-23.**
    - **Build:** the shared module, the web places in the table, the beacons
      (Home cards, the post page, the reel), and `design-web.md`.
+   - **Built:** `ugc-mobile/lib/view-count/` (null at 0 and off public, the
+     compact, visible and spoken labels, `VIEW_COUNT_TOTAL_LABEL`);
+     `src/components/PostViewCount.tsx`; the counts on the post page and the
+     reel (after Comment), a Home card's action row (at its far end, so a
+     narrow phone wraps the count, never an action), the creator page's tiles (through the carousel's `footerStart`,
+     in one row with a clip's Play badge) and your profile's tiles (a line
+     under the title), and Views in the creator header; the reporter
+     `src/app/showcase/post-view-reporter.ts` (batched, `keepalive` on
+     `pagehide`, held until the session is known, once a reader, post and UTC
+     day) with `usePostViewOnScreen` for the post page, the boundary's
+     `viewSurface` for Home cards and the reel's second on a post. The post
+     page's link visits draw `Link2`, so the eye is the views' alone.
    - **Tests:** the module; the components (nothing at 0, compact and spoken
      figures); an E2E spec (the post page sends one view after a second on
      screen, none before).

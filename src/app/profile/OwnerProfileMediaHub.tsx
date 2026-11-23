@@ -50,6 +50,7 @@ import { releaseReelOpening } from '@/lib/reel-opening-restore';
 import { buildShowcaseDetailPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 import ReelHostMark from '@/components/ReelHostMark';
+import PostViewCount from '@/components/PostViewCount';
 import type {
   ShowcaseCreator,
   ShowcaseFeedItem,
@@ -57,6 +58,8 @@ import type {
 } from '@/lib/showcase';
 import MatureContentSetting from './MatureContentSetting';
 import IntentLink from '@/components/IntentLink';
+
+import { postViewCountLabels, type ViewCountLabels } from '../../../ugc-mobile/lib/view-count/view-count';
 
 // Posts and Saved. The creations library is Studio's (/creations): the
 // profile used to draw it again as a third tab.
@@ -86,6 +89,8 @@ interface OwnerPost {
   resourcePath: string | null;
   canShare: boolean;
   commentCount?: number;
+  /** Lifetime views while public (post view counts); left out by a fallback read. */
+  viewCount?: number;
   bundle: {
     id: string;
     accessMode: 'free' | 'paid';
@@ -183,6 +188,8 @@ function mapOwnerPostToFeedItem(post: OwnerPost, creator: ShowcaseCreator): Show
     saveCount: 0,
     remixCount: 0,
     commentCount: post.commentCount ?? 0,
+    // The reel draws it beside saves and comments, a public post's only.
+    viewCount: post.viewCount,
     // The reel takes comments on public posts only, as the server does.
     visibility: post.visibility === 'unlisted' ? 'unlisted' : 'public',
     createdAt: post.createdAt,
@@ -223,6 +230,7 @@ function MediaCard({
   mediaKind,
   textBody,
   badges,
+  views = null,
   onClick,
   href,
   actionLabel,
@@ -230,6 +238,8 @@ function MediaCard({
 }: {
   title: string;
   subtitle: string;
+  /** A post's views, bottom left over the scrim; null draws none (0, or a post that is not public). */
+  views?: ViewCountLabels | null;
   mediaUrl: string | null;
   /** The media's only source is gone: draw the explicit note, never the address. */
   unavailable?: boolean;
@@ -288,7 +298,14 @@ function MediaCard({
 
         <div className={`absolute inset-x-0 bottom-0 p-4 ${isTextCard ? 'bg-black/70 pt-3 backdrop-blur-sm' : 'bg-gradient-to-t from-black via-black/75 to-transparent pt-16'}`}>
           {!isTextCard ? <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-white">{title}</h3> : null}
-          <div className={`${isTextCard ? '' : 'mt-1'} flex items-center justify-between gap-3`}>
+          {/* A line of its own: in the row below it took the room a phone's tile has for the date. */}
+          <PostViewCount
+            labels={views}
+            className={`${isTextCard ? '' : 'mt-1'} flex items-center text-xs font-semibold text-zinc-100`}
+            figureClassName="inline-flex items-center gap-1"
+            iconClassName="h-3.5 w-3.5 shrink-0"
+          />
+          <div className={`${isTextCard && !views ? '' : 'mt-1'} flex items-center justify-between gap-3`}>
             <p className="min-w-0 truncate text-xs text-zinc-400">{subtitle}</p>
             {/* A card with nothing to open gets no verb. */}
             {isInteractive ? (
@@ -316,7 +333,12 @@ function MediaCard({
     return <div className={className}>{content}</div>;
   }
 
-  return <button type="button" onClick={onClick} className={className} aria-label={`Open ${title}`}>{content}</button>;
+  // The label names the card for a screen reader in place of what it holds, so it carries the views.
+  return (
+    <button type="button" onClick={onClick} className={className} aria-label={views ? `Open ${title}, ${views.spoken}` : `Open ${title}`}>
+      {content}
+    </button>
+  );
 }
 
 export default function OwnerProfileMediaHub({
@@ -861,6 +883,11 @@ export default function OwnerProfileMediaHub({
                     mediaKind={post.mediaKind}
                     textBody={post.postFormat === 'text' ? post.body || post.description : undefined}
                     badges={[post.visibility, ...(recipeLabel ? [recipeLabel] : [])]}
+                    views={postViewCountLabels({
+                      viewCount: post.viewCount,
+                      visibility: post.visibility,
+                      archived: Boolean(post.archivedAt),
+                    })}
                     onClick={feedItem && post.canShare ? () => openPost(feedItem) : undefined}
                     href={!post.canShare ? post.ownerPath : undefined}
                     actionLabel={post.canShare ? 'View' : 'Edit'}

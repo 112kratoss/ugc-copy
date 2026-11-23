@@ -395,6 +395,93 @@ describe('FeedPostCard click routing', () => {
 // (`ugc-mobile/lib/feed-feedback-menu.ts`, `getViewerSafetyActions`) follow
 // this card: there is no one to hide, report or block, and a report on your
 // own post asks for a review of your own work.
+describe("FeedPostCard's views", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+        vi.stubGlobal('open', vi.fn());
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function viewCount() {
+        return document.querySelector<HTMLElement>('[data-post-view-count]');
+    }
+
+    it('draws the views at the action row’s far end, compact to the eye and whole to a screen reader', () => {
+        renderCard({ viewCount: 12_345 });
+        const views = viewCount();
+        expect(views).not.toBeNull();
+        expect(views!.querySelector('svg.lucide-eye')).not.toBeNull();
+        expect(views!.querySelector('[aria-hidden="true"]')).toHaveTextContent('12K');
+        expect(within(views!).getByText('12,345 views')).toHaveClass('sr-only');
+
+        // After every action, pushed to the end: on a phone with no room, it goes under them.
+        const share = screen.getByRole('button', { name: 'Share' });
+        expect(share.nextElementSibling).toBe(views);
+        expect(views).toHaveClass('ml-auto');
+        expect(views!.nextElementSibling).toBeNull();
+    });
+
+    it('sits just before a recipe chip, which then follows it rather than pushing itself to the end', () => {
+        renderCard({
+            viewCount: 40,
+            canRemix: false,
+            asset: {
+                id: 'bundle-1', postId: 'post-1', title: 'Recipe', accessMode: 'paid', priceUsdCents: 900,
+                previewText: 'Prompt included.', allowRemix: false, resourceKinds: ['prompt'],
+            } as ShowcaseAssetSummary,
+        });
+        const views = viewCount()!;
+        const chip = views.nextElementSibling as HTMLElement;
+        expect(chip.tagName).toBe('A');
+        expect(chip).not.toHaveClass('ml-auto');
+        cleanup();
+
+        renderCard({
+            viewCount: 0,
+            canRemix: false,
+            asset: {
+                id: 'bundle-1', postId: 'post-1', title: 'Recipe', accessMode: 'paid', priceUsdCents: 900,
+                previewText: 'Prompt included.', allowRemix: false, resourceKinds: ['prompt'],
+            } as ShowcaseAssetSummary,
+        });
+        expect(viewCount()).toBeNull();
+        expect(screen.getByRole('button', { name: 'Share' }).nextElementSibling).toHaveClass('ml-auto');
+    });
+
+    it('is a count, not a control: a click on it is the card’s and opens the post', () => {
+        const { onOpenPost, onToggleComments, onToggleSave } = renderCard({ viewCount: 7 });
+        const views = viewCount()!;
+        expect(views.closest('button, a')).toBeNull();
+        expect(views.querySelector('button, a, [tabindex]')).toBeNull();
+        expect(screen.queryByRole('button', { name: /views?$/ })).not.toBeInTheDocument();
+
+        fireEvent.click(views.querySelector('svg.lucide-eye')!);
+        expect(onOpenPost).toHaveBeenCalledTimes(1);
+        expect(onToggleComments).not.toHaveBeenCalled();
+        expect(onToggleSave).not.toHaveBeenCalled();
+    });
+
+    it('says one view in the singular', () => {
+        renderCard({ viewCount: 1 });
+        expect(within(viewCount()!).getByText('1 view')).toHaveClass('sr-only');
+    });
+
+    it('draws nothing at 0, and nothing for a read with no total', () => {
+        renderCard({ viewCount: 0 });
+        expect(viewCount()).toBeNull();
+        expect(document.querySelector('svg.lucide-eye')).toBeNull();
+        cleanup();
+
+        renderCard({ viewCount: undefined });
+        expect(viewCount()).toBeNull();
+    });
+});
+
 describe("FeedPostCard's menu, by whose post it is", () => {
     beforeEach(() => {
         vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);

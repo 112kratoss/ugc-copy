@@ -7,6 +7,7 @@ import {
   flushShowcaseFeedEvents,
   resetShowcaseFeedEventQueueForTests,
 } from '@/app/showcase/ShowcaseFeedInteraction';
+import { flushPostViews, resetPostViewReporterForTests } from '@/app/showcase/post-view-reporter';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { dismissToast, pushToast, requestConfirmation, resetFeedbackState } from '@/components/feedback-state';
 import { REEL_OPENING_ATTRIBUTE } from '@/lib/reel-opening-restore';
@@ -3176,6 +3177,133 @@ describe('ShowcaseReelViewer pagination', () => {
           feedSessionId: 'session-1',
         }),
       ]);
+    });
+  });
+
+  describe('views in the reel', () => {
+    const POST_ONE = '11111111-1111-4111-8111-111111111111';
+    const POST_TWO = '22222222-2222-4222-8222-222222222222';
+    const advance = async (ms: number) => {
+      await act(async () => {
+        vi.advanceTimersByTime(ms);
+        await Promise.resolve();
+      });
+    };
+    const sentViews = async (fetchMock: ReturnType<typeof stubRequests>) => {
+      await act(async () => {
+        await flushPostViews();
+      });
+      return fetchMock.mock.calls
+        .filter(([input]) => String(input) === '/api/showcase/views')
+        .map(([, init]) => ({
+          views: (JSON.parse(String((init as RequestInit).body)) as { views: unknown[] }).views,
+          authorization: ((init as RequestInit).headers as Record<string, string>).Authorization ?? null,
+        }));
+    };
+
+    beforeEach(() => {
+      resetPostViewReporterForTests();
+    });
+
+    afterEach(() => {
+      resetPostViewReporterForTests();
+    });
+
+    it('draws the views beside saves and comments, a count and not a control', () => {
+      stubRequests();
+      const { container } = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ viewCount: 1_500 })] })} />);
+      const views = container.querySelector<HTMLElement>('[data-post-view-count]')!;
+      expect(views).not.toBeNull();
+      expect(views.querySelector('svg.lucide-eye')).not.toBeNull();
+      expect(views.querySelector('span[aria-hidden="true"]')).toHaveTextContent('1.5K');
+      expect(within(views).getByText('1,500 views')).toHaveClass('sr-only');
+      expect(views.closest('button, a')).toBeNull();
+      expect(views.querySelector('button, a, [tabindex]')).toBeNull();
+
+      const comments = screen.getByRole('button', { name: 'Show comments on Campaign Frame (0)' });
+      expect(comments.compareDocumentPosition(views) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(comments.nextElementSibling).toBe(views);
+    });
+
+    it('draws none at 0, and none on a post that is not public', () => {
+      stubRequests();
+      const { container, rerender } = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ viewCount: 0 })] })} />);
+      expect(container.querySelector('[data-post-view-count]')).toBeNull();
+
+      rerender(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ viewCount: 40, visibility: 'unlisted' })] })} />);
+      expect(container.querySelector('[data-post-view-count]')).toBeNull();
+    });
+
+    it('reports each post a second on screen, ranked or not, with the reader’s session', async () => {
+      vi.useFakeTimers();
+      authState.session = { access_token: 'reader-token' };
+      authState.user = { id: 'reader-1' };
+      const fetchMock = stubRequests();
+      try {
+        const items = [
+          createShowcaseItem({ id: POST_ONE, title: 'First Frame' }),
+          createShowcaseItem({ id: POST_TWO, title: 'Second Frame', recommendation: ranked('delivery-2', 1) }),
+        ];
+        const props = reelProps({ items, selectedItemId: POST_ONE });
+        const { rerender, unmount } = render(<ShowcaseReelViewer {...props} />);
+        await advance(999);
+        expect(await sentViews(fetchMock)).toEqual([]);
+        await advance(1);
+        rerender(<ShowcaseReelViewer {...props} selectedItemId={POST_TWO} />);
+        await advance(1_000);
+        unmount();
+
+        expect((await sentViews(fetchMock)).flatMap((request) => request.views)).toEqual([
+          { postId: POST_ONE, surface: 'reel' },
+          { postId: POST_TWO, surface: 'reel' },
+        ]);
+        expect((await sentViews(fetchMock)).every((request) => request.authorization === 'Bearer reader-token')).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports nothing for a post flicked past, the reader’s own, or one that is not public', async () => {
+      vi.useFakeTimers();
+      authState.session = { access_token: 'reader-token' };
+      authState.user = { id: 'reader-1' };
+      const fetchMock = stubRequests();
+      try {
+        const own = createShowcaseItem({ id: POST_ONE, creator: { id: 'reader-1', username: 'reader', name: 'Reader', avatar: null } });
+        const unlisted = createShowcaseItem({ id: POST_TWO, visibility: 'unlisted' });
+        const props = reelProps({ items: [own, unlisted], selectedItemId: POST_ONE });
+        const { rerender, unmount } = render(<ShowcaseReelViewer {...props} />);
+        await advance(1_500);
+        rerender(<ShowcaseReelViewer {...props} selectedItemId={POST_TWO} />);
+        await advance(1_500);
+        unmount();
+        expect(await sentViews(fetchMock)).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('holds a view seen while the session is read, and sends it as the reader’s', async () => {
+      vi.useFakeTimers();
+      authState.isLoading = true;
+      const fetchMock = stubRequests();
+      try {
+        const props = reelProps({ items: [createShowcaseItem({ id: POST_ONE })], selectedItemId: POST_ONE });
+        const { rerender, unmount } = render(<ShowcaseReelViewer {...props} />);
+        await advance(1_500);
+        expect(await sentViews(fetchMock)).toEqual([]);
+
+        authState.isLoading = false;
+        authState.session = { access_token: 'reader-token' };
+        authState.user = { id: 'reader-1' };
+        rerender(<ShowcaseReelViewer {...props} />);
+        unmount();
+        expect(await sentViews(fetchMock)).toEqual([
+          { views: [{ postId: POST_ONE, surface: 'reel' }], authorization: 'Bearer reader-token' },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

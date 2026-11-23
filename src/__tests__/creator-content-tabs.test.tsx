@@ -43,9 +43,13 @@ vi.mock('@/components/AuthProvider', () => ({
   useAuth: () => ({ session: authState.session, user: authState.user, isLoading: authState.isLoading }),
 }));
 
+// Draws the tile's footer where the carousel would (`showcase-media-carousel.test.tsx` holds where).
 vi.mock('@/app/showcase/ShowcaseMediaCarousel', () => ({
-  default: ({ onOpen, title }: { onOpen?: (index: number) => void; title: string }) => (
-    <button type="button" onClick={() => onOpen?.(0)}>{title}</button>
+  default: ({ onOpen, title, footerStart }: { onOpen?: (index: number) => void; title: string; footerStart?: ReactNode }) => (
+    <>
+      <button type="button" onClick={() => onOpen?.(0)}>{title}</button>
+      {footerStart ? <div data-media-footer-start>{footerStart}</div> : null}
+    </>
   ),
 }));
 
@@ -232,6 +236,39 @@ describe('CreatorContentTabs', () => {
 
     expect(await screen.findByRole('dialog', { name: /creator immersive viewer/i })).toHaveTextContent('item-1');
     expect(window.location.search).toContain('post=item-1');
+  });
+
+  describe('views on the tiles', () => {
+    const withViews = (first: number | undefined, second: number | undefined): CreatorProfilePageData => ({
+      ...initialData,
+      items: [{ ...items[0], viewCount: first }, { ...items[1], viewCount: second }],
+    });
+
+    it("draws a post's views bottom left over the tile, compact to the eye and whole to a screen reader", () => {
+      const { container } = render(<CreatorContentTabs initialData={withViews(1_234, 7)} profilePath="/creators/creator-name" />);
+      const [picture, text] = [...container.querySelectorAll<HTMLElement>('[data-creator-card]')];
+
+      // A picture's count is in the carousel's footer, over the scrim it draws.
+      const pictureViews = picture.querySelector<HTMLElement>('[data-media-footer-start] [data-post-view-count]')!;
+      expect(pictureViews).not.toBeNull();
+      expect(pictureViews.querySelector('svg.lucide-eye')).not.toBeNull();
+      expect(pictureViews.querySelector('span[aria-hidden="true"]')).toHaveTextContent('1.2K');
+      expect(within(pictureViews).getByText('1,234 views')).toHaveClass('sr-only');
+
+      // A text tile's sits over a scrim of its own, outside the tile's button, taking no press.
+      const textViews = text.querySelector<HTMLElement>('[data-post-view-count]')!;
+      expect(textViews.querySelector('span[aria-hidden="true"]')).toHaveTextContent('7');
+      expect(textViews.closest('button, a')).toBeNull();
+      expect(textViews.parentElement).toHaveClass('pointer-events-none', 'bottom-3', 'left-3');
+      expect(textViews.parentElement?.previousElementSibling).toHaveClass('bg-gradient-to-t');
+    });
+
+    it('draws none at 0 or for a read with no total, and no scrim for nothing', () => {
+      const { container } = render(<CreatorContentTabs initialData={withViews(0, undefined)} profilePath="/creators/creator-name" />);
+      expect(container.querySelector('[data-post-view-count]')).toBeNull();
+      expect(container.querySelector('[data-media-footer-start]')).toBeNull();
+      expect(container.querySelector('[data-creator-card] .bg-gradient-to-t')).toBeNull();
+    });
   });
 
   it('filters recipes and makes source tools actionable', () => {

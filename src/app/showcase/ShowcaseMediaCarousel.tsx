@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CircleAlert, ChevronLeft, ChevronRight, Images, Maximize2, Play, RotateCcw } from 'lucide-react';
 
 import { useInlineMediaPlayback } from '@/components/useInlineMediaPlayback';
@@ -52,6 +52,12 @@ interface ShowcaseMediaCarouselProps {
    * (`tilePictureStandIn` decides it, in the reel).
    */
   standIn?: TilePictureStandIn | null;
+  /**
+   * A grid tile's word about its post, at the frame's bottom left over a scrim of its own (a
+   * creator page's view count): after a video's Play badge, which joins it in one row rather than
+   * sit under it, and above the media dots when there are several. Feed mode only.
+   */
+  footerStart?: ReactNode;
 }
 
 const MEDIA_LOAD_TIMEOUT_MS = 15_000;
@@ -165,6 +171,7 @@ export default function ShowcaseMediaCarousel({
   onMediaRetry,
   onVideoProgress,
   standIn = null,
+  footerStart = null,
 }: ShowcaseMediaCarouselProps) {
   const items = useMemo(
     () => mediaItems.slice().sort((left, right) => left.sortOrder - right.sortOrder),
@@ -503,6 +510,13 @@ export default function ShowcaseMediaCarousel({
     || isInteracting;
   // The tile's picture the reel hands down, for the media item drawn here only.
   const tileStandIn = isReel && standIn?.mediaItemId === renderedActiveItem.id ? standIn.image : null;
+  const hasFooter = mode === 'feed' && footerStart !== null && footerStart !== undefined && footerStart !== false;
+  // A grid's clip is marked as one: at the frame's bottom left, or first in the tile's footer row.
+  const playBadge = (
+    <span className="pointer-events-none inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md">
+      <Play className="h-4 w-4 fill-current" />
+    </span>
+  );
 
   return (
     <div ref={carouselRef} className={className}>
@@ -604,10 +618,8 @@ export default function ShowcaseMediaCarousel({
                 onError={reportActiveMediaError}
                 className={`h-full w-full ${frameFit === 'cover' ? 'object-cover' : 'object-contain'}`}
               />
-              {!showControls ? (
-                <span className="pointer-events-none absolute bottom-3 left-3 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/10 bg-black/65 text-white backdrop-blur-md">
-                  <Play className="h-4 w-4 fill-current" />
-                </span>
+              {!showControls && !hasFooter ? (
+                <span className="pointer-events-none absolute bottom-3 left-3 flex">{playBadge}</span>
               ) : null}
             </>
           ) : mode === 'feed' ? (
@@ -701,6 +713,27 @@ export default function ShowcaseMediaCarousel({
             className="absolute inset-0 z-[2] h-full w-full"
             aria-label={title}
           />
+        ) : null}
+
+        {hasFooter ? (
+          <>
+            {/* Its own scrim, so the words read on a white picture; taller over the media dots. */}
+            <div
+              aria-hidden="true"
+              className={`pointer-events-none absolute inset-x-0 bottom-0 z-[3] bg-gradient-to-t from-black/70 via-black/25 to-transparent ${
+                items.length > 1 ? 'h-24' : 'h-16'
+              }`}
+            />
+            <div
+              data-media-footer-start
+              className={`pointer-events-none absolute left-3 z-[5] flex max-w-[calc(100%-1.5rem)] items-center gap-2 ${
+                items.length > 1 ? 'bottom-12' : 'bottom-3'
+              }`}
+            >
+              {renderedActiveItem.mediaKind === 'video' && !renderedActiveItem.sourceUnavailableAt ? playBadge : null}
+              {footerStart}
+            </div>
+          </>
         ) : null}
 
         {items.length > 1 || allowFullscreen ? (

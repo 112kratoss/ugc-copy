@@ -91,7 +91,47 @@ describe('ShowcaseDetailEngagementRow', () => {
     expect(screen.getByRole('button', { name: '2 remixes' })).toHaveAttribute('aria-haspopup', 'dialog');
     expect(screen.getByRole('button', { name: /save shared creation/i })).toHaveTextContent('4');
     expect(screen.getByRole('link', { name: /comment/i })).toHaveAttribute('href', '#comments');
-    expect(screen.getByTitle('9 visits')).toBeInTheDocument();
+    // Link visits draw a chain: the eye is the views' alone.
+    const visits = screen.getByTitle('9 link visits');
+    expect(visits.querySelector('svg.lucide-link-2')).not.toBeNull();
+    expect(visits.querySelector('svg.lucide-eye')).toBeNull();
+  });
+
+  it('draws no views at 0 or where the post shows none', () => {
+    const { container, rerender } = render(<ShowcaseDetailEngagementRow {...rowProps()} />);
+    expect(container.querySelector('[data-post-view-count]')).toBeNull();
+    expect(container.querySelector('svg.lucide-eye')).toBeNull();
+
+    rerender(<ShowcaseDetailEngagementRow {...rowProps({ viewLabels: null })} />);
+    expect(container.querySelector('[data-post-view-count]')).toBeNull();
+    expect(screen.queryByText(/views?$/)).not.toBeInTheDocument();
+  });
+
+  it('draws the views beside saves and comments as a count, never a control', () => {
+    const { container } = render(
+      <ShowcaseDetailEngagementRow
+        {...rowProps({
+          commentCount: 3,
+          viewLabels: { count: 1_234, compact: '1.2K', visible: '1.2K views', spoken: '1,234 views' },
+        })}
+      />,
+    );
+    const views = container.querySelector('[data-post-view-count]') as HTMLElement;
+    expect(views).not.toBeNull();
+    // The eye and the compact figure are drawn; a screen reader hears the whole number, once.
+    expect(views.querySelector('svg.lucide-eye')).not.toBeNull();
+    expect(views.querySelector('[aria-hidden="true"]')).toHaveTextContent('1.2K');
+    expect(views.querySelector('[aria-hidden="true"]')).toHaveAttribute('title', '1,234 views');
+    expect(screen.getByText('1,234 views')).toHaveClass('sr-only');
+    // No button, no link, no tab stop.
+    expect(views.closest('button, a')).toBeNull();
+    expect(views.querySelector('button, a, [tabindex]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /views/ })).not.toBeInTheDocument();
+    // Next to the comments, before Share.
+    const comment = screen.getByRole('link', { name: /3/ });
+    const share = screen.getByRole('button', { name: 'Share' });
+    expect(comment.compareDocumentPosition(views) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(views.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('saves optimistically through the showcase save endpoint', async () => {

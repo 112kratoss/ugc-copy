@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import * as pageModule from '@/app/showcase/[id]/page';
 import ReportPostButton from '@/app/showcase/[id]/ReportPostButton';
+import { flushPostViews, resetPostViewReporterForTests } from '@/app/showcase/post-view-reporter';
 import { READER_RECIPE_READ_DEADLINE_MS } from '@/app/showcase/[id]/useShowcasePostViewer';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { coverNsfwContent } from '@/lib/nsfw-content';
@@ -147,19 +148,21 @@ vi.mock('@/components/PostComments', () => ({
 }));
 
 vi.mock('@/app/showcase/[id]/ShowcaseDetailEngagementRow', () => ({
-  default: ({ postId, canRemix, recipeRemix, creatorRemixMark, creatorCanRemix, remixHeld }: {
+  default: ({ postId, canRemix, recipeRemix, creatorRemixMark, creatorCanRemix, remixHeld, viewLabels }: {
     postId: string;
     canRemix: boolean;
     recipeRemix?: { access: string; priceLabel: string } | null;
     creatorRemixMark?: string;
     creatorCanRemix?: boolean;
     remixHeld?: boolean;
+    viewLabels?: { compact: string; spoken: string } | null;
   }) => (
     <div
       data-testid="showcase-detail-engagement-row"
       data-recipe-remix={recipeRemix ? `${recipeRemix.access}:${recipeRemix.priceLabel}` : ''}
       data-creator-remix={creatorRemixMark ? `${creatorRemixMark}:${creatorCanRemix ? 'open' : 'none'}` : ''}
       data-remix-held={String(Boolean(remixHeld))}
+      data-views={viewLabels ? `${viewLabels.compact}|${viewLabels.spoken}` : ''}
     >
       {`${postId}:${canRemix}`}
     </div>
@@ -299,6 +302,110 @@ describe('Showcase detail page', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     clearOwnerPageEditsForTests();
+  });
+
+  describe('its views', () => {
+    type Registration = { callback: IntersectionObserverCallback; targets: Element[] };
+    let registrations: Registration[] = [];
+
+    beforeEach(() => {
+      registrations = [];
+      resetPostViewReporterForTests();
+      vi.stubGlobal('IntersectionObserver', class {
+        readonly root = null;
+        readonly rootMargin = '0px';
+        readonly thresholds = [];
+        private readonly registration: Registration;
+        constructor(callback: IntersectionObserverCallback) {
+          this.registration = { callback, targets: [] };
+          registrations.push(this.registration);
+        }
+        observe(target: Element) { this.registration.targets.push(target); }
+        unobserve() {}
+        disconnect() { this.registration.targets = []; }
+        takeRecords() { return []; }
+      });
+    });
+
+    afterEach(() => {
+      resetPostViewReporterForTests();
+      vi.useRealTimers();
+    });
+
+    /** The post's content as the page's observer is told it is on screen. */
+    function showPostContent(ratio = 1) {
+      const content = screen.getByTestId('canonical-post-media');
+      const registration = registrations.find((candidate) => candidate.targets.includes(content));
+      expect(registration, 'the page watches its post content').toBeDefined();
+      act(() => {
+        registration!.callback([{
+          target: content,
+          isIntersecting: ratio > 0,
+          intersectionRatio: ratio,
+          intersectionRect: { height: ratio * 600 } as DOMRectReadOnly,
+          rootBounds: { height: 800 } as DOMRectReadOnly,
+        } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
+      });
+    }
+
+    async function viewsSent() {
+      await act(async () => { await flushPostViews(); });
+      return requestsTo('/api/showcase/views').map(([, init]) => ({
+        body: JSON.parse(String(init?.body)),
+        authorization: (init?.headers as Record<string, string> | undefined)?.Authorization ?? null,
+      }));
+    }
+
+    it("hands the engagement row the post's views, and none on a post that is not public", async () => {
+      getPublicPostDetailMock.mockResolvedValue({ ...(await getPublicPostDetailMock()), viewCount: 1_234 });
+      const { unmount } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-views', '1.2K|1,234 views');
+      unmount();
+
+      getPublicPostDetailMock.mockResolvedValue({ ...(await getPublicPostDetailMock()), visibility: 'unlisted' });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      expect(screen.getByTestId('showcase-detail-engagement-row')).toHaveAttribute('data-views', '');
+    });
+
+    it('reports the view once its content has been half on screen for a second, as the reader', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      clientAuth.current = { session: { access_token: 'reader-token' }, user: { id: 'reader-1' } };
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+
+      showPostContent(1);
+      act(() => { vi.advanceTimersByTime(999); });
+      expect(await viewsSent()).toEqual([]);
+      act(() => { vi.advanceTimersByTime(1); });
+      expect(await viewsSent()).toEqual([{
+        body: { views: [{ postId: POST_ID, surface: 'post-page' }] },
+        authorization: 'Bearer reader-token',
+      }]);
+    });
+
+    it('reports a visitor’s view too, with no token', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      showPostContent(0.8);
+      act(() => { vi.advanceTimersByTime(1_000); });
+      expect(await viewsSent()).toEqual([{ body: { views: [{ postId: POST_ID, surface: 'post-page' }] }, authorization: null }]);
+    });
+
+    it('reports nothing for the creator’s own post, nor for one that is not public', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      clientAuth.current = { session: { access_token: 'creator-token' }, user: { id: 'user-1' } };
+      const { unmount } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      showPostContent(1);
+      act(() => { vi.advanceTimersByTime(2_000); });
+      expect(await viewsSent()).toEqual([]);
+      unmount();
+
+      clientAuth.current = { session: null, user: null };
+      getPublicPostDetailMock.mockResolvedValue({ ...(await getPublicPostDetailMock()), visibility: 'unlisted' });
+      render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      showPostContent(1);
+      act(() => { vi.advanceTimersByTime(2_000); });
+      expect(await viewsSent()).toEqual([]);
+    });
   });
 
   it('renders a public post and records a share visit attributed to its origin surface', async () => {

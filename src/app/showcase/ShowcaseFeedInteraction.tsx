@@ -17,6 +17,7 @@ import { createPortal } from 'react-dom';
 import { Ban, EyeOff, Flag, MoreHorizontal, ShieldAlert, UserRoundX } from 'lucide-react';
 
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
+import type { PostViewSurface } from '@/lib/post-views-service';
 import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
 import { createShowcaseMediaProgressTracker } from '@/lib/showcase-media-progress';
 
@@ -29,6 +30,7 @@ import {
   type FeedEventOutboxEntry,
   type FeedEventOutboxStorage,
 } from './feed-event-outbox';
+import { reportPostView } from './post-view-reporter';
 
 export type ShowcaseFeedbackAction = 'not_interested' | 'hide_creator';
 export type ShowcaseFeedEventType =
@@ -702,6 +704,19 @@ interface QualifiedImpressionBoundaryProps {
    * many tiles at once, does not.
    */
   trackAttention?: boolean;
+  /**
+   * Report the card's view (`POST /api/showcase/views`, post view counts) on
+   * this surface once it qualifies, as its impression does: the Home feed's
+   * cards (`feed`), for every reader, a guest's included. Explore's grid shows
+   * thumbnails, which are not views, and sends none.
+   */
+  viewSurface?: PostViewSurface;
+  /**
+   * False while the reader's session is still being read: a view that
+   * qualified meanwhile waits for it, so a signed-in reader's view is never
+   * sent as a guest's.
+   */
+  viewReady?: boolean;
   className?: string;
   children: ReactNode;
 }
@@ -713,6 +728,8 @@ export function QualifiedImpressionBoundary({
   position,
   sourceSurface = 'showcase',
   trackAttention = false,
+  viewSurface,
+  viewReady = true,
   className,
   children,
 }: QualifiedImpressionBoundaryProps) {
@@ -721,11 +738,23 @@ export function QualifiedImpressionBoundary({
   const attentionRef = useRef<FeedCardAttention | null>(null);
   // What attention events are sent with, kept current for the listeners below
   // without subscribing them again. Written after render, read only by them.
-  const eventContextRef = useRef({ item, feedSessionId, accessToken, position, sourceSurface });
+  const eventContextRef = useRef({ item, feedSessionId, accessToken, position, sourceSurface, viewSurface, viewReady });
   useEffect(() => {
-    eventContextRef.current = { item, feedSessionId, accessToken, position, sourceSurface };
+    eventContextRef.current = { item, feedSessionId, accessToken, position, sourceSurface, viewSurface, viewReady };
   });
   const deliveryId = trackAttention ? getShowcaseRecommendation(item)?.deliveryId ?? null : null;
+
+  // The card was half on screen for a second: its view goes once the session
+  // is known. The reporter keeps one a reader, post and UTC day.
+  const viewQualifiedRef = useRef(false);
+  const reportViewIfDue = useCallback(() => {
+    const context = eventContextRef.current;
+    if (!viewQualifiedRef.current || !context.viewSurface || !context.viewReady) return;
+    reportPostView({ postId: context.item.id, surface: context.viewSurface, accessToken: context.accessToken });
+  }, []);
+  useEffect(() => {
+    reportViewIfDue();
+  }, [reportViewIfDue, viewReady, viewSurface]);
 
   const sendAttention = useCallback((events: FeedCardAttentionEvent[]) => {
     const context = eventContextRef.current;
@@ -819,6 +848,10 @@ export function QualifiedImpressionBoundary({
         }
 
         sentImpressionKeyRef.current = impressionKey;
+        // A view whatever the lane: an unranked card sends no impression, but
+        // it was seen all the same.
+        viewQualifiedRef.current = true;
+        reportViewIfDue();
         void sendShowcaseFeedEvent({
           item,
           eventType: 'impression',
@@ -841,7 +874,7 @@ export function QualifiedImpressionBoundary({
       cancelQualification();
       observer.disconnect();
     };
-  }, [accessToken, feedSessionId, item, position, sendAttention, sourceSurface]);
+  }, [accessToken, feedSessionId, item, position, reportViewIfDue, sendAttention, sourceSurface]);
 
   return (
     <div

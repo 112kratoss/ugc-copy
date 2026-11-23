@@ -61,6 +61,7 @@ vi.mock('next/dynamic', () => ({
       <div role="dialog" aria-label={`${item.title} Showcase reel`}>
         <span>{item.title}</span>
         <span>{item.commentCount} comments · {item.visibility ?? 'public'}</span>
+        <span>{`Reel views: ${item.viewCount ?? 'none'}`}</span>
         {loadMoreError ? <span role="alert">{loadMoreError}</span> : null}
         <a href={buildDetailPath(item.id, 'resources')}>Post details</a>
         <span>Closes to {originLabel ?? 'Explore'}</span>
@@ -530,6 +531,61 @@ describe('OwnerProfileMediaHub', () => {
 
     expect(screen.getByRole('dialog', { name: /unlisted post showcase reel/i }))
       .toHaveTextContent('4 comments · unlisted');
+  });
+
+  describe('views on the tiles', () => {
+    function servePosts(posts: unknown[]) {
+      const baseFetch = fetch as unknown as (input: RequestInfo | URL) => Promise<Response>;
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/posts?')) return response({ posts, pageInfo: { hasMore: false, nextOffset: null } });
+        if (url.startsWith('/api/showcase/saved-media?')) {
+          return response({ items: [{ ...savedPost, viewCount: 50 }], pageInfo: { hasMore: false, nextOffset: null } });
+        }
+        return baseFetch(input);
+      }));
+    }
+
+    it("draws a public post's views bottom left over its scrim, and says them in the card's name", async () => {
+      servePosts([{ ...publicPost, viewCount: 1_234 }]);
+      render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+      const card = await screen.findByRole('button', { name: 'Open Public post, 1,234 views' });
+      const views = card.querySelector<HTMLElement>('[data-post-view-count]')!;
+      expect(views.querySelector('svg.lucide-eye')).not.toBeNull();
+      expect(views.querySelector('span[aria-hidden="true"]')).toHaveTextContent('1.2K');
+      // A line of its own over the scrim, under the title and above the visibility and date.
+      expect(views.previousElementSibling).toHaveTextContent('Public post');
+      expect(views.nextElementSibling).toHaveTextContent(/^public · /);
+      expect(views.querySelector('button, a, [tabindex]')).toBeNull();
+
+      // The reel it opens is handed the total, for its own count.
+      fireEvent.click(card);
+      expect(screen.getByRole('dialog', { name: /public post showcase reel/i })).toHaveTextContent('Reel views: 1234');
+    });
+
+    it('draws none at 0, on a post that is not public, or on one taken down, whatever it holds', async () => {
+      servePosts([
+        { ...publicPost, id: 'post-zero', title: 'Zero post', viewCount: 0 },
+        { ...privatePost, viewCount: 40 },
+        { ...publicPost, id: 'post-unlisted', title: 'Unlisted post', visibility: 'unlisted', viewCount: 40 },
+        { ...publicPost, id: 'post-archived', title: 'Archived post', archivedAt: '2026-11-01T00:00:00.000Z', canShare: false, viewCount: 40 },
+      ]);
+      const { container } = render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+      await screen.findByRole('button', { name: 'Open Zero post' });
+      expect(screen.getByRole('button', { name: 'Open Unlisted post' })).toBeInTheDocument();
+      expect(container.querySelector('[data-post-view-count]')).toBeNull();
+    });
+
+    it('draws none on saved posts', async () => {
+      servePosts([]);
+      window.history.replaceState(null, '', '/profile?tab=saved');
+      const { container } = render(<OwnerProfileMediaHub creator={{ id: 'owner-1', username: 'owner', name: 'Owner', avatar: null }} />);
+
+      await screen.findByRole('button', { name: /open saved inspiration/i });
+      expect(container.querySelector('[data-post-view-count]')).toBeNull();
+    });
   });
 
   // The reel's own paging asked again at once after a failed page, without end.
