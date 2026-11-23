@@ -23,6 +23,7 @@ export type AdminPostRow = {
   category: string | null;
   reportCount: number;
   saveCount: number;
+  viewCount: number;
   commentCount: number;
   createdAt: string;
 };
@@ -109,7 +110,7 @@ export async function collectAdminContentSnapshot(
     const query = client
       .from('posts')
       .select(
-        'id, user_id, title, visibility, review_status, post_format, category, report_count, save_count, comment_count, created_at',
+        'id, user_id, title, visibility, review_status, post_format, category, report_count, save_count, view_count, comment_count, created_at',
         { count: 'exact' },
       )
       .order('created_at', { ascending: false })
@@ -173,6 +174,7 @@ export async function collectAdminContentSnapshot(
       category: (row.category as string | null) ?? null,
       reportCount: Number(row.report_count ?? 0),
       saveCount: Number(row.save_count ?? 0),
+      viewCount: Number(row.view_count ?? 0),
       commentCount: Number(row.comment_count ?? 0),
       createdAt: String(row.created_at ?? ''),
     })),

@@ -74,6 +74,10 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // Read alerts go after 180 days, unread ones after 365.
   mobile_notifications: { warning: 500_000, degraded: 2_000_000 },
   mobile_push_deliveries: { warning: 200_000, degraded: 1_000_000 },
+  // One row per post, viewer and day, kept two days after its day.
+  post_view_marks: { warning: 200_000, degraded: 1_000_000 },
+  // One row per post and day with views, kept 400 days.
+  post_view_days: { warning: 1_000_000, degraded: 4_000_000 },
   // Up to four rows per app flush, kept 90 days.
   playback_metrics: { warning: 200_000, degraded: 1_000_000 },
   onboarding_events: { warning: 500_000, degraded: 2_000_000 },

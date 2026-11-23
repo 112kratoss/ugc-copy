@@ -141,7 +141,7 @@ export default async function AdminContentPage({
         {snapshot.posts.length === 0 ? (
           <EmptyState message="No posts match this filter." />
         ) : (
-          <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Author', 'Moderation']}>
+          <DataTable columns={['Created', 'Title', 'Visibility', 'Review', 'Reports', 'Saves', 'Views', 'Author', 'Moderation']}>
             {snapshot.posts.map((post) => {
               const postHref = adminPublicPostHref(post);
               return (
@@ -162,6 +162,7 @@ export default async function AdminContentPage({
                   {post.reportCount}
                 </Td>
                 <Td>{post.saveCount}</Td>
+                <Td>{post.viewCount}</Td>
                 <Td>
                   <Link href={`/admin/users/${post.userId}`} className="font-mono text-xs underline">
                     {shortId(post.userId)}

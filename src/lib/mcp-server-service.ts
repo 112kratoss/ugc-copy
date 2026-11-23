@@ -2324,7 +2324,7 @@ const getPostTool = defineTool({
   title: 'Read a post',
   description: [
     'Read one post by post_id: the creator\'s own in any state, or anyone\'s while it is live.',
-    'Returns its state (live, private, archived, hidden by moderation, or removed), post_url, title, visibility, whether remixes are allowed, and the counts the post page shows (saves, comments, remixes, shares).',
+    'Returns its state (live, private, archived, hidden by moderation, or removed), post_url, title, visibility, whether remixes are allowed, and the counts the post page shows (saves, comments, remixes, shares, views).',
     'Call it after publish_post to confirm a post or before delete_post. A post that is not the creator\'s and not live answers NOT_FOUND.',
     'generation_id names the creation behind the post; it is null for a post made from uploads and for a text post (format text), which list_creations does not list.',
     'resource_access (none, free or paid), resource_price_tokens and resource_status (draft, or published while on offer) say whether the post carries a resource, a creation\'s recipe or the cards of a text or upload post, and at what price. What a resource holds is never returned: people read it on the post once they have unlocked it.',

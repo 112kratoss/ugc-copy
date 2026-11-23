@@ -72,6 +72,8 @@ type PublicPostRow = {
   /** The post's own "Allow remixes" (owner, 2026-11-05). */
   remixes_allowed?: boolean | null;
   save_count: number | null;
+  /** Lifetime views; the legacy fallback read leaves it out. */
+  view_count?: number | null;
   remix_count: number | null;
   share_count: number | null;
   share_visit_count: number | null;
@@ -114,6 +116,8 @@ export interface PublicPostDetail {
   creationMode: 'motion' | null;
   postFormat: ShowcasePostFormat;
   saveCount: number;
+  /** Lifetime views (migration 20261123070740); left out by the legacy fallback read. */
+  viewCount?: number;
   remixCount: number;
   shareCount: number;
   shareVisitCount: number;
@@ -149,7 +153,7 @@ async function fetchPublicPostRow(
 
   const result = await adminSupabase
     .from('posts')
-    .select(`id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, user_id, generation_id, visibility, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, save_count, view_count, remix_count, share_count, share_visit_count, comment_count, source_kind, source_tool, review_status, is_nsfw, created_at, post_format, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('id', id)
     .is('archived_at', null)
     .in('visibility', ['public', 'unlisted'])
@@ -534,6 +538,7 @@ export async function getPublicPostDetail(
     creationMode: row.creation_mode === 'motion' ? 'motion' : null,
     postFormat: row.post_format,
     saveCount: row.save_count ?? 0,
+    ...(row.view_count === undefined ? {} : { viewCount: Math.max(0, Number(row.view_count) || 0) }),
     remixCount: row.remix_count ?? 0,
     shareCount: row.share_count ?? 0,
     shareVisitCount: row.share_visit_count ?? 0,

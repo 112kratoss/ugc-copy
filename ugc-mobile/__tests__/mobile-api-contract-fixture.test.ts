@@ -642,6 +642,14 @@ const extendedOperationCases: Array<{
   { key: 'suggestSearch', call: (api) => api.suggestSearch({ query: 'lu' }) },
   { key: 'searchStarter', call: (api) => api.searchStarter() },
   {
+    key: 'recordPostViews',
+    call: (api) => api.recordPostViews(
+      mobileApiContract.endpoints.recordPostViews.request as {
+        views: Array<{ postId: string; surface: 'feed' | 'post-page' | 'reel' }>;
+      },
+    ),
+  },
+  {
     key: 'recordSearchOpen',
     call: (api) => api.recordSearchOpen({
       q: 'product', type: 'top', sort: 'top', kind: 'post', id: '0b9e1000-0000-4000-8000-000000000011', position: 1,

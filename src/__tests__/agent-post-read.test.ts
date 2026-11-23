@@ -84,11 +84,13 @@ describe('a post as an agent reads it', () => {
       state: 'live',
       isNsfw: false,
       remixesAllowed: true,
-      counts: { saves: 3, comments: 0, remixes: 1, shares: 0 },
+      counts: { saves: 3, comments: 0, remixes: 1, shares: 0, views: 0 },
       createdAt: '2026-11-09T10:00:00Z',
       isOwn: true,
       resource: { access: 'none', priceTokens: 0, status: null },
     });
+    // The views the post has counted (20261123070740), read as the other counters are.
+    expect(toAgentPostView(row({ view_count: 42 }), OWNER).counts.views).toBe(42);
     // A text post has no creation behind it and says what it is.
     expect(toAgentPostView(row({ generation_id: null, post_format: 'text', category: 'text' }), OWNER)).toMatchObject({ generationId: null, source: 'text', format: 'text', category: 'text' });
     expect(toAgentPostView(row({ post_format: undefined }), OWNER).format).toBeNull();

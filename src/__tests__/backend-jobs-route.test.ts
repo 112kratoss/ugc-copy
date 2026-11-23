@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   runKieAccountBalanceBackendJob: vi.fn(),
   runMediaPreviewRepairBackendJob: vi.fn(),
   runMobilePushReceiptsBackendJob: vi.fn(),
+  runPostViewCountsBackendJob: vi.fn(),
   runReferralRewardReconciliationBackendJob: vi.fn(),
   runSearchDictionaryBackendJob: vi.fn(),
   runSearchEmbeddingsBackendJob: vi.fn(),
@@ -59,6 +60,9 @@ vi.mock('@/lib/backend-job-executions', async () => {
     ),
     runMobilePushReceiptsBackendJob: (...args: unknown[]) => (
       mocks.runMobilePushReceiptsBackendJob(...args)
+    ),
+    runPostViewCountsBackendJob: (...args: unknown[]) => (
+      mocks.runPostViewCountsBackendJob(...args)
     ),
     runReferralRewardReconciliationBackendJob: (...args: unknown[]) => (
       mocks.runReferralRewardReconciliationBackendJob(...args)
@@ -154,6 +158,14 @@ describe('/api/cron/backend-jobs route', () => {
       route: '/api/cron/mobile-push-receipts',
       status: 'succeeded',
       summary: { updatedCount: 1 },
+    });
+    mocks.runPostViewCountsBackendJob.mockReset();
+    mocks.runPostViewCountsBackendJob.mockResolvedValue({
+      success: true,
+      job: 'post-view-counts',
+      route: '/api/cron/post-view-counts',
+      status: 'succeeded',
+      summary: { views_counted: 0, batches: 1 },
     });
     mocks.runReferralRewardReconciliationBackendJob.mockReset();
     mocks.runReferralRewardReconciliationBackendJob.mockResolvedValue({
@@ -273,7 +285,7 @@ describe('/api/cron/backend-jobs route', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       scheduler: '/api/cron/backend-jobs',
-      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'search-dictionary', 'search-embeddings', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'backend-alert-delivery', 'feed-embeddings', 'mobile-push-receipts', 'post-view-counts', 'search-dictionary', 'search-embeddings', 'workflow-run-steps'],
     });
   });
 
@@ -356,6 +368,7 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ job: 'backend-alert-delivery', status: 'skipped' }),
         expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'succeeded' }),
+        expect.objectContaining({ job: 'post-view-counts', status: 'succeeded' }),
         expect.objectContaining({ job: 'search-dictionary', status: 'succeeded' }),
         expect.objectContaining({ job: 'search-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'succeeded' }),
@@ -381,7 +394,7 @@ describe('/api/cron/backend-jobs route', () => {
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     expect(mocks.runMobilePushReceiptsBackendJob).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'feed-embeddings', 'mobile-push-receipts', 'search-embeddings', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'feed-embeddings', 'mobile-push-receipts', 'post-view-counts', 'search-embeddings', 'workflow-run-steps'],
     });
   });
 
@@ -406,7 +419,7 @@ describe('/api/cron/backend-jobs route', () => {
     });
     expect(mocks.runMediaPreviewRepairBackendJob).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      dueJobs: ['account-deletion-resweeps', 'feed-embeddings', 'feed-maintenance', 'mobile-push-receipts', 'search-embeddings', 'workflow-run-steps'],
+      dueJobs: ['account-deletion-resweeps', 'feed-embeddings', 'feed-maintenance', 'mobile-push-receipts', 'post-view-counts', 'search-embeddings', 'workflow-run-steps'],
     });
   });
 
@@ -436,6 +449,7 @@ describe('/api/cron/backend-jobs route', () => {
         'account-deletion-resweeps',
         'feed-embeddings',
         'mobile-push-receipts',
+        'post-view-counts',
         'referral-reward-reconciliation',
         'search-embeddings',
         'workflow-run-steps',
@@ -468,6 +482,7 @@ describe('/api/cron/backend-jobs route', () => {
         expect.objectContaining({ status: 'skipped' }),
         expect.objectContaining({ job: 'feed-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'mobile-push-receipts', status: 'failed' }),
+        expect.objectContaining({ job: 'post-view-counts', status: 'succeeded' }),
         expect.objectContaining({ job: 'search-dictionary', status: 'succeeded' }),
         expect.objectContaining({ job: 'search-embeddings', status: 'skipped' }),
         expect.objectContaining({ job: 'workflow-run-steps', status: 'skipped' }),

@@ -66,6 +66,8 @@ export interface CreatorProfileStats {
   publicCreations: number;
   totalSaves: number;
   totalRemixes: number;
+  /** Summed view_count of the posts the grid shows; left out by the fallback read. */
+  totalViews?: number;
   unlocks: number;
   totalUnlockSales: number;
   toolsUsed: Array<{ slug: string; label: string; count: number }>;
@@ -186,6 +188,7 @@ function normalizeCreatorPostRow(
     category,
     post_format: postFormat,
     save_count: typeof row.save_count === 'number' ? row.save_count : 0,
+    ...(typeof row.view_count === 'number' ? { view_count: row.view_count } : {}),
     remix_count: typeof row.remix_count === 'number' ? row.remix_count : 0,
     created_at: asNullableString(row.created_at) ?? new Date(0).toISOString(),
     user_id: profileId,
@@ -234,6 +237,7 @@ async function fetchCreatorPostRows({
           'category',
           includeTextColumns ? 'post_format' : null,
           'save_count',
+          'view_count',
           'remix_count',
           'created_at',
           'generation_id',
@@ -496,6 +500,7 @@ async function loadCreatorStats(
     publicCreations: nonNegativeNumber(record.publicCreations),
     totalSaves: nonNegativeNumber(record.totalSaves),
     totalRemixes: nonNegativeNumber(record.totalRemixes),
+    ...(typeof record.totalViews === 'number' ? { totalViews: nonNegativeNumber(record.totalViews) } : {}),
     unlocks: nonNegativeNumber(record.unlocks),
     totalUnlockSales: nonNegativeNumber(record.totalUnlockSales),
     toolsUsed,

@@ -10,6 +10,7 @@ export type BackendJobName =
   | 'media-upload-reclaim'
   | 'mobile-push-receipts'
   | 'operational-data-retention'
+  | 'post-view-counts'
   | 'recipe-copy-sweep'
   | 'referral-reward-reconciliation'
   | 'search-dictionary'
@@ -74,6 +75,7 @@ export type BackendJobDefinition = {
  * `search-dictionary` too: 24 logical runs a day, no cron entry.
  * `search-embeddings` as well: 144 logical runs a day inside the shared tick,
  * most of them skipped with nothing to embed, and no cron entry.
+ * `post-view-counts` too: 144 logical runs a day, no cron entry.
  */
 export const BACKEND_JOB_DAILY_INVOCATION_BUDGET = 456;
 
@@ -348,6 +350,20 @@ export const BACKEND_JOB_REGISTRY = [
     lockTtlSeconds: 14 * 60,
     noWorkSkipReason: 'no_prunable_operational_data',
     maxMissedRunsBeforeDegraded: 2,
+  }),
+  defineBackendJob({
+    // Post view counts (post-view-counts.ts): the views marked since the last
+    // run are added to each post's total and its day, then old marks are
+    // pruned. Shared dispatch: SQL only, a few short transactions of at most
+    // 5,000 marks within a 30 s budget. Every ten minutes, so a post's count
+    // is at most ten minutes behind its views (plus the pages' own cache).
+    name: 'post-view-counts',
+    route: '/api/cron/post-view-counts',
+    schedule: '*/10 * * * *',
+    maxDurationSeconds: 60,
+    lockTtlSeconds: 5 * 60,
+    noWorkSkipReason: 'no_post_views_to_count',
+    maxMissedRunsBeforeDegraded: 3,
   }),
   defineBackendJob({
     // Removes the copies "Include creation references" made and the run

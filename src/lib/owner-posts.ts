@@ -83,6 +83,8 @@ type OwnerPostRow = PostMediaRow & {
   source_tool: string | null;
   source_tool_slug: string | null;
   comment_count: number;
+  /** Lifetime views; the fallback reads leave it out. */
+  view_count?: number | null;
   created_at: string;
   updated_at: string;
   /** The post's own "Allow remixes" (owner, 2026-11-05): the editor's switch, and no Remix in its listing while off. */
@@ -185,6 +187,11 @@ export interface OwnerPostListItem {
   sourceTools?: SourceToolSelection[];
   sourceLabel: string;
   commentCount: number;
+  /**
+   * Lifetime views, counted while the post was public (migration
+   * 20261123070740); left out by the fallback reads.
+   */
+  viewCount?: number;
   createdAt: string;
   updatedAt: string;
   publicPath: string | null;
@@ -277,7 +284,7 @@ async function fetchOwnerPostRows(
     .from('posts')
     .select(
       // `remixes_allowed`: its listing names and is graded with no Remix while the switch is off.
-      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at, remixes_allowed'
+      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, view_count, created_at, updated_at, remixes_allowed'
         + listingsEmbed
     )
     .eq('user_id', userId)
@@ -388,7 +395,7 @@ async function fetchOwnerPostRow(
   const result = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, created_at, updated_at, remixes_allowed, remix_recipe_mode'
+      'id, user_id, generation_id, is_nsfw, visibility, archived_at, archived_by_user_id, tombstoned_at, review_status, output_url, showcase_asset_path, prompt, title, description, body, category, post_format, source_kind, source_tool, source_tool_slug, comment_count, view_count, created_at, updated_at, remixes_allowed, remix_recipe_mode'
     )
     .eq('id', postId)
     .eq('user_id', userId)
@@ -824,6 +831,7 @@ async function toOwnerPostListItem(
     sourceTools,
     sourceLabel: getSourceLabel(sourceKind),
     commentCount: Math.max(0, row.comment_count ?? 0),
+    ...(row.view_count === undefined ? {} : { viewCount: Math.max(0, Number(row.view_count) || 0) }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publicPath: canShare ? `/showcase/${row.id}` : null,

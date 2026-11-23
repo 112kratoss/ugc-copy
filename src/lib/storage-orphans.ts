@@ -222,6 +222,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   // Search's models and tools: which a post has, under the name it prints.
   post_search_entities: SEARCH_ENTITIES,
   post_share_events: TELEMETRY,
+  post_view_days: NO_TEXT,
+  post_view_marks: TELEMETRY,
   profile_share_events: TELEMETRY,
   provider_admission_buckets: TELEMETRY,
   provider_circuit_breakers: TELEMETRY,

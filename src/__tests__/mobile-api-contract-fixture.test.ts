@@ -230,6 +230,7 @@ const expectedEndpointKeys = [
   'prepareShowcaseFeedReadAhead',
   'getShowcaseFeedNewest',
   'recordShowcaseFeedEvents',
+  'recordPostViews',
   'undoFeedFeedback',
   'searchPublicContent',
   'suggestSearch',

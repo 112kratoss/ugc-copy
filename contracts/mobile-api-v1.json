@@ -1000,6 +1000,42 @@
         ]
       }
     },
+    "recordPostViews": {
+      "method": "POST",
+      "path": "/api/showcase/views",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "contentType": "application/json",
+      "maxBodyBytes": 8192,
+      "maxViews": 25,
+      "surfaces": ["feed", "post-page", "reel"],
+      "guestNetworkCapPerPostPerDay": 20,
+      "rateLimit": {
+        "scope": "post-views:record",
+        "limit": 300,
+        "windowSeconds": 600
+      },
+      "networkRateLimit": {
+        "scope": "post-views:network-admission",
+        "limit": 3000,
+        "windowSeconds": 600
+      },
+      "request": {
+        "views": [
+          { "postId": "0b9e1000-0000-4000-8000-000000000011", "surface": "post-page" },
+          { "postId": "0b9e1000-0000-4000-8000-000000000012", "surface": "reel" }
+        ]
+      },
+      "status": 204,
+      "response": null,
+      "refusals": {
+        "notJson": 400,
+        "malformed": 400,
+        "invalidToken": 401,
+        "tooLarge": 413,
+        "rateLimited": 429
+      }
+    },
     "undoFeedFeedback": {
       "method": "POST",
       "path": "/api/showcase/feed/feedback/undo",
