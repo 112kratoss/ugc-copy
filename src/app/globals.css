@@ -178,6 +178,9 @@
   --ui-surface-2: rgba(255, 248, 237, 0.05);
   --ui-surface-3: rgba(255, 248, 237, 0.08);
   --ui-surface-inset: #0d0d0f;
+  /* Over pictures: the dark pill a time sits on, and a lightbox's backdrop. */
+  --ui-media-scrim: rgba(12, 12, 14, 0.6);
+  --ui-media-backdrop: rgba(12, 12, 14, 0.82);
   --ui-border-subtle: rgba(255, 248, 237, 0.09);
   --ui-border-default: rgba(255, 248, 237, 0.14);
   --ui-border-strong: rgba(255, 248, 237, 0.24);

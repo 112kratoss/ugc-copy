@@ -1,14 +1,18 @@
 import { useSyncExternalStore } from 'react';
-import { ArrowUpRight, Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
+import { router } from 'expo-router';
+import { ArrowUpRight, ChevronRight, LifeBuoy, Mail, MessageCircle, ShieldCheck } from 'lucide-react-native';
 import { Linking, Pressable, View } from 'react-native';
 
 import { AppText, Card, Screen, SectionTitle } from '@/components/ui';
 import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
 import { formatSupportDetails, readCreatorSession, subscribeCreatorSession } from '@/lib/creator-session-diagnostics';
+import {
+  SUPPORT_CONVERSATION_PATH,
+  SUPPORT_EMAIL,
+  SUPPORT_WORDS,
+} from '@/lib/support-conversation-policy/support-conversation-policy';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
-
-const SUPPORT_EMAIL = 'info@magicbooklet.com';
 
 /**
  * The support mail, with the lines at the foot of Settings below room for the
@@ -37,6 +41,15 @@ export default function HelpScreen() {
       />
 
       <HelpCard
+        icon={<LifeBuoy size={appTheme.icon.feature} color={theme.colors.primary} />}
+        title={SUPPORT_WORDS.title}
+        body="Write to us here in the app. We reply in the same conversation and you get a notification."
+        trailing="chevron"
+        accessibilityHint="Opens your conversation with support."
+        onPress={() => router.push(SUPPORT_CONVERSATION_PATH as never)}
+      />
+
+      <HelpCard
         icon={<MessageCircle size={appTheme.icon.feature} color={theme.colors.primary} />}
         title="Creation help"
         body="If a generation is processing, you can leave the screen and watch for the mobile notification when it finishes."
@@ -50,13 +63,29 @@ export default function HelpScreen() {
         icon={<Mail size={appTheme.icon.feature} color={theme.colors.amber} />}
         title="Contact support"
         body={`Email ${SUPPORT_EMAIL} for account or purchase help.`}
+        accessibilityHint="Opens your email app."
         onPress={() => void Linking.openURL(mailUrl)}
       />
     </Screen>
   );
 }
 
-function HelpCard({ icon, title, body, onPress }: { icon: React.ReactNode; title: string; body: string; onPress?: () => void }) {
+function HelpCard({
+  icon,
+  title,
+  body,
+  onPress,
+  trailing = 'external',
+  accessibilityHint,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+  onPress?: () => void;
+  /** An arrow out of the app (the mail app) or a chevron to a screen of the app. */
+  trailing?: 'external' | 'chevron';
+  accessibilityHint?: string;
+}) {
   const theme = useAppTheme();
   const content = (
     <Card style={{ minHeight: 112 }}>
@@ -68,14 +97,24 @@ function HelpCard({ icon, title, body, onPress }: { icon: React.ReactNode; title
           <AppText variant="cardTitle">{title}</AppText>
           <AppText variant="bodySm" color="muted">{body}</AppText>
         </View>
-        {onPress ? <ArrowUpRight size={appTheme.icon.default} color={theme.colors.faint} /> : null}
+        {onPress
+          ? trailing === 'chevron'
+            ? <ChevronRight size={appTheme.icon.default} color={theme.colors.faint} />
+            : <ArrowUpRight size={appTheme.icon.default} color={theme.colors.faint} />
+          : null}
       </View>
     </Card>
   );
 
   if (!onPress) return content;
   return (
-    <Pressable accessibilityRole="link" accessibilityLabel={`${title}. ${body}`} accessibilityHint="Opens your email app." onPress={onPress} style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+    <Pressable
+      accessibilityRole={trailing === 'chevron' ? 'button' : 'link'}
+      accessibilityLabel={`${title}. ${body}`}
+      accessibilityHint={accessibilityHint}
+      onPress={onPress}
+      style={({ pressed }) => ({ opacity: pressed ? appTheme.opacity.pressed : 1 })}
+    >
       {content}
     </Pressable>
   );

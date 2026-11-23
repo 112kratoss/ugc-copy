@@ -146,6 +146,10 @@ export const ORPHAN_SCANNED_TABLES: ReadonlyArray<{ table: string; key: readonly
   { table: 'seedance_prepared_assets', key: ['asset_id'] },
   { table: 'source_tool_models', key: ['id'] },
   { table: 'source_tools', key: ['id'] },
+  // Help & support: free text a person typed, read like contact_messages.
+  { table: 'support_conversations', key: ['id'] },
+  { table: 'support_messages', key: ['id'] },
+  { table: 'support_message_reactions', key: ['message_id', 'author'] },
   { table: 'template_run_jobs', key: ['id'] },
   { table: 'template_run_steps', key: ['id'] },
   { table: 'template_runs', key: ['id'] },

@@ -179,6 +179,7 @@ function deletionServiceClient(options: DeletionClientOptions = {}) {
                 'generation_inputs',
                 'post_resource_files',
                 'template_inputs',
+                'support_attachments',
               ],
               showcase_media_paths: options.showcaseMediaPaths ?? [],
               template_asset_prefixes: options.templateAssetPrefixes ?? [],

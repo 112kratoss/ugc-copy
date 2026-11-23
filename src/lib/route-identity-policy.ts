@@ -173,6 +173,13 @@ const REGISTERED_ROUTES = [
   '/api/posts/[postId]/resource-bundle/unlock-with-credits',
   '/api/creator/payouts',
 
+  // A conversation with support is kept with the account it is about.
+  '/api/support/conversation',
+  '/api/support/conversation/read',
+  '/api/support/conversation/typing',
+  '/api/support/messages/[messageId]',
+  '/api/support/messages/[messageId]/reaction',
+
   // Notifications need somewhere durable to deliver to.
   '/api/mobile/notifications',
   '/api/mobile/notifications/read',
@@ -297,6 +304,7 @@ const SERVICE_ROUTES = [
   '/api/admin/users/sanctions',
   '/api/admin/moderation/generations',
   '/api/admin/contact',
+  '/api/admin/support',
   '/api/cron/account-deletion-resweeps',
   '/api/cron/backend-alert-delivery',
   '/api/cron/backend-jobs',

@@ -71,6 +71,8 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/create-image')).toBe('Create');
     expect(getAppShellTitle('/create-workflow')).toBe('Workflow Canvas');
     expect(getAppShellTitle('/templates/ghost-rider')).toBe('Templates');
+    // The support page heads itself ("Message support"): the top bar names nothing over it.
+    expect(getAppShellTitle('/support')).toBeNull();
   });
 
   // The sweep of 2026-11-17 read "Workspace", the bar's fallback, over the policy pages, and

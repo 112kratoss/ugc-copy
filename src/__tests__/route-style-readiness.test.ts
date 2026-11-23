@@ -82,6 +82,7 @@ const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
   'post',
   'profile',
   'search',
+  'support',
   'template-runs',
   'unlocks',
   'welcome-reward',

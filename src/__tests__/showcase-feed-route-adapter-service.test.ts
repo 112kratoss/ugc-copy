@@ -334,6 +334,40 @@ describe('showcase feed route adapter service', () => {
         seedBucket: expect.anything(),
       }));
     });
+
+    it('asks a fresh ranking for a reader\'s own refresh of a For you first page', async () => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      const { query } = mobileApiContract.endpoints.getShowcaseFeed.freshFirstPage;
+      await getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?${new URLSearchParams(query)}`),
+        dependencies: seedDependencies(getShowcaseFeedPageMock),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.objectContaining({
+        sort: 'for-you',
+        offset: 0,
+        fresh: true,
+      }));
+    });
+
+    it.each([
+      ['a later page', '?offset=12&fresh=1'],
+      ['a cursor page', '?cursor=eyJzIjoiYSIsInAiOjEyfQ&fresh=1'],
+      ['another sort, which is never reused', '?sort=recent&fresh=1'],
+      ['a value other than 1', '?fresh=true'],
+      ['no refresh at all', '?offset=0'],
+    ])('asks no fresh ranking for %s', async (_case, query) => {
+      const getShowcaseFeedPageMock = vi.fn(async () => createFeedPage());
+      await getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed${query}`),
+        dependencies: seedDependencies(getShowcaseFeedPageMock),
+      });
+
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledOnce();
+      expect(getShowcaseFeedPageMock).toHaveBeenCalledWith(expect.not.objectContaining({
+        fresh: expect.anything(),
+      }));
+    });
   });
 
   it.each(['video', 'media'])('passes the %s filter with viewer auth and disables shared caching', async (category) => {

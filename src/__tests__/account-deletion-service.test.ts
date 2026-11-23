@@ -31,6 +31,7 @@ const storageManifest = {
     'generation_inputs',
     'post_resource_files',
     'template_inputs',
+    'support_attachments',
   ],
   showcase_media_paths: [`showcase/${GENERATION_ID}/output.webp`],
   template_asset_prefixes: ['2b2f4bb5-6ea8-4c44-a394-14cc777dcf52'],
@@ -174,6 +175,24 @@ describe('account deletion cleanup service', () => {
       expect(parseAccountDeletionStorageManifest({ ...storageManifest, showcase_media_paths: paths }), postId)
         .toMatchObject({ showcaseMediaPaths: paths });
     }
+  });
+
+  it('reads a manifest saved before support photos, and sweeps every bucket known now', () => {
+    // A deletion prepared before 20261122150427 saved the eight buckets of
+    // 20261030151942; its retries and resweeps read that manifest back.
+    const saved = {
+      ...storageManifest,
+      user_prefix_buckets: storageManifest.user_prefix_buckets.filter((bucket) => bucket !== 'support_attachments'),
+    };
+    expect(saved.user_prefix_buckets).toHaveLength(8);
+
+    expect(parseAccountDeletionStorageManifest(saved)?.userPrefixBuckets).toEqual(storageManifest.user_prefix_buckets);
+    // Still refused: an older bucket missing, or an unknown one.
+    expect(parseAccountDeletionStorageManifest({ ...saved, user_prefix_buckets: saved.user_prefix_buckets.slice(1) })).toBeNull();
+    expect(parseAccountDeletionStorageManifest({
+      ...saved,
+      user_prefix_buckets: [...saved.user_prefix_buckets, 'another_bucket'],
+    })).toBeNull();
   });
 
   it('rejects unsafe or incomplete persisted storage manifests', () => {

@@ -513,7 +513,7 @@ function postPageForLegacyPostAlert(target: string) {
 const NOTIFICATION_ROUTE_PATTERNS = [
   /^\/$/,
   /^\/\(tabs\)(?:\/(?:index|creator|showcase|studio|pricing|profile))?$/,
-  /^\/(?:creator|showcase|studio|pricing|profile|invite|auth|viewer|profile-media-feed|post\/new|seller-dashboard|settings|help|edit-profile)$/,
+  /^\/(?:creator|showcase|studio|pricing|profile|invite|auth|viewer|profile-media-feed|post\/new|seller-dashboard|settings|help|support|edit-profile)$/,
   /^\/create\/(?:image|video|motion)$/,
   /^\/showcase\/[^/]+$/,
   /^\/creators\/[^/]+$/,

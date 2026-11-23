@@ -27,7 +27,10 @@ import {
   notifyMobilePurchasesRestored,
   notifyPostResourceUnlockCompleted,
   notifyPostSocialActivity,
+  notifySupportReplied,
   processMobilePushMaintenance,
+  rewordSupportReplyNotification,
+  withdrawSupportReplyNotification,
   processPendingMobilePushReceipts,
   sendExpoPushNotification,
   sendExpoPushNotificationBatch,
@@ -2618,6 +2621,78 @@ describe('what each alert opens and says', () => {
     expect(unreadable.sent.filter((row) => row.user_id === 'creator-1').map((row) => [row.title, row.body])).toEqual(unnamed);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed_to_load_alert_profile'));
     errorSpy.mockRestore();
+  });
+
+  it('tells an account support replied, with the start of the reply, and opens the conversation', async () => {
+    const history = createMobileNotificationHistory();
+    const client = writtenTo(history);
+
+    await notifySupportReplied(client, {
+      userId: 'account-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-1',
+      replyBody: 'Sorry about that.\n\nThe 40 credits are back in your balance.',
+    });
+    await notifySupportReplied(client, {
+      userId: 'account-1',
+      conversationId: 'conversation-1',
+      messageId: 'message-2',
+      replyBody: 'x'.repeat(300),
+    });
+
+    expect(history.sent.map(({ user_id, type, category, title, body, deep_link, object_type, object_id, dedupe_key }) => (
+      { user_id, type, category, title, body, deep_link, object_type, object_id, dedupe_key }
+    ))).toEqual([
+      {
+        user_id: 'account-1',
+        type: 'support_reply',
+        // Never muted with a category switch: the account asked for this answer.
+        category: 'system',
+        title: 'Support replied',
+        body: 'Sorry about that. The 40 credits are back in your balance.',
+        deep_link: '/support',
+        object_type: 'support_conversation',
+        object_id: 'conversation-1',
+        dedupe_key: 'support-reply:message-1',
+      },
+      expect.objectContaining({
+        dedupe_key: 'support-reply:message-2',
+        body: `${'x'.repeat(139)}…`,
+      }),
+    ]);
+  });
+
+  it('takes a reply\'s alert away when support deletes the reply, and rewords it when support edits it', async () => {
+    const calls: Array<{ op: string; values?: unknown; filters: Array<[string, unknown]> }> = [];
+    const written = (op: string, values?: unknown) => {
+      const call = { op, values, filters: [] as Array<[string, unknown]> };
+      calls.push(call);
+      const chain = {
+        eq(column: string, value: unknown) {
+          call.filters.push([column, value]);
+          return Object.assign(Promise.resolve({ error: null }), chain);
+        },
+      };
+      return chain;
+    };
+    const client = {
+      from: (table: string) => {
+        if (table !== 'mobile_notifications') throw new Error(`Unexpected table: ${table}`);
+        return { delete: () => written('delete'), update: (values: unknown) => written('update', values) };
+      },
+    } as unknown as SupabaseClient;
+
+    await withdrawSupportReplyNotification(client, { userId: 'account-1', messageId: 'message-1' });
+    await rewordSupportReplyNotification(client, { userId: 'account-1', messageId: 'message-2', replyBody: 'Fixed now', hasPhoto: true });
+
+    expect(calls).toEqual([
+      { op: 'delete', values: undefined, filters: [['user_id', 'account-1'], ['dedupe_key', 'support-reply:message-1']] },
+      {
+        op: 'update',
+        values: { title: 'Support replied', body: '📷 Fixed now' },
+        filters: [['user_id', 'account-1'], ['dedupe_key', 'support-reply:message-2']],
+      },
+    ]);
   });
 
   it('tells a seller their payout was sent, or not sent and why, and opens Your Sales', async () => {

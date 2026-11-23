@@ -1944,7 +1944,8 @@ export type MobileNotificationType =
   | 'creator_followed'
   | 'post_saved'
   | 'post_remixed'
-  | 'post_shared';
+  | 'post_shared'
+  | 'support_reply';
 
 export interface MobileNotification {
   id: string;
