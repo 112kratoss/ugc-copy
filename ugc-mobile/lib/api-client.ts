@@ -1040,9 +1040,10 @@ export function createApiClient({
       }
       // The feed keys an anonymous viewer by it; the Invite & Earn routes read
       // it as the device an invite is made, opened and claimed on, which the
-      // referral abuse guard compares.
+      // referral abuse guard compares; the views route counts a guest with no
+      // session by it.
       if (
-        (path.startsWith('/api/showcase/feed') || path.startsWith('/api/referrals/'))
+        (path.startsWith('/api/showcase/feed') || path.startsWith('/api/referrals/') || path === '/api/showcase/views')
         && getInstallationId
         && !headers.has(FEED_INSTALLATION_ID_HEADER)
       ) {
@@ -1546,6 +1547,18 @@ export function createApiClient({
      */
     recordSearchOpen: (body: SearchOpenBody) =>
       request<unknown>(SEARCH_OPENED_PATH, { method: 'POST', body: JSON.stringify(body) }, { auth: true }),
+    /**
+     * Views of posts seen large outside the feed (the post page, a reel
+     * opened from a profile or search), up to 25 at a time, sent with the
+     * session's token so each counts under its account; answered 204 with no
+     * body. Home's cards and the feed's reel need no call: their impressions
+     * already count. Unused until the app draws counts (post view counts,
+     * step 3).
+     */
+    recordPostViews: (body: {
+      views: Array<{ postId: string; surface: 'feed' | 'post-page' | 'reel' }>;
+    }) =>
+      request<unknown>('/api/showcase/views', { method: 'POST', body: JSON.stringify(body) }, { auth: true }),
     recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
       request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
         method: 'POST',

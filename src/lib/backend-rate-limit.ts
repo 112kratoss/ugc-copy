@@ -447,6 +447,25 @@ export const SHOWCASE_FEED_EVENT_NETWORK_ADMISSION_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// POST /api/showcase/views (post-views-route-adapter-service.ts), per account.
+// A batch holds up to 25 views and an account adds at most one a post a day,
+// so this bounds the work, not the count.
+export const POST_VIEW_RATE_LIMIT = {
+  scope: 'post-views:record',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+// The same route before parsing or authentication, keyed on the network, as
+// the feed events' admission is: coarse, because many viewers share an
+// address. A guest's views are held per network by the database as well (20
+// guests a post a day).
+export const POST_VIEW_NETWORK_ADMISSION_RATE_LIMIT = {
+  scope: 'post-views:network-admission',
+  limit: 3_000,
+  windowSeconds: 10 * 60,
+} as const;
+
 export const SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT = {
   scope: 'showcase-feed:for-you-read',
   limit: 60,

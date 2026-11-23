@@ -66,6 +66,8 @@ export interface CreatorProfileStats {
   publicCreations: number;
   totalSaves: number;
   totalRemixes: number;
+  /** Summed view_count of the posts the grid shows; left out by the fallback read. */
+  totalViews?: number;
   unlocks: number;
   totalUnlockSales: number;
   toolsUsed: Array<{ slug: string; label: string; count: number }>;
@@ -186,6 +188,7 @@ function normalizeCreatorPostRow(
     category,
     post_format: postFormat,
     save_count: typeof row.save_count === 'number' ? row.save_count : 0,
+    ...(typeof row.view_count === 'number' ? { view_count: row.view_count } : {}),
     remix_count: typeof row.remix_count === 'number' ? row.remix_count : 0,
     created_at: asNullableString(row.created_at) ?? new Date(0).toISOString(),
     user_id: profileId,
@@ -221,6 +224,8 @@ async function fetchCreatorPostRows({
   let includeTextColumns = mode === 'page';
   // The post's own "Allow remixes" (owner, 2026-11-05), which closes the card's Remix.
   let includeRemixesAllowed = mode === 'page';
+  // A database from before the view counts (20261123070741) has no view_count.
+  let includeViewCount = mode === 'page';
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const columns = mode === 'page'
@@ -234,6 +239,7 @@ async function fetchCreatorPostRows({
           'category',
           includeTextColumns ? 'post_format' : null,
           'save_count',
+          includeViewCount ? 'view_count' : null,
           'remix_count',
           'created_at',
           'generation_id',
@@ -300,6 +306,11 @@ async function fetchCreatorPostRows({
     // A database from before the column: every post allows remixes, as they all did.
     if (includeRemixesAllowed && result.error?.code === '42703' && /remixes_allowed/.test(`${result.error.message ?? ''}`)) {
       includeRemixesAllowed = false;
+      shouldRetry = true;
+    }
+    // A database from before the view counts: the cards carry no viewCount.
+    if (includeViewCount && result.error?.code === '42703' && /view_count/.test(`${result.error.message ?? ''}`)) {
+      includeViewCount = false;
       shouldRetry = true;
     }
     if (shouldRetry) continue;
@@ -496,6 +507,7 @@ async function loadCreatorStats(
     publicCreations: nonNegativeNumber(record.publicCreations),
     totalSaves: nonNegativeNumber(record.totalSaves),
     totalRemixes: nonNegativeNumber(record.totalRemixes),
+    ...(typeof record.totalViews === 'number' ? { totalViews: nonNegativeNumber(record.totalViews) } : {}),
     unlocks: nonNegativeNumber(record.unlocks),
     totalUnlockSales: nonNegativeNumber(record.totalUnlockSales),
     toolsUsed,

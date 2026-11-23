@@ -384,6 +384,15 @@ describe('collectBackendHealth', () => {
             error_message: null,
           },
           {
+            job_name: 'post-view-counts',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
+            error_message: null,
+          },
+          {
             job_name: 'generation-completions',
             status: 'succeeded',
             started_at: '2026-06-21T09:58:00.000Z',
@@ -433,8 +442,8 @@ describe('collectBackendHealth', () => {
       cadenceMinutes: 10,
       dailyInvocations: 144,
       dailyInvocationBudget: 456,
-      logicalDailyInvocations: 1183,
-      coveredJobCount: 17,
+      logicalDailyInvocations: 1327,
+      coveredJobCount: 18,
       coveredJobs: expect.arrayContaining([
         expect.objectContaining({
           name: 'account-deletion-resweeps',
@@ -483,7 +492,7 @@ describe('collectBackendHealth', () => {
         }),
       ]),
     });
-    expect(health.jobs).toHaveLength(17);
+    expect(health.jobs).toHaveLength(18);
     // Every six hours inside the shared tick: four logical runs a day, no cron entry.
     expect(health.jobs.find((job) => job.name === 'recipe-copy-sweep')).toMatchObject({
       status: 'ok',
@@ -1266,6 +1275,15 @@ describe('collectBackendHealth', () => {
             finished_at: '2026-06-21T09:50:01.000Z',
             duration_ms: 1000,
             skip_reason: 'no_posts_pending_search_embedding',
+            error_message: null,
+          },
+          {
+            job_name: 'post-view-counts',
+            status: 'succeeded',
+            started_at: '2026-06-21T09:50:00.000Z',
+            finished_at: '2026-06-21T09:50:01.000Z',
+            duration_ms: 1000,
+            skip_reason: null,
             error_message: null,
           },
           {

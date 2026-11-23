@@ -264,6 +264,10 @@ const PUBLIC_ROUTES = [
   '/api/search/opened',
   '/api/showcase/feed',
   '/api/showcase/feed/events',
+  // Views of posts, admitted as the feed's events are: a token only counts
+  // the view under its account (and keys the rate limit on it); a guest is
+  // counted by its feed cookie or installation id, held to its network.
+  '/api/showcase/views',
   // Whether a lane has a post newer than the one a client holds: no identity
   // is read, and every caller gets the same cacheable answer.
   '/api/showcase/feed/newest',
@@ -313,6 +317,7 @@ const SERVICE_ROUTES = [
   '/api/cron/media-upload-reclaim',
   '/api/cron/mobile-push-receipts',
   '/api/cron/operational-data-retention',
+  '/api/cron/post-view-counts',
   '/api/cron/recipe-copy-sweep',
   '/api/cron/referral-rewards',
   '/api/cron/search-dictionary',

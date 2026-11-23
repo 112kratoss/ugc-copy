@@ -29,6 +29,7 @@ import { hasQueuedProviderSubmissions } from '@/lib/generation-submission-queue-
 import { hasFeedEmbeddingWork, runFeedEmbeddingJob } from '@/lib/feed-embeddings';
 import { maintainFeedPersonalization } from '@/lib/feed-maintenance';
 import { pruneOperationalBackendData } from '@/lib/operational-data-retention';
+import { rollupPostViews } from '@/lib/post-view-counts';
 import { sweepRecipeFileCopies } from '@/lib/recipe-copy-sweep';
 import { rebuildSearchDictionary } from '@/lib/search-dictionary';
 import { hasSearchEmbeddingWork, runSearchEmbeddingJob } from '@/lib/search-embeddings';
@@ -645,6 +646,30 @@ export function runRecipeCopySweepBackendJob(options: {
     // The candidates are the run's own read; a run that finds none reports zeros.
     hasWork: async () => true,
     run: (client, context) => sweepRecipeFileCopies(client, { now: new Date(context.startedAtMs) }),
+  });
+}
+
+export function runPostViewCountsBackendJob(options: {
+  requestId?: string;
+  startedAtMs?: number;
+  serviceClient?: SupabaseClient;
+  triggerRoute?: string;
+} = {}) {
+  const job = BACKEND_JOBS_BY_NAME['post-view-counts'];
+  return runManagedBackendJob({
+    ...options,
+    job,
+    messages: {
+      started: 'post_view_counts_started',
+      skippedNoWork: 'post_view_counts_skipped_no_work',
+      skippedLocked: 'post_view_counts_skipped',
+      completed: 'post_view_counts_completed',
+      failed: 'post_view_counts_failed',
+    },
+    // The rollup's own call is the cheapest check: with nothing to count it
+    // reads one index and reports zeros.
+    hasWork: async () => true,
+    run: (client, context) => rollupPostViews(client, { now: new Date(context.startedAtMs) }),
   });
 }
 

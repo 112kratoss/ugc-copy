@@ -45,7 +45,7 @@ export type AgentPostView = {
   state: AgentPostState;
   isNsfw: boolean;
   remixesAllowed: boolean;
-  counts: { saves: number; comments: number; remixes: number; shares: number };
+  counts: { saves: number; comments: number; remixes: number; shares: number; views: number };
   createdAt: string | null;
   isOwn: boolean;
   resource: AgentPostResource;
@@ -74,13 +74,14 @@ type PostRow = {
   is_nsfw: boolean | null;
   remixes_allowed: boolean | null;
   save_count: number | null;
+  view_count?: number | null;
   comment_count: number | null;
   remix_count: number | null;
   share_count: number | null;
   created_at: string | null;
 };
 
-const POST_SELECT = 'id, user_id, generation_id, deleted_generation_id, source_kind, post_format, title, description, body, category, visibility, review_status, archived_at, tombstoned_at, is_nsfw, remixes_allowed, save_count, comment_count, remix_count, share_count, created_at';
+const POST_SELECT = 'id, user_id, generation_id, deleted_generation_id, source_kind, post_format, title, description, body, category, visibility, review_status, archived_at, tombstoned_at, is_nsfw, remixes_allowed, save_count, view_count, comment_count, remix_count, share_count, created_at';
 
 /** The resource's row, by these four columns alone: none of them is anything it holds. */
 const RESOURCE_SELECT = 'access_mode, price_usd_cents, status, retired_at';
@@ -153,6 +154,7 @@ export function toAgentPostView(row: PostRow, viewerUserId: string, resource: Re
       comments: count(row.comment_count),
       remixes: count(row.remix_count),
       shares: count(row.share_count),
+      views: count(row.view_count ?? null),
     },
     createdAt: row.created_at,
     isOwn: row.user_id === viewerUserId,

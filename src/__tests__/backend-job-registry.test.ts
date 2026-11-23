@@ -96,6 +96,7 @@ describe('backend job registry', () => {
       'media-upload-reclaim',
       'mobile-push-receipts',
       'operational-data-retention',
+      'post-view-counts',
       'recipe-copy-sweep',
       'referral-reward-reconciliation',
       'search-dictionary',
@@ -122,6 +123,8 @@ describe('backend job registry', () => {
         'search-dictionary': 60,
         // search-embeddings bounds its run as feed-embeddings does: a 45 s request budget.
         'search-embeddings': 120,
+        // post-view-counts: a few short SQL calls within a 30 s budget.
+        'post-view-counts': 60,
       };
       expect(job.maxDurationSeconds).toBe(boundedDurations[job.name] ?? 300);
       expect(job.maxDurationSeconds).toBeLessThanOrEqual(BACKEND_JOB_SCHEDULER.maxDurationSeconds);
@@ -150,8 +153,9 @@ describe('backend job registry', () => {
     // rebuild every hour (+24/day), and search-embeddings every ten minutes
     // (+144/day), skipped after one read when nothing waits. Both the Kie check and
     // the alert push (48/day) counted being configured as work and ran on all
-    // 144 ticks until 2026-11-04 (1,231 runs a day then).
-    expect(logicalDailyRuns).toBe(1183);
+    // 144 ticks until 2026-11-04 (1,231 runs a day then). The post view counts
+    // run every ten minutes too (+144/day, 2026-11-23).
+    expect(logicalDailyRuns).toBe(1327);
     expect(BACKEND_JOB_SCHEDULER.dailyInvocations).toBe(144);
     // The budget bounds real Vercel cron invocations, not logical job runs, so
     // it has to be measured across every entry now that F14 added two. Checking
@@ -179,6 +183,7 @@ describe('backend job registry', () => {
       'backend-alert-delivery',
       'feed-embeddings',
       'mobile-push-receipts',
+      'post-view-counts',
       'search-dictionary',
       'search-embeddings',
       'workflow-run-steps',
@@ -188,6 +193,7 @@ describe('backend job registry', () => {
       'feed-embeddings',
       'kie-account-balance',
       'mobile-push-receipts',
+      'post-view-counts',
       'search-embeddings',
       'workflow-run-steps',
     ]);
@@ -196,6 +202,7 @@ describe('backend job registry', () => {
       'feed-embeddings',
       'feed-maintenance',
       'mobile-push-receipts',
+      'post-view-counts',
       'search-embeddings',
       'workflow-run-steps',
     ]);
@@ -204,6 +211,7 @@ describe('backend job registry', () => {
       'backend-alert-delivery',
       'feed-embeddings',
       'mobile-push-receipts',
+      'post-view-counts',
       'search-embeddings',
       'showcase-media-revocations',
       'workflow-run-steps',
@@ -212,6 +220,7 @@ describe('backend job registry', () => {
       'account-deletion-resweeps',
       'feed-embeddings',
       'mobile-push-receipts',
+      'post-view-counts',
       'referral-reward-reconciliation',
       'search-embeddings',
       'workflow-run-steps',
@@ -254,6 +263,7 @@ describe('backend job registry', () => {
       'account-deletion-resweeps',
       'feed-embeddings',
       'mobile-push-receipts',
+      'post-view-counts',
       'search-embeddings',
       'workflow-run-steps',
     ]);

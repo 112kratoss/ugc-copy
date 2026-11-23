@@ -10,7 +10,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(21);
+select plan(22);
 
 -- People (each id has its own first octet: handle_new_user builds a fallback
 -- username from the first eight characters, and usernames are unique): the
@@ -75,6 +75,19 @@ values
 -- Moderation flags the fourth post after its recipe went on sale.
 update public.posts set review_status = 'flagged'
 where id = 'c2230000-0000-4000-8000-000000000004'::uuid;
+
+-- Views, which rollup_post_views writes in production.
+update public.posts set view_count = 4 where id = 'c2230000-0000-4000-8000-000000000001'::uuid;
+update public.posts set view_count = 6 where id = 'c2230000-0000-4000-8000-000000000002'::uuid;
+update public.posts set view_count = 1000
+where id in (
+  'c2230000-0000-4000-8000-000000000004'::uuid,
+  'c2230000-0000-4000-8000-000000000005'::uuid,
+  'c2230000-0000-4000-8000-000000000006'::uuid,
+  'c2230000-0000-4000-8000-000000000007'::uuid,
+  'c2230000-0000-4000-8000-000000000008'::uuid,
+  'c2230000-0000-4000-8000-000000000009'::uuid
+);
 select is(
   (select status from public.post_resource_bundles where id = 'c2240000-0000-4000-8000-000000000004'::uuid),
   'published',
@@ -97,6 +110,11 @@ select is(
   'remixes are summed over the counted posts only'
 );
 select is(
+  (public.get_creator_profile_stats('c2210001-0000-4000-8000-000000000001'::uuid) ->> 'totalViews')::int,
+  10,
+  'views are summed over the counted posts only'
+);
+select is(
   (public.get_creator_profile_stats('c2210001-0000-4000-8000-000000000001'::uuid) ->> 'unlocks')::int,
   1,
   'recipes: only a published bundle counts; an in-app post with a generation and no bundle does not'
@@ -113,12 +131,12 @@ select is(
 );
 select is(
   public.get_creator_profile_stats('c2210002-0000-4000-8000-000000000002'::uuid),
-  '{"publicCreations": 0, "totalSaves": 0, "totalRemixes": 0, "unlocks": 0, "totalUnlockSales": 0, "toolsUsed": []}'::jsonb,
+  '{"publicCreations": 0, "totalSaves": 0, "totalRemixes": 0, "totalViews": 0, "unlocks": 0, "totalUnlockSales": 0, "toolsUsed": []}'::jsonb,
   'a creator with no posts has zeros and an empty tool list, not nulls'
 );
 select is(
   public.get_creator_profile_stats('c2290000-0000-4000-8000-000000000000'::uuid),
-  '{"publicCreations": 0, "totalSaves": 0, "totalRemixes": 0, "unlocks": 0, "totalUnlockSales": 0, "toolsUsed": []}'::jsonb,
+  '{"publicCreations": 0, "totalSaves": 0, "totalRemixes": 0, "totalViews": 0, "unlocks": 0, "totalUnlockSales": 0, "toolsUsed": []}'::jsonb,
   'an unknown id is all zeros'
 );
 

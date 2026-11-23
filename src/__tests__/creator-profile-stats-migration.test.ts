@@ -6,8 +6,21 @@ import { describe, expect, it } from 'vitest';
 const migrationsDir = path.join(process.cwd(), 'supabase/migrations');
 const migrationFile = '20261014145716_creator_profile_stats_match_grid.sql';
 
+/** The migrations that define the function, oldest first. */
+async function definingFiles() {
+  const files = (await readdir(migrationsDir)).filter((file) => file.endsWith('.sql')).sort();
+  const definitions: string[] = [];
+  for (const file of files) {
+    const sql = await readFile(path.join(migrationsDir, file), 'utf8');
+    if (sql.includes('FUNCTION public.get_creator_profile_stats(')) definitions.push(file);
+  }
+  return definitions;
+}
+
+/** The newest definition: the grid's rules must hold in whichever migration last re-created it. */
 async function readFunctionBody() {
-  const sql = await readFile(path.join(migrationsDir, migrationFile), 'utf8');
+  const newest = (await definingFiles()).at(-1)!;
+  const sql = await readFile(path.join(migrationsDir, newest), 'utf8');
   const start = sql.indexOf('CREATE OR REPLACE FUNCTION public.get_creator_profile_stats');
   return { sql, body: sql.slice(start, sql.indexOf('$$;', start)) };
 }
@@ -35,14 +48,10 @@ describe('creator profile stats migration', () => {
     expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.get_creator_profile_stats(uuid) TO service_role;');
   });
 
-  it('is the newest definition of the function', async () => {
-    const files = (await readdir(migrationsDir)).filter((file) => file.endsWith('.sql')).sort();
-    const definitions: string[] = [];
-    for (const file of files) {
-      const sql = await readFile(path.join(migrationsDir, file), 'utf8');
-      if (sql.includes('FUNCTION public.get_creator_profile_stats(')) definitions.push(file);
-    }
-
-    expect(definitions.at(-1)).toBe(migrationFile);
+  it('is defined by the grid fix or a later migration, which the rules above are read from', async () => {
+    const definitions = await definingFiles();
+    expect(definitions).toContain(migrationFile);
+    // 20261123070740 (post view counts) re-created it to add totalViews.
+    expect(definitions.at(-1)! >= migrationFile).toBe(true);
   });
 });

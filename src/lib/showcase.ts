@@ -154,6 +154,12 @@ export interface ShowcaseFeedItem {
     creationMode?: 'motion' | null;
     postFormat: ShowcasePostFormat;
     saveCount: number;
+    /**
+     * Lifetime views: one per viewer per UTC day while the post was public,
+     * never its creator's own (migration 20261123070740). Left out where the
+     * read carries none (a legacy fallback read).
+     */
+    viewCount?: number;
     remixCount: number;
     commentCount: number;
     createdAt: string;

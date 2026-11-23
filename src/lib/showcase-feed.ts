@@ -104,6 +104,8 @@ export interface PostRow {
   creation_mode?: 'motion' | null;
   post_format: ShowcasePostFormat;
   save_count: number | null;
+  /** Lifetime views; the legacy fallback reads leave it out. */
+  view_count?: number | null;
   remix_count: number | null;
   comment_count?: number | null;
   created_at: string;
@@ -221,7 +223,7 @@ async function fetchPostRows(
   const adminSupabase = createServiceClient();
   let query = adminSupabase
     .from('posts')
-    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, view_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('visibility', 'public')
     .is('archived_at', null);
 
@@ -263,7 +265,7 @@ async function fetchPostRows(
 
   const result = await query.range(offset, offset + limit - 1);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed|view_count/))) {
     if (category === 'text') {
       return [];
     }
@@ -328,12 +330,12 @@ async function fetchPostRowsByIds(
 
   const result = await adminSupabase
     .from('posts')
-    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, output_url, showcase_asset_path, prompt, title, body, category, creation_mode, post_format, save_count, view_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .in('id', postIds)
     .eq('visibility', 'public')
     .is('archived_at', null);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed|view_count/))) {
     const legacyResult = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
@@ -924,6 +926,7 @@ export async function resolvePostRowsToFeedItems(
         creationMode: post.creation_mode ?? ((post.category as string) === 'motion' ? 'motion' : null),
         postFormat: post.post_format,
         saveCount: post.save_count || 0,
+        ...(post.view_count === undefined ? {} : { viewCount: Math.max(0, Number(post.view_count) || 0) }),
         remixCount: post.remix_count || 0,
         commentCount: post.comment_count || 0,
         createdAt: post.created_at,
@@ -2015,7 +2018,7 @@ export async function getShowcaseFeedItemById(options: {
   const adminSupabase = createServiceClient();
   let result = await adminSupabase
     .from('posts')
-    .select(`id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
+    .select(`id, output_url, showcase_asset_path, prompt, title, description, body, category, creation_mode, post_format, save_count, view_count, remix_count, comment_count, created_at, user_id, source_kind, source_tool, source_tool_slug, review_status, generation_id, visibility, remixes_allowed, ${POST_REMIX_CREDIT_COLUMNS}`)
     .eq('id', postId)
     // Unlisted means "anyone with the link": the web post page reads it, and
     // the app receives the same share links, so the by-id read does too.
@@ -2023,7 +2026,7 @@ export async function getShowcaseFeedItemById(options: {
     .is('archived_at', null)
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed|view_count/))) {
     result = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
@@ -2039,6 +2042,8 @@ export async function getShowcaseFeedItemById(options: {
           ...(result.data as LegacyPostRow),
           description: (result.data as { description?: string | null }).description ?? null,
           body: null,
+          // A legacy read has no view count: the item leaves viewCount out.
+          view_count: undefined,
           comment_count: null,
           creation_mode: null,
           post_format: normalizeLegacyPostFormat((result.data as LegacyPostRow).category),

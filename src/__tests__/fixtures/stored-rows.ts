@@ -16,8 +16,9 @@ const FAILURE = Symbol('database error');
  * that never set one: the default. A row that sets one keeps its own.
  */
 const COLUMN_DEFAULTS: Record<string, Row> = {
-  // 20261105152921: the post's own "Allow remixes", on for every post.
-  posts: { remixes_allowed: true },
+  // 20261105152921: the post's own "Allow remixes", on for every post; 20261123070740: its
+  // lifetime views, none until counted.
+  posts: { remixes_allowed: true, view_count: 0 },
   // A run's source creation: null for a run that remixed or re-ran nothing.
   generations: { source_generation_id: null },
 };
