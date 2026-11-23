@@ -14,11 +14,30 @@ const getShowcaseFeedPageMock = vi.fn(async (_options?: unknown) => {
   };
 });
 
+// One account in both mocks: the token admission verifies and the user the handler's own
+// sign-in check reads (no assertion key is set here), so the read is counted once.
+const USER_ID = '11111111-1111-4111-8111-111111111111';
+
 const getUserMock = vi.fn(async () => ({
   data: {
-    user: { id: 'user-1' },
+    user: { id: USER_ID },
   },
 }));
+
+const limiterRpcMock = vi.fn(async (_name: string, _args?: unknown) => {
+  void _name;
+  void _args;
+  return {
+    data: {
+      allowed: true,
+      limit: 60,
+      remaining: 59,
+      retryAfterSeconds: 0,
+      resetAt: new Date().toISOString(),
+    },
+    error: null,
+  };
+});
 
 // The actual route now checks fresh admission before the adapter. Keep this
 // cache/payload suite isolated from the network; rejection and assertion reuse
@@ -27,7 +46,7 @@ vi.mock('@supabase/supabase-js', async (original) => ({
   ...await original<typeof import('@supabase/supabase-js')>(),
   createClient: () => ({
     auth: { getClaims: async () => ({
-      data: { claims: { sub: '11111111-1111-4111-8111-111111111111', role: 'authenticated' } },
+      data: { claims: { sub: USER_ID, role: 'authenticated' } },
       error: null,
     }) },
     rpc: async () => ({
@@ -43,16 +62,7 @@ vi.mock('@/lib/showcase-feed', () => ({
 
 vi.mock('@/lib/server-helpers', () => ({
   createServiceClient: () => ({
-    rpc: async () => ({
-      data: {
-        allowed: true,
-        limit: 60,
-        remaining: 59,
-        retryAfterSeconds: 0,
-        resetAt: new Date().toISOString(),
-      },
-      error: null,
-    }),
+    rpc: (name: string, args?: unknown) => limiterRpcMock(name, args),
   }),
   createUserClient: () => ({
     auth: {
@@ -66,6 +76,7 @@ describe('/api/showcase/feed route', () => {
     vi.resetModules();
     getShowcaseFeedPageMock.mockClear();
     getUserMock.mockClear();
+    limiterRpcMock.mockClear();
     getShowcaseFeedPageMock.mockResolvedValue({
       items: [],
       pageInfo: {
@@ -77,7 +88,7 @@ describe('/api/showcase/feed route', () => {
     });
     getUserMock.mockResolvedValue({
       data: {
-        user: { id: 'user-1' },
+        user: { id: USER_ID },
       },
     });
   });
@@ -152,12 +163,19 @@ describe('/api/showcase/feed route', () => {
     expect(response.headers.get('x-request-id')).toBe('feed-auth-1');
     expect(response.headers.get('Authorization')).toBeNull();
     expect(getUserMock).toHaveBeenCalledTimes(1);
+    // Counted once: the count started beside admission, read by the handler and kept.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(limiterRpcMock.mock.calls.map(([name]) => name)).toEqual(['check_backend_rate_limit']);
+    expect(limiterRpcMock).toHaveBeenCalledWith('check_backend_rate_limit', expect.objectContaining({
+      p_scope: 'showcase-feed:for-you-read',
+      p_subject_key: USER_ID,
+    }));
     expect(getShowcaseFeedPageMock).toHaveBeenCalledWith({
       category: 'all',
       sort: 'for-you',
       offset: 0,
       limit: 12,
-      viewerUserId: 'user-1',
+      viewerUserId: USER_ID,
       anonymousKeyHash: null,
       cursor: null,
       requestId: 'feed-auth-1',

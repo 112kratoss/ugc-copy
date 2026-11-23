@@ -736,6 +736,34 @@ export async function enforceBackendRateLimit(
   return state;
 }
 
+/**
+ * Give back one count `enforceBackendRateLimit` made, in the window it was made in (the state's
+ * `resetAt` less the window), so a count made just before a window turned never comes out of the
+ * next one. For a request counted before it was admitted and then refused
+ * (`showcase-feed-route-adapter-service.ts`). True when a count was given back; false when that
+ * window had none left to give. Never takes a count below zero.
+ */
+export async function refundBackendRateLimit(
+  client: SupabaseRpcClient,
+  options: { scope: string; key: string; windowSeconds: number; resetAt: string },
+): Promise<boolean> {
+  if (!options.scope.trim()) throw new Error('Rate limit scope is required');
+  if (!options.key.trim()) throw new Error('Rate limit key is required');
+  if (!Number.isInteger(options.windowSeconds) || options.windowSeconds < 1) {
+    throw new Error('Rate limit window must be a positive integer');
+  }
+  const resetAtMs = Date.parse(options.resetAt);
+  if (!Number.isFinite(resetAtMs)) throw new Error('Rate limit reset time is required');
+
+  const result = await client.rpc('refund_backend_rate_limit', {
+    p_scope: options.scope,
+    p_subject_key: options.key,
+    p_window_start: new Date(resetAtMs - options.windowSeconds * 1000).toISOString(),
+  });
+  if (result.error) throw result.error;
+  return result.data === true;
+}
+
 export function createBackendRateLimitResponse(error: BackendRateLimitError) {
   return NextResponse.json({
     error: error.message,

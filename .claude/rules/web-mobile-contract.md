@@ -50,7 +50,25 @@ methods of those exact paths, and every other path keeps proxy admission. For
 the API function's configured Mumbai region: the feed handler freshly verifies
 claims, session, ban and lifecycle state before calling its adapter, then
 supplies a new assertion for route reuse, and feed performance reports
-`route-identity`, `route-verify`, `route-lifecycle` for this check. For
+`route-identity`, `route-verify`, `route-lifecycle` for this check. A
+signed-in feed read is counted against its read limit beside that lifecycle
+round trip (2026-11-23): once the token is verified locally, the route export
+starts `startShowcaseFeedReadLimit` from its subject (the scope, limit, window and key
+the handler would use, and nothing for a read-ahead the handler refuses before
+counting), and the handler reads that count instead of making its own, so the
+read waits for the slower of the two (`rate-limit` is the count's own time,
+`rate-limit-wait` what the round trip did not already cover). An admission
+refusal answers at once, exactly as before, and never reads the count; a count
+no handler claimed (an admission refusal, or a handler that answered before its
+limit step) is given back after the response, best effort, through `after()`
+and `refund_backend_rate_limit` (migration 20261123182749, service role only,
+the window the count was made in, at most once, never below zero). A refused
+read therefore holds one count of its account's window only between the commit
+of its count and the commit of its refund; a refund that fails is logged and
+leaves the count standing, so the rule errs toward counting. The hook is told
+the verified subject alone, never the claims. The proxy-admitted routes keep admission and their limits one after the other:
+each adapter counts its own limit, with its own key and at its own point,
+after the proxy's admission has answered. For
 `/api/mcp` and its posting-only form `/api/mcp/posts` (every method) the MCP adapter runs it itself, because its refusals
 differ from the proxy's: a missing or invalid token answers 401 with the
 `WWW-Authenticate` challenge MCP clients start their OAuth flow from, and a
