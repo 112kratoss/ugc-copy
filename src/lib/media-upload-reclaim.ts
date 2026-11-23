@@ -40,7 +40,10 @@ export type UploadIntentConsumer =
   | 'post_publish'
   | 'post_update'
   | 'generation_input'
-  | 'generation_restore';
+  | 'generation_restore'
+  // A photo sent to support: copied into support_attachments and the staged
+  // object removed in the same request (src/lib/support-photos.ts).
+  | 'support_message';
 
 /**
  * An intent whose staged object has not been deleted yet.

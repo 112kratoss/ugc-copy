@@ -16,6 +16,11 @@ import {
   fetchWithProviderTimeout,
 } from '@/lib/provider-fetch';
 
+import {
+  SUPPORT_CONVERSATION_PATH,
+  supportReplyAlertWords,
+} from '../../ugc-mobile/lib/support-conversation-policy/support-conversation-policy';
+
 type MobilePushPlatform = 'ios' | 'android';
 export type MobileNotificationCategory = 'generation' | 'commerce' | 'social' | 'system';
 export type MobileNotificationType =
@@ -32,7 +37,8 @@ export type MobileNotificationType =
   | 'creator_followed'
   | 'post_saved'
   | 'post_remixed'
-  | 'post_shared';
+  | 'post_shared'
+  | 'support_reply';
 
 export interface NormalizedMobilePushTokenPayload {
   expoPushToken: string;
@@ -213,7 +219,8 @@ function asNotificationType(value: unknown): MobileNotificationType {
     type === 'creator_followed' ||
     type === 'post_saved' ||
     type === 'post_remixed' ||
-    type === 'post_shared'
+    type === 'post_shared' ||
+    type === 'support_reply'
   ) {
     return type;
   }
@@ -420,6 +427,7 @@ export function buildMobileNotificationDeepLink(target:
   | { kind: 'marketplaceResource'; resourceId: string }
   | { kind: 'creatorProfile'; username: string }
   | { kind: 'sellerDashboard' }
+  | { kind: 'support' }
   | { kind: 'notifications' }
 ) {
   if (target.kind === 'generation') {
@@ -465,6 +473,12 @@ export function buildMobileNotificationDeepLink(target:
     // The app's Your Sales, where the listings and the payout balance are. The
     // web's seller page is /marketplace/sell (`resolveWebNotificationPath`).
     return '/seller-dashboard';
+  }
+
+  if (target.kind === 'support') {
+    // The account's conversation with support, on both clients. An app from
+    // before the screen falls back to Alerts, where the reply's row is read.
+    return SUPPORT_CONVERSATION_PATH;
   }
 
   return '/studio';
@@ -2277,6 +2291,72 @@ export async function notifyCreatorPayoutResolved(
     objectId: params.requestId,
     dedupeKey: `creator-payout:${params.requestId}:${params.status}`,
   });
+}
+
+/**
+ * The operator answered the account's support conversation. One alert per
+ * reply, pushed under `system`, which no category switch turns off: an answer
+ * the account asked for is never muted with the social alerts.
+ */
+export async function notifySupportReplied(
+  adminSupabase: SupabaseClient,
+  params: {
+    userId: string;
+    conversationId: string;
+    messageId: string;
+    /** The reply as stored (a photo's caption, or empty); the alert carries its start. */
+    replyBody: string;
+    /** The reply is a photo: the alert says "📷 Photo", or "📷" and the caption. */
+    hasPhoto?: boolean;
+  },
+) {
+  return createMobileNotificationSafely({
+    adminSupabase,
+    userId: params.userId,
+    type: 'support_reply',
+    category: 'system',
+    ...supportReplyAlertWords(params.replyBody, params.hasPhoto === true),
+    deepLink: buildMobileNotificationDeepLink({ kind: 'support' }),
+    objectType: 'support_conversation',
+    objectId: params.conversationId,
+    dedupeKey: supportReplyNotificationKey(params.messageId),
+  });
+}
+
+/** The key a support reply's alert is written under: one alert per reply. */
+export function supportReplyNotificationKey(messageId: string) {
+  return `support-reply:${messageId}`;
+}
+
+/**
+ * Support deleted its reply for everyone: its alert goes from the account's
+ * Alerts too, which would otherwise keep the reply's first words. A push
+ * already shown on a phone stays there; nothing can call it back.
+ */
+export async function withdrawSupportReplyNotification(
+  adminSupabase: SupabaseClient,
+  params: { userId: string; messageId: string },
+) {
+  const { error } = await adminSupabase
+    .from('mobile_notifications')
+    .delete()
+    .eq('user_id', params.userId)
+    .eq('dedupe_key', supportReplyNotificationKey(params.messageId));
+  if (error) throw new MobileNotificationError('Failed to withdraw the support reply alert.', 500);
+}
+
+/** Support edited its reply: the alert says what the reply says now. */
+export async function rewordSupportReplyNotification(
+  adminSupabase: SupabaseClient,
+  params: { userId: string; messageId: string; replyBody: string; hasPhoto?: boolean },
+) {
+  const { title, body } = supportReplyAlertWords(params.replyBody, params.hasPhoto === true);
+  const { error } = await adminSupabase
+    .from('mobile_notifications')
+    .update({ title, body })
+    .eq('user_id', params.userId)
+    .eq('dedupe_key', supportReplyNotificationKey(params.messageId));
+  if (error) throw new MobileNotificationError('Failed to update the support reply alert.', 500);
 }
 
 export async function notifyCreatorFollowed(

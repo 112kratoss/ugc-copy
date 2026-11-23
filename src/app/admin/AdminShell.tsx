@@ -10,6 +10,7 @@ import {
   Gift,
   Images,
   LayoutDashboard,
+  LifeBuoy,
   LogOut,
   ShieldAlert,
   Users,
@@ -21,11 +22,14 @@ import { Text } from '@/components/DesignSystem';
 
 export type AdminNavBadges = {
   moderation?: number;
+  /** Support conversations waiting on a reply. */
+  support?: number;
 };
 
 const NAV_ITEMS = [
   { href: '/admin', label: 'Overview', icon: LayoutDashboard, exact: true },
   { href: '/admin/moderation', label: 'Moderation', icon: ShieldAlert, badgeKey: 'moderation' as const },
+  { href: '/admin/support', label: 'Support', icon: LifeBuoy, badgeKey: 'support' as const },
   { href: '/admin/users', label: 'Users & credits', icon: Users },
   { href: '/admin/revenue', label: 'Revenue', icon: BadgeIndianRupee },
   { href: '/admin/payouts', label: 'Payouts', icon: Wallet },

@@ -34,6 +34,20 @@ export interface ActionSheetAction {
   detail?: string;
 }
 
+/**
+ * A row of quick reactions above the choices, as a chat app shows on a
+ * message's long press (Message support, 2026-11-22). Choosing one answers the
+ * sheet.
+ */
+export interface ActionSheetReactions {
+  /** What a screen reader calls the row and each choice in it, e.g. "React". */
+  label: string;
+  options: readonly string[];
+  /** The reaction already chosen, drawn selected; choosing it again is the caller's toggle. */
+  selected: string | null;
+  onSelect: (option: string) => void;
+}
+
 export interface ActionSheetRequest {
   /** Short enough for one line — a long title truncates or forces a scroll. */
   title: string;
@@ -47,6 +61,8 @@ export interface ActionSheetRequest {
    */
   cancelLabel?: string;
   onCancel?: () => void;
+  /** Quick reactions drawn above the choices. Left out of the system-alert fallback. */
+  reactions?: ActionSheetReactions;
 }
 
 type Presenter = (request: ActionSheetRequest) => void;

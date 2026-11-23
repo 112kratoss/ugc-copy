@@ -293,6 +293,7 @@ describe('collectBackendCostReport', () => {
       'profiles',
       'template_inputs',
       'template_assets',
+      'support_attachments',
     ]);
   });
 

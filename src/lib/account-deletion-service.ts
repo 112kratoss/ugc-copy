@@ -20,7 +20,17 @@ const USER_PREFIX_BUCKETS = [
   'generation_inputs',
   'post_resource_files',
   'template_inputs',
+  // Help & support photos, under the account's folder whichever side sent them.
+  'support_attachments',
 ] as const;
+
+/**
+ * The buckets every manifest saved since 20261030151942 names. A deletion
+ * prepared before support photos (20261122150427) saved these eight, and its
+ * retries and resweeps read that manifest back: it is read still, and swept
+ * across every bucket known now.
+ */
+const SAVED_USER_PREFIX_BUCKETS = USER_PREFIX_BUCKETS.filter((bucket) => bucket !== 'support_attachments');
 
 const TEMPLATE_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -230,11 +240,12 @@ export function parseAccountDeletionStorageManifest(
   const canonicalTemplateAssetPrefixes = templateAssetPrefixes.map((prefix) =>
     parseCanonicalStorageObjectPath(prefix, { minimumSegments: 1 }));
 
+  const savedBuckets = new Set(rawUserPrefixBuckets);
   if (
     ownerUserIds.length === 0
     || ownerUserIds.some((userId) => !UUID_PATTERN.test(userId))
-    || rawUserPrefixBuckets.length !== USER_PREFIX_BUCKETS.length
     || rawUserPrefixBuckets.some((bucket) => !allowedBuckets.has(bucket))
+    || SAVED_USER_PREFIX_BUCKETS.some((bucket) => !savedBuckets.has(bucket))
     || canonicalShowcaseMediaPaths.some((storagePath) => !storagePath)
     || canonicalTemplateAssetPrefixes.some(
       (prefix) => !prefix || !TEMPLATE_ID_PATTERN.test(prefix),
@@ -245,8 +256,9 @@ export function parseAccountDeletionStorageManifest(
 
   return {
     ownerUserIds,
-    userPrefixBuckets:
-      rawUserPrefixBuckets as Array<(typeof USER_PREFIX_BUCKETS)[number]>,
+    // Every bucket known now: a manifest saved before a bucket was added is
+    // swept across it too, where its prefix is simply empty.
+    userPrefixBuckets: [...USER_PREFIX_BUCKETS],
     showcaseMediaPaths: canonicalShowcaseMediaPaths as string[],
     templateAssetPrefixes: canonicalTemplateAssetPrefixes as string[],
   };

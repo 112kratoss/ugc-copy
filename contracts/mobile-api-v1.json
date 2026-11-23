@@ -4522,6 +4522,7 @@
         "marketplaceResource": "/marketplace/resource-1",
         "creatorProfile": "/creators/batman",
         "sellerDashboard": "/seller-dashboard",
+        "support": "/support",
         "notifications": "/studio",
         "profile": "/profile",
         "invite": "/invite"
@@ -5550,6 +5551,489 @@
           "response": {
             "error": "Add the account details we should send the payout to.",
             "code": "INVALID_DETAILS"
+          }
+        }
+      }
+    },
+    "getSupportConversation": {
+      "method": "GET",
+      "path": "/api/support/conversation",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "conversation": {
+          "id": "6f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+          "status": "open",
+          "userLastReadAt": "2026-11-21T10:31:00.000Z",
+          "staffLastReadAt": "2026-11-21T10:29:00.000Z",
+          "userTyping": false,
+          "staffTyping": true
+        },
+        "messages": [
+          {
+            "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "author": "user",
+            "clientMessageId": "msg:1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "body": "My video failed but the credits did not come back.",
+            "createdAt": "2026-11-21T09:00:00.000Z",
+            "editedAt": null,
+            "deletedAt": null,
+            "replyTo": null,
+            "reactions": [
+              {
+                "author": "staff",
+                "emoji": "👍"
+              }
+            ],
+            "attachment": null
+          },
+          {
+            "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+            "author": "staff",
+            "clientMessageId": null,
+            "body": "Sorry about that. The 40 credits are back in your balance.",
+            "createdAt": "2026-11-21T10:30:00.000Z",
+            "editedAt": "2026-11-21T10:32:00.000Z",
+            "deletedAt": null,
+            "replyTo": {
+              "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+              "author": "user",
+              "body": "My video failed but the credits did not come back.",
+              "deleted": false,
+              "hasPhoto": false
+            },
+            "reactions": [],
+            "attachment": null
+          },
+          {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f",
+            "author": "user",
+            "clientMessageId": "msg:3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f",
+            "body": null,
+            "createdAt": "2026-11-21T10:31:00.000Z",
+            "editedAt": null,
+            "deletedAt": "2026-11-21T10:33:00.000Z",
+            "replyTo": null,
+            "reactions": [],
+            "attachment": null
+          }
+        ]
+      },
+      "responseVariants": {
+        "noConversationYet": {
+          "success": true,
+          "conversation": null,
+          "messages": []
+        },
+        "withPhotos": {
+          "success": true,
+          "conversation": {
+            "id": "6f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+            "status": "open",
+            "userLastReadAt": "2026-11-21T10:31:00.000Z",
+            "staffLastReadAt": "2026-11-21T10:29:00.000Z",
+            "userTyping": false,
+            "staffTyping": true
+          },
+          "messages": [
+            {
+              "id": "5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b",
+              "author": "user",
+              "clientMessageId": "msg:1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a",
+              "body": null,
+              "createdAt": "2026-11-21T11:20:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "replyTo": null,
+              "reactions": [],
+              "attachment": {
+                "kind": "image",
+                "previewUrl": "https://supabase.example/storage/v1/object/sign/support_attachments/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918.preview.webp?token=preview-token",
+                "url": "https://supabase.example/storage/v1/object/sign/support_attachments/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918.webp?token=full-token",
+                "width": 1080,
+                "height": 2340,
+                "thumbhash": "mxgKFYJ4h3d4eId3h3eAiHd4eAeHh3eA",
+                "expiresAt": "2026-11-21T14:20:00.000Z"
+              }
+            },
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-9b3c-5d6e7f8a9b0c",
+              "author": "staff",
+              "clientMessageId": null,
+              "body": "Here is where your credits show.",
+              "createdAt": "2026-11-21T11:25:00.000Z",
+              "editedAt": null,
+              "deletedAt": null,
+              "replyTo": {
+                "id": "5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b",
+                "author": "user",
+                "body": null,
+                "deleted": false,
+                "hasPhoto": true
+              },
+              "reactions": [],
+              "attachment": {
+                "kind": "image",
+                "previewUrl": "https://supabase.example/storage/v1/object/sign/support_attachments/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d.preview.webp?token=preview-token",
+                "url": "https://supabase.example/storage/v1/object/sign/support_attachments/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/8a7b6c5d-4e3f-4a2b-9c1d-0e9f8a7b6c5d.webp?token=full-token",
+                "width": 2560,
+                "height": 1600,
+                "thumbhash": null,
+                "expiresAt": "2026-11-21T14:20:00.000Z"
+              }
+            }
+          ]
+        }
+      },
+      "ordering": {
+        "messages": "Oldest first: the newest 200 messages of the conversation."
+      },
+      "receipts": "A message shows its author two ticks once the other side's read time (staffLastReadAt for the account's messages) is at or after its createdAt, and one before.",
+      "typing": "staffTyping is true for 8 seconds after support's latest typing ping; userTyping is the account's own, for the console.",
+      "polling": "An open thread reads this again every 3 s while something changed in the last minute, every 5 s for the next four (inside the 8 s a typing ping lasts), every 20 s after five quiet minutes, and not at all in the background.",
+      "deletedMessages": "A message deleted for everyone keeps its place with body null, deletedAt set and no reactions.",
+      "photos": "A message may carry one photo (attachment, null for none and once deleted), with its caption in body or body null. previewUrl is a 720 px WebP for the thread and url the picture at up to 2560 px for the full-screen view, both signed links to the private support_attachments bucket that last 3 hours (expiresAt); a link is null when its copy could not be signed, and the client then says the photo could not be loaded. width and height are the picture's, upright. Each read signs anew: a client keeps the links it drew while they have more than 15 minutes left. A quote of a photo says hasPhoto.",
+      "clientMessageIds": "clientMessageId is the id the account's own app sent a message under (null on support's messages, and on one sent without one): a message a read shows kept under the id of one the app still draws as on its way, or as not sent after a lost answer, is the thread's now, and the copy on its way goes."
+    },
+    "sendSupportMessage": {
+      "method": "POST",
+      "path": "/api/support/conversation",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "body": "Thank you, I can see them now.",
+        "clientMessageId": "msg:0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+        "replyToMessageId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+      },
+      "requestVariants": {
+        "photo": {
+          "body": "",
+          "clientMessageId": "msg:1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a",
+          "replyToMessageId": null,
+          "photo": {
+            "storagePath": "uploads/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d-screenshot.jpg"
+          }
+        }
+      },
+      "response": {
+        "success": true,
+        "message": {
+          "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
+          "author": "user",
+          "clientMessageId": "msg:0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+          "body": "Thank you, I can see them now.",
+          "createdAt": "2026-11-21T10:40:00.000Z",
+          "editedAt": null,
+          "deletedAt": null,
+          "replyTo": {
+            "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+            "author": "staff",
+            "body": "Sorry about that. The 40 credits are back in your balance.",
+            "deleted": false,
+            "hasPhoto": false
+          },
+          "reactions": [],
+          "attachment": null
+        },
+        "conversation": {
+          "id": "6f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+          "status": "open"
+        }
+      },
+      "responseVariants": {
+        "photo": {
+          "success": true,
+          "message": {
+            "id": "5e6f7a8b-9c0d-4e1f-8a2b-4c5d6e7f8a9b",
+            "author": "user",
+            "clientMessageId": "msg:1d2e3f4a-5b6c-4d7e-8f9a-0b1c2d3e4f5a",
+            "body": null,
+            "createdAt": "2026-11-21T11:20:00.000Z",
+            "editedAt": null,
+            "deletedAt": null,
+            "replyTo": null,
+            "reactions": [],
+            "attachment": {
+              "kind": "image",
+              "previewUrl": "https://supabase.example/storage/v1/object/sign/support_attachments/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918.preview.webp?token=preview-token",
+              "url": "https://supabase.example/storage/v1/object/sign/support_attachments/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/7f6e5d4c-3b2a-4190-8f7e-6d5c4b3a2918.webp?token=full-token",
+              "width": 1080,
+              "height": 2340,
+              "thumbhash": "mxgKFYJ4h3d4eId3h3eAiHd4eAeHh3eA",
+              "expiresAt": "2026-11-21T14:20:00.000Z"
+            }
+          },
+          "conversation": {
+            "id": "6f0c1d2e-3a4b-4c5d-8e9f-0a1b2c3d4e5f",
+            "status": "open"
+          }
+        }
+      },
+      "retry": "A send repeated with the same clientMessageId answers the message already kept, and adds nothing.",
+      "photos": "photo names a picture the account staged with POST /api/uploads/media/sign (kind image: JPEG, PNG, WebP or GIF, 25 MB at most) and POST /api/uploads/finalize, by the storagePath finalize answered, inside the account's own folder. The send claims it: the server re-encodes it upright as WebP without its metadata, keeps it with the message, and removes the staged copy. body is then its caption and may be empty. A retry with the same clientMessageId answers the message kept, though its staged photo is gone.",
+      "errors": {
+        "emptyMessage": {
+          "status": 400,
+          "response": {
+            "error": "Write a message first.",
+            "code": "EMPTY_MESSAGE"
+          }
+        },
+        "messageTooLong": {
+          "status": 400,
+          "response": {
+            "error": "That message is over 2,000 characters. Shorten it, or send it in two parts.",
+            "code": "MESSAGE_TOO_LONG"
+          }
+        },
+        "invalidClientMessageId": {
+          "status": 400,
+          "response": {
+            "error": "This message could not be sent. Try again.",
+            "code": "INVALID_CLIENT_MESSAGE_ID"
+          }
+        },
+        "replyNotFound": {
+          "status": 400,
+          "response": {
+            "error": "The message you replied to is no longer there.",
+            "code": "REPLY_NOT_FOUND"
+          }
+        },
+        "photoNotFound": {
+          "status": 409,
+          "response": {
+            "error": "That photo did not finish uploading. Choose it again.",
+            "code": "PHOTO_NOT_FOUND"
+          }
+        },
+        "photoUnreadable": {
+          "status": 400,
+          "response": {
+            "error": "That file could not be read as a photo. Send a JPEG, PNG, WebP or GIF.",
+            "code": "PHOTO_UNREADABLE"
+          }
+        },
+        "photoTooLarge": {
+          "status": 413,
+          "response": {
+            "error": "That photo is over 25 MB. Choose a smaller one.",
+            "code": "PHOTO_TOO_LARGE"
+          }
+        }
+      }
+    },
+    "markSupportConversationRead": {
+      "method": "POST",
+      "path": "/api/support/conversation/read",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "upToMessageId": "3c4d5e6f-7a8b-4c9d-8e0f-2a3b4c5d6e7f"
+      },
+      "response": {
+        "success": true,
+        "userLastReadAt": "2026-11-21T10:41:00.000Z",
+        "staffLastReadAt": "2026-11-21T10:29:00.000Z"
+      },
+      "when": "While the thread is on screen and support has written after userLastReadAt.",
+      "errors": {
+        "noConversation": {
+          "status": 404,
+          "response": {
+            "error": "This conversation no longer exists.",
+            "code": "CONVERSATION_NOT_FOUND"
+          }
+        }
+      },
+      "requestNote": "upToMessageId is the newest message the thread drew: the read time moves to that message's time (never back), so a message kept after the last read is not marked read unseen. An app from before 2026-11-23 sends no body, and reads the whole thread."
+    },
+    "setSupportTyping": {
+      "method": "POST",
+      "path": "/api/support/conversation/typing",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "typing": true
+      },
+      "response": {
+        "success": true
+      },
+      "when": "At most every 3 s while the composer's text changes, once a conversation exists; the server keeps it for 8 s and a send ends it."
+    },
+    "editSupportMessage": {
+      "method": "PATCH",
+      "path": "/api/support/messages/:messageId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "body": "Thank you, I can see all 40 now."
+      },
+      "response": {
+        "success": true,
+        "message": {
+          "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
+          "author": "user",
+          "clientMessageId": "msg:4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
+          "body": "Thank you, I can see all 40 now.",
+          "createdAt": "2026-11-21T10:40:00.000Z",
+          "editedAt": "2026-11-21T10:44:00.000Z",
+          "deletedAt": null,
+          "replyTo": {
+            "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+            "author": "staff",
+            "body": "Sorry about that. The 40 credits are back in your balance.",
+            "deleted": false,
+            "hasPhoto": false
+          },
+          "reactions": [],
+          "attachment": null
+        }
+      },
+      "window": "Only the account's own message, within 15 minutes of sending it.",
+      "errors": {
+        "editTooLate": {
+          "status": 409,
+          "response": {
+            "error": "A message can be edited for 15 minutes after it is sent.",
+            "code": "EDIT_TOO_LATE"
+          }
+        },
+        "notYourMessage": {
+          "status": 403,
+          "response": {
+            "error": "You can only change your own messages.",
+            "code": "NOT_YOUR_MESSAGE"
+          }
+        },
+        "messageDeleted": {
+          "status": 409,
+          "response": {
+            "error": "That message was deleted.",
+            "code": "MESSAGE_DELETED"
+          }
+        },
+        "messageNotFound": {
+          "status": 404,
+          "response": {
+            "error": "That message is no longer there.",
+            "code": "MESSAGE_NOT_FOUND"
+          }
+        }
+      }
+    },
+    "deleteSupportMessage": {
+      "method": "DELETE",
+      "path": "/api/support/messages/:messageId",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "response": {
+        "success": true,
+        "message": {
+          "id": "4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
+          "author": "user",
+          "clientMessageId": "msg:4d5e6f7a-8b9c-4d0e-9f1a-3b4c5d6e7f8a",
+          "body": null,
+          "createdAt": "2026-11-21T10:40:00.000Z",
+          "editedAt": null,
+          "deletedAt": "2026-11-21T10:45:00.000Z",
+          "replyTo": {
+            "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+            "author": "staff",
+            "body": "Sorry about that. The 40 credits are back in your balance.",
+            "deleted": false,
+            "hasPhoto": false
+          },
+          "reactions": [],
+          "attachment": null
+        }
+      },
+      "window": "Only the account's own message, within 48 hours of sending it. Deleting it again answers it as it is. A photo goes with the message: its copies are removed from Storage.",
+      "errors": {
+        "deleteTooLate": {
+          "status": 409,
+          "response": {
+            "error": "A message can be deleted for everyone for 48 hours after it is sent.",
+            "code": "DELETE_TOO_LATE"
+          }
+        },
+        "notYourMessage": {
+          "status": 403,
+          "response": {
+            "error": "You can only change your own messages.",
+            "code": "NOT_YOUR_MESSAGE"
+          }
+        },
+        "messageNotFound": {
+          "status": 404,
+          "response": {
+            "error": "That message is no longer there.",
+            "code": "MESSAGE_NOT_FOUND"
+          }
+        }
+      }
+    },
+    "reactToSupportMessage": {
+      "method": "POST",
+      "path": "/api/support/messages/:messageId/reaction",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "emoji": "🙏"
+      },
+      "requestVariants": {
+        "remove": {
+          "emoji": null
+        }
+      },
+      "response": {
+        "success": true,
+        "message": {
+          "id": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+          "author": "staff",
+          "clientMessageId": null,
+          "body": "Sorry about that. The 40 credits are back in your balance.",
+          "createdAt": "2026-11-21T10:30:00.000Z",
+          "editedAt": "2026-11-21T10:32:00.000Z",
+          "deletedAt": null,
+          "replyTo": {
+            "id": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+            "author": "user",
+            "body": "My video failed but the credits did not come back.",
+            "deleted": false,
+            "hasPhoto": false
+          },
+          "reactions": [
+            {
+              "author": "user",
+              "emoji": "🙏"
+            }
+          ],
+          "attachment": null
+        }
+      },
+      "reactions": "One per side per message, from 👍 ❤️ 😂 😮 😢 🙏; not on a deleted message.",
+      "errors": {
+        "invalidReaction": {
+          "status": 400,
+          "response": {
+            "error": "Choose one of the reactions.",
+            "code": "INVALID_REACTION"
+          }
+        },
+        "messageDeleted": {
+          "status": 409,
+          "response": {
+            "error": "That message was deleted.",
+            "code": "MESSAGE_DELETED"
+          }
+        },
+        "messageNotFound": {
+          "status": 404,
+          "response": {
+            "error": "That message is no longer there.",
+            "code": "MESSAGE_NOT_FOUND"
           }
         }
       }

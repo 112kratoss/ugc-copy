@@ -17,6 +17,7 @@ export const STORAGE_BUCKET_IDS = [
   'profiles',
   'template_inputs',
   'template_assets',
+  'support_attachments',
 ] as const;
 
 export type StorageBucketId = (typeof STORAGE_BUCKET_IDS)[number];

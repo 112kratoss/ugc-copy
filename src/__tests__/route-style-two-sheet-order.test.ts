@@ -28,8 +28,11 @@ const APP_ROOT = path.join(process.cwd(), 'src', 'app');
 
 // What the supplement may weigh, unminified, before someone looks again: it held
 // 304,138 bytes on 2026-10-19 (227,660 minified), and every full load of a route
-// that links it inlines it twice, in its <style> and in the RSC payload.
-const SUPPLEMENT_BYTES_CEILING = 335_000;
+// that links it inlines it twice, in its <style> and in the RSC payload. Looked
+// at again on 2026-11-22 for the support chat (src/components/support-chat/):
+// it reuses the existing utilities but for the bubble's tail corners, its
+// hover tools and its inline time, 335,119 bytes after trimming (338,072 before).
+const SUPPLEMENT_BYTES_CEILING = 337_000;
 
 type CompiledSheet = {
   bytes: number;

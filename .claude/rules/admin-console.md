@@ -12,8 +12,38 @@ Moved unchanged from `AGENTS.md` on 2026-10-18 so it loads only where it applies
 A browser-only operator console living in the same Next.js app under the
 `src/app/admin/(console)/` route group; `/admin/login` sits outside the group so
 it renders without the console chrome. Areas: overview (reuses the
-`/api/ops/*` collectors), moderation queue, users & credits, revenue, payouts,
-referrals, content, operator activity, system.
+`/api/ops/*` collectors), moderation queue, support, users & credits, revenue,
+payouts, referrals, content, operator activity, system.
+
+- **Support** (`/admin/support`, owner 2026-11-21: "first do a simple version";
+  2026-11-22: "make the functionalities close to whatsapp as much as
+  possible"): each account's one conversation with support, which it opens
+  from Help & support in the app or `/support` on the web. The inbox is a chat
+  app's list (unread count, the latest message with its ticks, "typing…"),
+  read again every 15 s while visible; the ones waiting on a reply
+  (`support_conversations.awaiting_reply`, also the menu's count) come first,
+  oldest first. The thread is the web's shared `SupportChat` as support
+  (`GET /api/admin/support?conversationId=`, read again every 3 to 20 s while
+  visible): a reply goes through `send_support_message` and tells the account
+  with a `support_reply` alert that opens `/support`; `POST /api/admin/support`
+  also takes `read`, `typing`, `edit` (support's own message, 15 minutes),
+  `delete` (for everyone, 48 hours) and `react`, each through its function in
+  `src/lib/support-conversations.ts`. A reply may carry a photo (owner,
+  2026-11-22: "Yes, build photos"): sent as multipart form data (`photo`, with
+  the text as its caption), shrunk first in the browser to 2560 px and under
+  4 MB, the host's request cap (`shrink-console-photo.ts`); the server
+  re-encodes it as the account's are and keeps it under the account's folder
+  of `support_attachments`, so it goes with the account. The list says
+  "📷 Photo" for a photo without a caption (`last_message_has_photo`).
+  Resolving is a switch; the account writing again reopens it. A resolve
+  names the time of the account's latest message the operator was shown
+  (`seenLastUserMessageAt`), and one that came in since refuses it with 409
+  CONVERSATION_CHANGED, so a new question is never resolved away unread
+  (#900's review). The lists page by offset with their true totals (a page
+  past the end lands on the first), an ended console session or a thread
+  that could not be read says so above the chat, and support deleting or
+  editing a reply takes away or rewords the account's alert about it. The web's
+  `/contact` form stays for visitors without an account.
 
 - **Auth is a single master operator**, not per-person accounts: `ADMIN_USERNAME`
   plus a scrypt `ADMIN_PASSWORD_HASH`, an HMAC session cookie signed with

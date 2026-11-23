@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Mail, MapPin, MessageSquare, Phone } from "lucide-react";
+import { LifeBuoy, Mail, MapPin, MessageSquare, Phone } from "lucide-react";
 import { siteConfig } from "@/lib/seo";
 import { ContactForm } from "./ContactForm";
 
@@ -32,6 +32,23 @@ export default function Contact() {
                         <div>
                             <h2 className="text-2xl font-semibold mb-6">Contact Information</h2>
                             <div className="space-y-6">
+                                <div className="flex items-start gap-4">
+                                    <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-primary-soft)] p-3">
+                                        <LifeBuoy className="h-6 w-6 text-[var(--ui-primary)]" />
+                                    </div>
+                                    <div>
+                                        <h3 className="font-medium mb-1">Message support</h3>
+                                        <Link
+                                            href="/support"
+                                            prefetch={false}
+                                            className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]"
+                                        >
+                                            Write to us from your account
+                                        </Link>
+                                        <p className="text-sm text-zinc-500 mt-1">The answer comes to your account, with a notification</p>
+                                    </div>
+                                </div>
+
                                 <div className="flex items-start gap-4">
                                     <div className="rounded-2xl border border-[var(--ui-border-default)] bg-[var(--ui-primary-soft)] p-3">
                                         <Mail className="h-6 w-6 text-[var(--ui-primary)]" />

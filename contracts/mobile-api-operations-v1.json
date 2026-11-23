@@ -664,6 +664,41 @@
       "path": "/api/creator/payouts",
       "auth": "required"
     },
+    "getSupportConversation": {
+      "method": "GET",
+      "path": "/api/support/conversation",
+      "auth": "required"
+    },
+    "sendSupportMessage": {
+      "method": "POST",
+      "path": "/api/support/conversation",
+      "auth": "required"
+    },
+    "markSupportConversationRead": {
+      "method": "POST",
+      "path": "/api/support/conversation/read",
+      "auth": "required"
+    },
+    "setSupportTyping": {
+      "method": "POST",
+      "path": "/api/support/conversation/typing",
+      "auth": "required"
+    },
+    "editSupportMessage": {
+      "method": "PATCH",
+      "path": "/api/support/messages/:messageId",
+      "auth": "required"
+    },
+    "deleteSupportMessage": {
+      "method": "DELETE",
+      "path": "/api/support/messages/:messageId",
+      "auth": "required"
+    },
+    "reactToSupportMessage": {
+      "method": "POST",
+      "path": "/api/support/messages/:messageId/reaction",
+      "auth": "required"
+    },
     "revealNsfwPost": {
       "method": "POST",
       "path": "/api/posts/:postId/reveal",

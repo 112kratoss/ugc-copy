@@ -116,6 +116,15 @@ import {
   type TemplateReportReason,
 } from './media-templates';
 import type { CreatorPayoutMethod } from './creator-payout-policy/creator-payout-policy';
+import type {
+  SupportConversationResponse,
+  SupportMessageRequest,
+  SupportMessageResponse,
+  SupportMessageUpdateResponse,
+  SupportReactionEmoji,
+  SupportReadRequest,
+  SupportReadResponse,
+} from './support-conversation-policy/support-conversation-policy';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
 import type { SeedanceAssetKind } from './model-catalog/seedance-assets';
 import type { PlaybackMetricsReport } from './playback-metrics';
@@ -1297,6 +1306,56 @@ export function createApiClient({
       request<CreatorPayoutRequestResponse>('/api/creator/payouts', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+    /**
+     * The account's conversation with support (owner, 2026-11-21): its
+     * messages oldest first, or no conversation before the first message.
+     */
+    getSupportConversation: () => request<SupportConversationResponse>('/api/support/conversation'),
+    /**
+     * Sends the account's message to support, opening the conversation on the
+     * first one; `replyToMessageId` quotes a message, and `photo` names a
+     * picture staged with `uploadPickedMedia`, which the send claims (the text
+     * is then its caption). A retry carries the same `clientMessageId` and is
+     * kept once. A refusal is an `ApiError` with the server's words and its
+     * `code` (`EMPTY_MESSAGE`, `MESSAGE_TOO_LONG`, `INVALID_CLIENT_MESSAGE_ID`,
+     * `REPLY_NOT_FOUND`, `PHOTO_NOT_FOUND`, `PHOTO_UNREADABLE`,
+     * `PHOTO_TOO_LARGE` or `RATE_LIMITED`).
+     */
+    sendSupportMessage: (body: SupportMessageRequest) =>
+      request<SupportMessageResponse>('/api/support/conversation', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    /** The account has read its support thread: both sides' read times after it. */
+    markSupportConversationRead: (upToMessageId: string | null = null) =>
+      request<SupportReadResponse>('/api/support/conversation/read', {
+        method: 'POST',
+        // Up to the newest message drawn, so one kept after it is not read unseen.
+        body: JSON.stringify({ upToMessageId } satisfies SupportReadRequest),
+      }),
+    /** The account is typing in its support thread (for a few seconds). */
+    setSupportTyping: (typing: boolean) =>
+      request<{ success: true }>('/api/support/conversation/typing', {
+        method: 'POST',
+        body: JSON.stringify({ typing }),
+      }),
+    /** Changes the text of the account's own message, within 15 minutes of sending it. */
+    editSupportMessage: (messageId: string, body: string) =>
+      request<SupportMessageUpdateResponse>(`/api/support/messages/${encodeURIComponent(messageId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ body }),
+      }),
+    /** Deletes the account's own message for everyone, within 48 hours of sending it. */
+    deleteSupportMessage: (messageId: string) =>
+      request<SupportMessageUpdateResponse>(`/api/support/messages/${encodeURIComponent(messageId)}`, {
+        method: 'DELETE',
+      }),
+    /** Sets the account's reaction on a message, or takes it away (`null`). */
+    reactToSupportMessage: (messageId: string, emoji: SupportReactionEmoji | null) =>
+      request<SupportMessageUpdateResponse>(`/api/support/messages/${encodeURIComponent(messageId)}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji }),
       }),
     /**
      * Called while still a guest, immediately before the sign-in that will
