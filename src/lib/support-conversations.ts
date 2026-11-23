@@ -239,7 +239,13 @@ export function toSupportMessage(
   };
 }
 
-/** Messages in the API's shape for `viewer`, their photos' links signed in one call. */
+/**
+ * Messages in the API's shape for `viewer`, their photos' links signed in one
+ * call. Signing that fails costs the links, never the answer: a photo is
+ * answered with null links (the clients say it could not be loaded, and the
+ * next read signs anew), so a write that was kept is never answered as a
+ * fault.
+ */
 async function toSignedSupportMessages(
   adminSupabase: SupabaseClient,
   payloads: readonly SupportMessagePayload[],
@@ -250,8 +256,11 @@ async function toSignedSupportMessages(
   if (paths.length > 0) {
     try {
       links = await signSupportPhotoLinks(adminSupabase, paths);
-    } catch {
-      throw new SupportConversationError('Failed to sign the support photos.');
+    } catch (error) {
+      logBackendWarning('support_photo_sign_failed', {
+        error: error instanceof Error ? error.message : String(error),
+        count: paths.length,
+      });
     }
   }
   const now = Date.now();
@@ -553,13 +562,13 @@ async function findKeptSupportMessagePayload(
  * and again by the database. `replyToMessageId` quotes a message of the same
  * conversation that is not deleted. `photo` adds a picture, whose copies are
  * kept under the account's folder whichever side sends it; with one, the text
- * is its caption and may be empty. A photo the database is known not to have
- * kept (a refusal, or a lost answer whose message is not there) leaves no
+ * is its caption and may be empty. A photo the database refused leaves no
  * copy behind, and a staged one goes back to the upload pipeline. Once the
  * message is kept its copies are its own, whatever fails after; and when
- * whether it was kept cannot be told, everything is left for the orphan
- * listing and the upload reclaim rather than taken from a message that may
- * stand.
+ * whether it was kept cannot be told (a lost answer, the message not there or
+ * not there yet), everything is left for the orphan listing and the upload
+ * reclaim rather than taken from a message that may stand. A send whose
+ * answer was lost but whose message was kept is answered as kept.
  */
 export async function sendSupportMessage({
   adminSupabase,
@@ -592,8 +601,33 @@ export async function sendSupportMessage({
     p_attachment: attachment ? supportPhotoAttachmentArgument(attachment) : null,
   }, 'Failed to send the support message.');
 
+  /**
+   * After a send's call failed: the message kept under the client's id when
+   * the failure may have lost the answer of a write that was kept, or null
+   * when none is there. A refusal, or a failure whose outcome cannot be
+   * looked up, is thrown again.
+   */
+  const keptAfterFailure = async (error: unknown): Promise<SupportRpcResult | null> => {
+    if ((error instanceof SupportRpcError && error.refused) || !clientMessageId) throw error;
+    try {
+      return await findKeptSupportMessagePayload(adminSupabase, userId, clientMessageId);
+    } catch {
+      throw error;
+    }
+  };
+
   if (!photo) {
-    return sendResult(adminSupabase, await send(null), author);
+    let result: SupportRpcResult;
+    try {
+      result = await send(null);
+    } catch (error) {
+      // Its answer lost, a message that was kept is answered as kept: the
+      // console's reply is then announced, and no copy is drawn as not sent.
+      const kept = await keptAfterFailure(error);
+      if (!kept) throw error;
+      result = kept;
+    }
+    return sendResult(adminSupabase, result, author);
   }
 
   // A retried photo send is answered here, before its staged photo is looked
@@ -642,18 +676,14 @@ export async function sendSupportMessage({
       throw error;
     }
     // The answer was lost, and the message may stand: it is looked for by the
-    // client's id. Unknown, nothing is touched.
-    let kept: SupportRpcResult | null;
-    try {
-      if (!clientMessageId) throw error;
-      kept = await findKeptSupportMessagePayload(adminSupabase, userId, clientMessageId);
-    } catch {
-      throw error;
-    }
-    if (!kept?.message || storedPhotoOf(kept.message)?.path !== stored.path) {
-      // Not kept, or kept by another try with copies of its own.
+    // client's id. Not there (yet: the call may still be running) or not to
+    // be told, nothing is touched, and the orphan listing and the upload
+    // reclaim settle the copies and the staged photo if no message names them.
+    const kept = await keptAfterFailure(error);
+    if (!kept?.message) throw error;
+    if (storedPhotoOf(kept.message)?.path !== stored.path) {
+      // Kept by another try, with copies of its own.
       await letGo();
-      if (!kept) throw error;
       return sendResult(adminSupabase, kept, author);
     }
     result = { ...kept, status: 'sent' };

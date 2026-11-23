@@ -201,6 +201,9 @@ export default function SupportScreen() {
   const sendQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   // What the composer held when an edit began, given back when the edit ends.
   const draftBeforeEditRef = useRef('');
+  // The client ids of messages a read showed kept: a send of one of them, on
+  // its way or answered late, has nothing left to do or to say.
+  const keptIdsRef = useRef(new Set<string>());
   const fieldRef = useRef<TextInput>(null);
   const lastTypingRef = useRef<number | null>(null);
   const markingRef = useRef(false);
@@ -230,6 +233,7 @@ export default function SupportScreen() {
     if (!data) return;
     for (const message of data.messages) {
       if (!message.clientMessageId) continue;
+      keptIdsRef.current.add(message.clientMessageId);
       photosRef.current.delete(message.clientMessageId);
       stagedRef.current.delete(message.clientMessageId);
     }
@@ -303,6 +307,9 @@ export default function SupportScreen() {
     quoted: SupportQuotedMessage | null,
     photo: PickedSupportPhoto | null,
   ) => {
+    // A read showed it kept while it waited its turn (a retry of a message
+    // whose answer was lost): nothing is left to upload or send.
+    if (keptIdsRef.current.has(clientMessageId)) return;
     try {
       let storagePath = photo ? stagedRef.current.get(clientMessageId) ?? null : null;
       if (photo && !storagePath) {
@@ -329,6 +336,8 @@ export default function SupportScreen() {
       // Read again now, and at the quick pace from here, rather than after an idle wait.
       void queryClient.invalidateQueries({ queryKey });
     } catch (error) {
+      // A read showed it kept before this answer came: it is not "not sent".
+      if (keptIdsRef.current.has(clientMessageId)) return;
       const code = error instanceof ApiError ? error.code ?? null : null;
       // A refusal of the photo itself means the next try stages it anew; any
       // other (a quote gone, too many at once) keeps the copy already staged.

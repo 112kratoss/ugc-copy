@@ -534,6 +534,45 @@ describe('the operator\'s reply', () => {
     expect(notify).toHaveBeenCalledWith(client, expect.objectContaining({ messageId: 'reply-1', replyBody: 'Fixed' }));
   });
 
+  it('announces a reply kept though its answer was lost, and answers it as kept', async () => {
+    // The console no longer retries such a reply: its next read shows it kept.
+    const messages: Row[] = [];
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      messages,
+      rpcResults: { support_message_payload: payload({ id: 'reply-9', author: 'staff', body: 'All fixed.', client_message_id: 'msg:reply-99999' }) },
+      rpcFailures: { send_support_message: { error: { message: 'gateway timeout' }, status: 504 } },
+    });
+    // Kept, behind the lost answer.
+    messages.push({ id: 'reply-9', conversation_id: 'conversation-1', client_message_id: 'msg:reply-99999' });
+    const notify = vi.fn().mockResolvedValue(undefined);
+
+    await expect(replyToSupportConversation({
+      adminSupabase: client,
+      conversationId: 'conversation-1',
+      body: 'All fixed.',
+      clientMessageId: 'msg:reply-99999',
+      notify,
+    })).resolves.toMatchObject({ ok: true, message: { id: 'reply-9', body: 'All fixed.' } });
+    expect(notify).toHaveBeenCalledWith(client, expect.objectContaining({ messageId: 'reply-9', replyBody: 'All fixed.' }));
+  });
+
+  it('answers a lost reply that was not kept as the fault it is, announcing nothing', async () => {
+    const { client } = fakeSupabase({
+      conversations: [conversationRow()],
+      rpcFailures: { send_support_message: { error: { message: 'connection reset' }, status: 0 } },
+    });
+    const notify = vi.fn();
+    await expect(replyToSupportConversation({
+      adminSupabase: client,
+      conversationId: 'conversation-1',
+      body: 'All fixed.',
+      clientMessageId: 'msg:reply-99999',
+      notify,
+    })).rejects.toBeInstanceOf(SupportConversationError);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('does not announce a retried reply support has deleted since', async () => {
     const { client } = fakeSupabase({
       conversations: [conversationRow()],
@@ -859,15 +898,29 @@ describe('photos', () => {
     expect(photos.settleStagedSupportPhoto).toHaveBeenCalledWith(client, { staged, userId: 'user-1' });
   });
 
-  it('lets the copies go when an answer was lost and the message is not there', async () => {
+  it('leaves the copies and the staged photo when an answer was lost and the message is not there yet', async () => {
+    // The call may still be running behind the conversation's lock: taking the
+    // copies now would leave the message it keeps a moment later without them.
     stagePhoto();
     const { client } = fakeSupabase({
       conversations: [conversationRow()],
       rpcFailures: { send_support_message: { error: { message: 'connection reset' }, status: 0 } },
     });
     await expect(sendStagedPhoto(client)).rejects.toBeInstanceOf(SupportConversationError);
-    expect(photos.removeSupportPhotoCopies).toHaveBeenCalledWith(client, [stored.path, stored.previewPath]);
-    expect(photos.releaseStagedSupportPhoto).toHaveBeenCalledWith(client, staged.claim);
+    expect(photos.removeSupportPhotoCopies).not.toHaveBeenCalled();
+    expect(photos.releaseStagedSupportPhoto).not.toHaveBeenCalled();
+  });
+
+  it('answers a kept photo message whose links could not be signed, never as a fault', async () => {
+    stagePhoto();
+    vi.mocked(photos.signSupportPhotoLinks).mockRejectedValue(new Error('storage unavailable'));
+    const { client } = fakeSupabase({ rpcResults: { send_support_message: sentPhoto() } });
+    await expect(sendStagedPhoto(client)).resolves.toMatchObject({
+      ok: true,
+      created: true,
+      message: { attachment: { previewUrl: null, url: null, width: 1080 } },
+    });
+    expect(photos.removeSupportPhotoCopies).not.toHaveBeenCalled();
   });
 
   it('touches nothing when whether the message was kept cannot be told', async () => {

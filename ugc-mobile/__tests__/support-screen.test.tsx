@@ -464,6 +464,28 @@ describe('Message support', () => {
     expect(drawnText(tree).filter((text) => text === 'Did it go?')).toHaveLength(1);
   });
 
+  it('says nothing of a send a read already showed kept when its failed answer comes late', async () => {
+    let failLate: () => void = () => undefined;
+    authState.api.sendSupportMessage.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      failLate = () => reject(new TypeError('Network request failed'));
+    }));
+    const tree = render();
+    typeDraft(tree, 'Did it go?');
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+
+    const [[sent]] = authState.api.sendSupportMessage.mock.calls as unknown as Array<[{ clientMessageId: string }]>;
+    query.data = {
+      ...conversation,
+      messages: [...conversation.messages, message({ id: 'm5', body: 'Did it go?', createdAt: iso(0), clientMessageId: sent.clientMessageId })],
+    };
+    act(() => { tree.update(React.createElement(SupportScreen)); });
+
+    await act(async () => { failLate(); });
+    expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
+    expect(drawnText(tree)).not.toContain('Your message was not sent. Check your connection, then try again.');
+    expect(drawnText(tree).filter((text) => text === 'Did it go?')).toHaveLength(1);
+  });
+
   it('sends one message at a time, in the order written', async () => {
     let releaseFirst: () => void = () => undefined;
     authState.api.sendSupportMessage

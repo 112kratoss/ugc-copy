@@ -21,6 +21,19 @@ import type { SupportChatActionResult, SupportChatLoadResult, SupportChatTranspo
  * send, shrunk under the host's request cap.
  */
 
+/**
+ * How long a request may take before it is given up as failed: a read or an
+ * action, and a send that carries a photo. Sends go one at a time, so a
+ * request that never answered would hold every later message as "sending";
+ * given up, it is "not sent" (or settled by the next read if it was kept).
+ */
+export const SUPPORT_REQUEST_TIMEOUT_MS = 30_000;
+export const SUPPORT_PHOTO_REQUEST_TIMEOUT_MS = 120_000;
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(ms) : undefined;
+}
+
 async function readJson(response: Response): Promise<Record<string, unknown> | null> {
   try {
     const value = await response.json();
@@ -73,6 +86,7 @@ export function createAccountSupportTransport(
     headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(await authHeaders()) },
     body: body === undefined ? undefined : JSON.stringify(body),
     cache: 'no-store',
+    signal: timeoutSignal(SUPPORT_REQUEST_TIMEOUT_MS),
   });
   // Photos staged for a send that did not go through, by the send's client id.
   const stagedPhotos = new Map<string, string>();
@@ -93,7 +107,8 @@ export function createAccountSupportTransport(
         storagePath = stagedPhotos.get(clientMessageId) ?? null;
         if (!storagePath) {
           try {
-            storagePath = (await uploadMediaToTemporaryStorage(photo)).storagePath;
+            const signal = timeoutSignal(SUPPORT_PHOTO_REQUEST_TIMEOUT_MS);
+            storagePath = (await uploadMediaToTemporaryStorage(photo, signal ? { signal } : {})).storagePath;
           } catch {
             // The picker already held the type and size to the rule: what is
             // left is a lost connection or a fault, the general line's case.
@@ -148,12 +163,16 @@ export function createAdminSupportTransport(conversationId: string): SupportChat
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ conversationId, ...body }),
     cache: 'no-store',
+    signal: timeoutSignal(SUPPORT_REQUEST_TIMEOUT_MS),
   });
 
   return {
     async load() {
       try {
-        const response = await fetch(`/api/admin/support?conversationId=${encodeURIComponent(conversationId)}`, { cache: 'no-store' });
+        const response = await fetch(`/api/admin/support?conversationId=${encodeURIComponent(conversationId)}`, {
+          cache: 'no-store',
+          signal: timeoutSignal(SUPPORT_REQUEST_TIMEOUT_MS),
+        });
         return readLoad(response, await readJson(response));
       } catch {
         return { kind: 'failed' };
@@ -180,7 +199,12 @@ export function createAdminSupportTransport(conversationId: string): SupportChat
       if (replyToMessageId) form.set('replyToMessageId', replyToMessageId);
       form.set('photo', shrunk, photo.name || 'photo');
       return action(
-        () => fetch('/api/admin/support', { method: 'POST', body: form, cache: 'no-store' }),
+        () => fetch('/api/admin/support', {
+          method: 'POST',
+          body: form,
+          cache: 'no-store',
+          signal: timeoutSignal(SUPPORT_PHOTO_REQUEST_TIMEOUT_MS),
+        }),
         readSupportMessageResponse,
       );
     },

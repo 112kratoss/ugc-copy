@@ -1311,10 +1311,14 @@ export function SupportChat({
             }}
             onKeyDown={handleKeyDown}
             onPaste={(event) => {
-              // A screenshot pasted into the field goes as the photo. Text
-              // comes first: cells copied from a spreadsheet carry a picture
-              // of themselves beside their text, and paste as the text.
-              if (event.clipboardData?.getData('text/plain').trim()) return;
+              // A screenshot pasted into the field goes as the photo, as does
+              // a picture copied from a page or an app with its address or
+              // name beside it. Cells copied from a spreadsheet carry a
+              // picture of themselves beside their text, and paste as the
+              // text: told by the cells' tabs, or the table they come in.
+              const text = event.clipboardData?.getData('text/plain') ?? '';
+              const html = event.clipboardData?.getData('text/html') ?? '';
+              if (text.trim() && (text.includes('\t') || /<table[\s>]/i.test(html))) return;
               const file = pickedImage(event.clipboardData?.files);
               if (!file || editing) return;
               event.preventDefault();

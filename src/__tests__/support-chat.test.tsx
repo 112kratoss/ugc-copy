@@ -6,7 +6,11 @@ vi.mock('@/components/useConfirmation', () => ({
   useConfirmation: () => async () => confirmation.answer,
 }));
 
+// The account's transport stages photos with the upload client, which builds the browser's Supabase client when it loads.
+vi.mock('@/lib/supabase', () => ({ supabase: {} }));
+
 import { SupportChat } from '@/components/support-chat/SupportChat';
+import { createAccountSupportTransport, createAdminSupportTransport } from '@/components/support-chat/support-chat-transports';
 import { useSupportChat, type SupportChatTransport } from '@/components/support-chat/use-support-chat';
 
 import {
@@ -263,6 +267,28 @@ describe('photos in the web chat', () => {
     unmount();
   });
 
+  it('tries a photo that failed to load once more by itself, then on a press', async () => {
+    const { unmount } = await renderChat(fakeTransport(summary, withPhoto));
+    const picture = () => within(bubbleRow('Here is where they show')).queryByRole('img', { name: 'Photo' });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // A dropped connection: the first load fails, and the picture is tried again by itself.
+      fireEvent.error(picture() as HTMLElement);
+      expect(picture()).toBeNull();
+      await act(async () => { vi.advanceTimersByTime(2500); });
+      expect(picture()).not.toBeNull();
+
+      // Failing again, it says so and waits for a press.
+      fireEvent.error(picture() as HTMLElement);
+      const retry = within(bubbleRow('Here is where they show')).getByRole('button', { name: /Tap to try again/ });
+      fireEvent.click(retry);
+      expect(picture()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    unmount();
+  });
+
   it('attaches a picked photo, which goes with the text as its caption, or none', async () => {
     const { transport, unmount } = await renderChat();
     const file = new File([new Uint8Array([1, 2, 3])], 'screenshot.png', { type: 'image/png' });
@@ -313,6 +339,22 @@ describe('photos in the web chat', () => {
     });
     expect(pasted).toBe(true);
     expect(screen.queryByRole('button', { name: 'Remove photo' })).not.toBeInTheDocument();
+    unmount();
+  });
+
+  it('attaches a picture copied with its address beside it', async () => {
+    const { unmount } = await renderChat();
+    const field = screen.getByLabelText('Message');
+    const file = new File([new Uint8Array([4, 5])], 'image.png', { type: 'image/png' });
+    fireEvent.paste(field, {
+      clipboardData: {
+        files: [file],
+        getData: (type: string) => (type === 'text/plain'
+          ? 'https://example.com/screenshot.png'
+          : type === 'text/html' ? '<img src="https://example.com/screenshot.png">' : ''),
+      },
+    });
+    expect(screen.getByRole('button', { name: 'Remove photo' })).toBeInTheDocument();
     unmount();
   });
 
@@ -434,6 +476,56 @@ describe('the web chat when things go wrong', () => {
     unmount();
   });
 
+  it('waits to read while a delete is on its way, and reads once it has its answer', async () => {
+    const transport = fakeTransport();
+    let answerDelete: () => void = () => undefined;
+    transport.remove.mockImplementationOnce((() => new Promise((resolve) => {
+      answerDelete = () => resolve({
+        ok: true,
+        value: { message: message({ id: 'm4', body: null, deletedAt: new Date().toISOString(), createdAt: iso(5) }) },
+      });
+    })) as never);
+    const { unmount } = await renderChat(transport);
+    const readsBefore = transport.load.mock.calls.length;
+
+    fireEvent.click(within(bubbleRow('Thanks!')).getByRole('button', { name: 'Message actions' }));
+    await act(async () => { fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' })); });
+    expect(screen.getAllByText('You deleted this message')).toHaveLength(2);
+
+    // A read asked for now could bring the thread from before the delete: it waits.
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(transport.load).toHaveBeenCalledTimes(readsBefore);
+    expect(screen.getAllByText('You deleted this message')).toHaveLength(2);
+
+    await act(async () => { answerDelete(); });
+    await waitFor(() => expect(transport.load).toHaveBeenCalledTimes(readsBefore + 1));
+    unmount();
+  });
+
+  it('says nothing of a send a read already showed kept when its failed answer comes late', async () => {
+    const transport = fakeTransport();
+    let failLate: () => void = () => undefined;
+    transport.send.mockImplementationOnce((() => new Promise((resolve) => {
+      failLate = () => resolve({ ok: false, error: null });
+    })) as never);
+    const { unmount } = await renderChat(transport);
+
+    await write('Did it go?');
+    const { clientMessageId } = transport.send.mock.calls[0][0];
+    transport.load.mockImplementation(async () => ({
+      kind: 'ok' as const,
+      conversation: summary,
+      messages: [...thread, message({ id: 'm5', body: 'Did it go?', createdAt: iso(0), clientMessageId })],
+    }));
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    await waitFor(() => expect(screen.getAllByText('Did it go?')).toHaveLength(1));
+
+    await act(async () => { failLate(); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: SUPPORT_WORDS.notSent })).not.toBeInTheDocument();
+    unmount();
+  });
+
   it('settles a message whose answer was lost, once a read shows it kept', async () => {
     const transport = fakeTransport();
     transport.send.mockImplementation((async () => ({ ok: false, error: null })) as never);
@@ -480,5 +572,28 @@ describe('the web chat when things go wrong', () => {
     await act(async () => { fireEvent.click(await screen.findByRole('button', { name: SUPPORT_WORDS.notSent })); });
     expect(transport.send).toHaveBeenLastCalledWith(expect.objectContaining({ body: 'Which video?', replyToMessageId: null }));
     unmount();
+  });
+});
+
+
+describe('the web chat\'s requests', () => {
+  it('gives up a request that never answers, so the sends behind it are not held, and reads up to the newest message', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ success: true, conversation: null, messages: [] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const account = createAccountSupportTransport(async () => ({ Authorization: 'Bearer test' }));
+      await account.load();
+      await account.markRead('m4');
+      await createAdminSupportTransport('conversation-1').load();
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      for (const [, init] of fetchMock.mock.calls as unknown as Array<[string, RequestInit]>) {
+        expect(init.signal).toBeInstanceOf(AbortSignal);
+      }
+      const [, readInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+      expect(JSON.parse(String(readInit.body))).toEqual({ upToMessageId: 'm4' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

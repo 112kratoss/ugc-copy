@@ -109,6 +109,13 @@ export function useSupportChat({
   const readAgainRef = useRef(false);
   // Counts the changes this side drew; a read that left before the latest is dropped.
   const changeCountRef = useRef(0);
+  // Edits, deletes and reactions drawn and not yet answered: reads wait for them.
+  const changesInFlightRef = useRef(0);
+  // A read that waited for those changes: run once the last has its answer.
+  const readAfterChangesRef = useRef(false);
+  // The client ids of messages a read showed kept: a send of one of them, on
+  // its way or answered late, has nothing left to do or to say.
+  const keptIdsRef = useRef(new Set<string>());
   // The sends, one after another: each waits for the one before to settle.
   const sendQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const markingRef = useRef(false);
@@ -148,8 +155,10 @@ export function useSupportChat({
       // A message kept under its client id is the thread's now, whatever its
       // send answered: its copy on the way, or marked not sent, goes.
       for (const message of result.messages) {
-        const photo = message.clientMessageId ? photosRef.current.get(message.clientMessageId) : undefined;
-        if (!photo || !message.clientMessageId) continue;
+        if (!message.clientMessageId) continue;
+        keptIdsRef.current.add(message.clientMessageId);
+        const photo = photosRef.current.get(message.clientMessageId);
+        if (!photo) continue;
         URL.revokeObjectURL(photo.preview.localUri);
         photosRef.current.delete(message.clientMessageId);
       }
@@ -180,6 +189,13 @@ export function useSupportChat({
     try {
       do {
         readAgainRef.current = false;
+        // An edit, a delete or a reaction on its way is drawn already and not
+        // yet kept: a read now could bring the thread from before it. The read
+        // runs once the change has its answer.
+        if (changesInFlightRef.current > 0) {
+          readAfterChangesRef.current = true;
+          break;
+        }
         const changesAtStart = changeCountRef.current;
         let result: SupportChatLoadResult;
         try {
@@ -203,6 +219,22 @@ export function useSupportChat({
   const noteChange = useCallback(() => {
     changeCountRef.current += 1;
   }, []);
+
+  /** A change is drawn and on its way: reads wait for its answer. */
+  const beginChange = useCallback(() => {
+    changesInFlightRef.current += 1;
+    changeCountRef.current += 1;
+  }, []);
+
+  /** A change has its answer: a read that waited for it runs now. */
+  const endChange = useCallback(() => {
+    changeCountRef.current += 1;
+    changesInFlightRef.current = Math.max(0, changesInFlightRef.current - 1);
+    if (changesInFlightRef.current === 0 && readAfterChangesRef.current) {
+      readAfterChangesRef.current = false;
+      void load();
+    }
+  }, [load]);
 
   /** Reads the thread now, for a change made elsewhere on this page (the console's status switch, a retry). */
   const reload = useCallback(() => {
@@ -309,7 +341,10 @@ export function useSupportChat({
       photo: photo?.preview ?? null,
     }));
 
-    const post = async (): Promise<Awaited<ReturnType<SupportChatTransport['send']>>> => {
+    const post = async (): Promise<Awaited<ReturnType<SupportChatTransport['send']>> | null> => {
+      // A read showed it kept while it waited its turn (a retry of a message
+      // whose answer was lost): there is nothing left to send.
+      if (keptIdsRef.current.has(clientMessageId)) return null;
       try {
         return await transportRef.current.send({
           body,
@@ -324,8 +359,11 @@ export function useSupportChat({
     const turn = sendQueueRef.current.then(post);
     sendQueueRef.current = turn;
     const result = await turn;
+    if (result === null) return;
 
     if (!result.ok) {
+      // A read showed it kept before this answer came: it is not "not sent".
+      if (keptIdsRef.current.has(clientMessageId)) return;
       // Kept as not sent, for a retry once signed in again too.
       setPending((current) => failPendingSupportMessage(current, clientMessageId, result.code ?? null));
       if (result.signedOut) {
@@ -375,7 +413,7 @@ export function useSupportChat({
   ) => {
     setError(null);
     lastActivityRef.current = Date.now();
-    noteChange();
+    beginChange();
     applyMessage(drawn);
     let result: SupportChatActionResult<{ message: SupportMessage }>;
     try {
@@ -383,20 +421,23 @@ export function useSupportChat({
     } catch {
       result = { ok: false, error: null };
     }
-    noteChange();
-    if (result.ok) {
-      applyMessage(result.value.message);
-      noteActivity();
-      return true;
-    }
-    if (result.signedOut) {
-      setState({ kind: 'signed-out' });
+    try {
+      if (result.ok) {
+        applyMessage(result.value.message);
+        noteActivity();
+        return true;
+      }
+      if (result.signedOut) {
+        setState({ kind: 'signed-out' });
+        return false;
+      }
+      applyMessage(before);
+      setError(result.error ?? SUPPORT_WORDS.actionFailed);
       return false;
+    } finally {
+      endChange();
     }
-    applyMessage(before);
-    setError(result.error ?? SUPPORT_WORDS.actionFailed);
-    return false;
-  }, [applyMessage, noteActivity, noteChange]);
+  }, [applyMessage, beginChange, endChange, noteActivity]);
 
   const react = useCallback((message: SupportMessage, emoji: SupportReactionEmoji) => {
     const toggled = supportReactionToggle(message, viewer, emoji);

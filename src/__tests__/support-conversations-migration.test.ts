@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { STORAGE_BUCKET_IDS } from '@/lib/storage-buckets';
+import { USER_SCOPED_STORAGE_BUCKETS } from '@/lib/storage-ownership';
 
 import {
   SUPPORT_DELETE_WINDOW_HOURS,
@@ -88,6 +89,8 @@ describe('support conversations migration', () => {
   it('keeps the photos in a private bucket the server writes WebP to, listed with every other', () => {
     expect(migration).toMatch(/VALUES \(\s+'support_attachments',\s+'support_attachments',\s+false,\s+10485760,\s+ARRAY\['image\/webp'\]::text\[\]\s+\)/);
     expect(STORAGE_BUCKET_IDS).toContain('support_attachments');
+    // Never an account's own media for a run, a template or a post: only the support service reads it.
+    expect(USER_SCOPED_STORAGE_BUCKETS.has('support_attachments')).toBe(false);
     // No client role gets a policy or a grant on the objects: only the service role signs links.
     expect(migration).not.toMatch(/(CREATE POLICY|GRANT)[^;]*storage\.objects/i);
   });
@@ -137,9 +140,12 @@ describe('support conversations migration', () => {
     expect(supportPart.match(/FOR UPDATE;/g)).toHaveLength(5);
   });
 
-  it('waits at most five seconds for a lock on the tables it touches, before taking any', () => {
-    expect(migration.indexOf("SET LOCAL lock_timeout = '5s';")).toBeGreaterThan(0);
-    expect(migration.indexOf("SET LOCAL lock_timeout = '5s';")).toBeLessThan(migration.indexOf('CREATE TABLE'));
+  it('waits at most five seconds for a lock on the tables it touches, before taking any, and resets that at the end', () => {
+    // A plain SET, as in 20261104135153: SET LOCAL does nothing outside a transaction block.
+    expect(migration).not.toContain('SET LOCAL lock_timeout');
+    expect(migration.indexOf("SET lock_timeout = '5s';")).toBeGreaterThan(0);
+    expect(migration.indexOf("SET lock_timeout = '5s';")).toBeLessThan(migration.indexOf('CREATE TABLE'));
+    expect(migration.trimEnd().endsWith('RESET lock_timeout;')).toBe(true);
   });
 
   it('clears a deleted message\'s quotes through an index, not a scan per row', () => {

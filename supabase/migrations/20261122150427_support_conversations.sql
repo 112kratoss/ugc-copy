@@ -34,8 +34,10 @@
 -- The locks this takes are on tables written all day (auth.users for the
 -- foreign keys, mobile_notifications and media_upload_intents for their
 -- checks): a release waits at most five seconds for one, and fails rather
--- than queueing every write behind it.
-SET LOCAL lock_timeout = '5s';
+-- than queueing every write behind it. A plain SET, reset at the end, as in
+-- 20261104135153: SET LOCAL does nothing where the file is not run inside a
+-- transaction block (`supabase db reset`), and a failed transaction reverts it.
+SET lock_timeout = '5s';
 
 CREATE TABLE public.support_conversations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1171,3 +1173,5 @@ ALTER TABLE public.mobile_notifications ADD CONSTRAINT mobile_notifications_type
   'creator_payout_paid', 'creator_payout_rejected',
   'support_reply'
 ));
+
+RESET lock_timeout;
