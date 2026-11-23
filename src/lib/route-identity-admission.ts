@@ -20,9 +20,26 @@ type ProxyIdentityClient = {
   rpc: (name: string) => Promise<{ data: unknown; error: unknown }>;
 };
 
+/** A bearer token whose signature, expiry, subject and role have been verified locally. */
+export type VerifiedRouteToken = {
+  /** The token's subject: a well-formed user id from a signature checked here. */
+  userId: string;
+  claims: ProxyIdentityClaims;
+};
+
 export type ProxyIdentityDependencies = {
   createUserClient?: (authorization: string) => ProxyIdentityClient;
   signIdentityAdmission?: typeof signIdentityAdmission;
+  /**
+   * Told of a token once it is verified locally, just before the lifecycle round trip starts, so
+   * a route can start work keyed on the verified subject beside that round trip
+   * (`route-owned-identity-admission.ts`). Only a token the lifecycle answer could still admit is
+   * told: never a request without one, a token that fails the local checks, an agent's token on a
+   * route that refuses one, or a guest's on a registered-only route. Admission answers as it
+   * would without the hook, whatever the hook does; an exception it throws is ignored. The proxy
+   * passes none.
+   */
+  onTokenVerified?: (token: VerifiedRouteToken) => void;
 };
 
 export type ProxyIdentityAdmission = {
@@ -182,6 +199,17 @@ export async function evaluateUserFacingRouteIdentity(
       ));
     }
 
+    const isAnonymous = claims.is_anonymous === true;
+    // A guest's token on a registered-only route is refused whatever the lifecycle says (403
+    // below, or a lifecycle refusal first), so nothing is started for it.
+    if (dependencies.onTokenVerified && !(policy === 'registered' && isAnonymous)) {
+      try {
+        dependencies.onTokenVerified({ userId, claims });
+      } catch {
+        // The hook's work is the route's own; admission's answer does not depend on it.
+      }
+    }
+
     const lifecycleStartedAt = performance.now();
     const { data: admission, error: admissionError } = await client.rpc('current_identity_admission');
     lifecycleMs = performance.now() - lifecycleStartedAt;
@@ -217,7 +245,6 @@ export async function evaluateUserFacingRouteIdentity(
       ));
     }
 
-    const isAnonymous = claims.is_anonymous === true;
     if (policy === 'registered' && isAnonymous) {
       return result(identityRejection(
         403,

@@ -544,6 +544,82 @@ describe('central route identity admission', () => {
     expect(routeIdentityPolicyForRequest('/api/generation-models/quotes', 'POST')).toBe('guest');
   });
 
+  it('tells onTokenVerified of a verified token after local verification and before the lifecycle round trip', async () => {
+    const client = identityClient();
+    const onTokenVerified = vi.fn();
+
+    const admission = await evaluateUserFacingRouteIdentity(authenticatedRequest('/api/generations'), {
+      createUserClient: () => client,
+      onTokenVerified,
+    });
+
+    expect(admission.rejection).toBeNull();
+    expect(onTokenVerified).toHaveBeenCalledOnce();
+    expect(onTokenVerified).toHaveBeenCalledWith({
+      userId: SUBJECT,
+      claims: expect.objectContaining({ sub: SUBJECT, session_id: SESSION }),
+    });
+    const [verifiedAt] = client.auth.getClaims.mock.invocationCallOrder;
+    const [toldAt] = onTokenVerified.mock.invocationCallOrder;
+    const [lifecycleAt] = client.rpc.mock.invocationCallOrder;
+    expect(verifiedAt).toBeLessThan(toldAt);
+    expect(toldAt).toBeLessThan(lifecycleAt);
+  });
+
+  it('tells onTokenVerified of no token admission refuses before the round trip, nor of a guest on a registered-only route', async () => {
+    const agentClaims = {
+      sub: SUBJECT,
+      aud: 'authenticated',
+      role: 'authenticated',
+      is_anonymous: false,
+      client_id: 'client-claude',
+      exp: Math.floor(Date.now() / 1000) + 3_600,
+    };
+    const neverTold: Array<[string, NextRequest, ReturnType<typeof identityClient>]> = [
+      ['no token', new NextRequest('https://magicbooklet.test/api/generations'), identityClient()],
+      ['a malformed header', authenticatedRequest('/api/generations', 'Token signed-user-token'), identityClient()],
+      ['a token failing verification', authenticatedRequest('/api/generations'), identityClient({ claims: null })],
+      ['a subject that is not a user id', authenticatedRequest('/api/generations'), identityClient({ claims: { sub: 'nope', role: 'authenticated' } })],
+      ['an agent token off the MCP server', authenticatedRequest('/api/generations'), identityClient({ claims: agentClaims })],
+      ['a guest on a registered-only route', authenticatedRequest('/api/showcase/publish'), identityClient({ anonymous: true })],
+    ];
+    for (const [label, request, client] of neverTold) {
+      const onTokenVerified = vi.fn();
+      await evaluateUserFacingRouteIdentity(request, { createUserClient: () => client, onTokenVerified });
+      expect(onTokenVerified, label).not.toHaveBeenCalled();
+    }
+
+    // The same tokens where admission can still let them through.
+    for (const [label, request, client] of [
+      ['a guest on a guest route', authenticatedRequest('/api/generate'), identityClient({ anonymous: true })],
+      ['an agent token on the MCP server', requestWithMethod('POST', '/api/mcp'), identityClient({ claims: agentClaims })],
+    ] as const) {
+      const onTokenVerified = vi.fn();
+      await evaluateUserFacingRouteIdentity(request, { createUserClient: () => client, onTokenVerified });
+      expect(onTokenVerified, label).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('answers exactly as without onTokenVerified when the hook throws', async () => {
+    for (const options of [{}, { sessionValid: false }, { state: 'merged' }, { admission: null }]) {
+      const alone = await evaluateUserFacingRouteIdentity(authenticatedRequest('/api/generations'), {
+        createUserClient: () => identityClient(options),
+        signIdentityAdmission: async () => 'signed-assertion',
+      });
+      const throwing = await evaluateUserFacingRouteIdentity(authenticatedRequest('/api/generations'), {
+        createUserClient: () => identityClient(options),
+        signIdentityAdmission: async () => 'signed-assertion',
+        onTokenVerified: () => {
+          throw new Error('hook failed');
+        },
+      });
+      expect(throwing.assertion).toBe(alone.assertion);
+      expect(throwing.claims).toEqual(alone.claims);
+      expect(throwing.rejection?.status).toBe(alone.rejection?.status);
+      expect(await throwing.rejection?.json()).toEqual(await alone.rejection?.json());
+    }
+  });
+
   it('keeps raw auth.getUser inside the one audited server authentication boundary', () => {
     const apiRoot = path.resolve(process.cwd(), 'src/app/api');
     const sourceRoot = path.resolve(process.cwd(), 'src');

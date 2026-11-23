@@ -6,6 +6,7 @@ import {
   evaluateUserFacingRouteIdentity,
   type ProxyIdentityAdmission,
   type ProxyIdentityDependencies,
+  type VerifiedRouteToken,
 } from '@/lib/route-identity-admission';
 
 /**
@@ -17,7 +18,8 @@ import {
  * evaluator (the MCP adapter's): a path listed here and not wrapped is open. Keep the list short.
  *
  * - The showcase feed's reads run admission next to the database, in the API function's
- *   Mumbai region, so the lifecycle round trip is a local one.
+ *   Mumbai region, so the lifecycle round trip is a local one, and count a signed-in read
+ *   against its read limit beside that round trip (`besideLifecycle`).
  * - The MCP server, at both its paths, answers an agent's missing or invalid token with the
  *   `WWW-Authenticate` challenge MCP clients need, which the proxy's 401 does not carry, and
  *   requires the agent-token claim the proxy refuses everywhere else (`agent-token.ts`).
@@ -65,15 +67,49 @@ export async function rebuildAdmittedRequest(
   });
 }
 
-/** Run the same fresh checks at the route, before any route work. */
-export async function withRouteOwnedIdentityAdmission(
+/**
+ * Work a route starts beside the lifecycle round trip (`besideLifecycle`). `settled` must never
+ * reject: it is what the route's answer waits for.
+ */
+export type StartedBesideLifecycle = {
+  readonly settled: Promise<unknown>;
+};
+
+/**
+ * Run the same fresh checks at the route, before any route work.
+ *
+ * `besideLifecycle`, when given, is started from the token's locally verified subject the moment
+ * it is verified, so it runs beside the lifecycle round trip instead of after it; it must be
+ * work that only needs that subject and that the route would do for an admitted request anyway
+ * (the feed's read limit). The route's handler, which runs only once admission has passed, gets
+ * what it started (null when nothing was: no token, or a token refused before the round trip).
+ * A refusal answers exactly as it would without it and never reads what the work found. Either
+ * way the answer waits until the started work has settled, so no request leaves it running.
+ */
+export async function withRouteOwnedIdentityAdmission<Started extends StartedBesideLifecycle = never>(
   request: NextRequest,
-  handler: (admitted: NextRequest) => Promise<Response>,
+  handler: (admitted: NextRequest, started: Started | null) => Promise<Response>,
   dependencies: ProxyIdentityDependencies = {},
+  besideLifecycle?: (token: VerifiedRouteToken) => Started | null,
 ): Promise<Response> {
+  const beside: { started: Started | null } = { started: null };
   // Never trust an incoming assertion, even a still-valid one: revocation and
   // lifecycle changes must be checked on each request at this boundary.
-  const admission = await evaluateUserFacingRouteIdentity(request, dependencies);
-  if (admission.rejection) return admission.rejection;
-  return handler(await rebuildAdmittedRequest(request, admission));
+  const admission = await evaluateUserFacingRouteIdentity(request, besideLifecycle
+    ? {
+        ...dependencies,
+        onTokenVerified: (token) => {
+          beside.started = besideLifecycle(token);
+          // Handled from the start: the lifecycle round trip is awaited before anything reads it.
+          beside.started?.settled.catch(() => undefined);
+        },
+      }
+    : dependencies);
+  try {
+    if (admission.rejection) return admission.rejection;
+    return await handler(await rebuildAdmittedRequest(request, admission), beside.started);
+  } finally {
+    // Nothing started here outlives the answer, even one the handler returned without reading it.
+    await beside.started?.settled.catch(() => undefined);
+  }
 }
