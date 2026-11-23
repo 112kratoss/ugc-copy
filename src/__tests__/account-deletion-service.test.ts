@@ -163,6 +163,24 @@ describe('account deletion cleanup service', () => {
     ] });
   });
 
+  // The deletion's `deleting` state cleared the post's recorded public copies
+  // and queued them (post-media-public-copies.ts); the sweep takes the whole
+  // public folder at once, as it does the private one.
+  it('sweeps the public copies of each post\'s uploaded media from the public bucket', async () => {
+    const copies = `public-posts/${GENERATION_ID}`;
+    const manifest = parseAccountDeletionStorageManifest({
+      ...storageManifest,
+      showcase_media_paths: [`private-posts/${GENERATION_ID}/0/original.mp4`],
+    })!;
+    const mock = storageMock({ listFiles: {
+      [`showcase_media:${copies}`]: [{ name: '0/original.mp4' }, { name: '0/original.preview.0123456789abcdef.webp' }],
+    } });
+    await removeAccountStorage(mock as never, USER_ID, manifest);
+    expect(mock.removed).toContainEqual({ bucket: 'showcase_media', paths: [
+      `${copies}/0/original.mp4`, `${copies}/0/original.preview.0123456789abcdef.webp`,
+    ] });
+  });
+
   // An agent's post of uploaded media gets a derived id (`agentUploadPostId`), and its media is
   // filed under that id like any post's. The manifest is read after the account is marked as
   // deleting, so an id this parser refused would leave the account locked and never erased

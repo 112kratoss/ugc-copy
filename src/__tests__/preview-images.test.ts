@@ -33,6 +33,21 @@ describe('preview image optimization', () => {
     )).toBe(false);
   });
 
+  // A public copy of a post's uploaded media is removed the moment the post
+  // stops being public; an optimized copy in /_next/image would outlive that
+  // by images.minimumCacheTTL, which nothing can purge.
+  it('never sends a public copy of uploaded post media through the optimizer', async () => {
+    const { buildOptimizedPreviewImageUrl, canOptimizePreviewImage } = await import('@/lib/preview-images');
+    const copy = 'https://project.supabase.co/storage/v1/object/public/showcase_media/public-posts/b9700000-0000-4000-8000-000000000001/0/photo.jpg';
+    const copiedPreview = 'https://project.supabase.co/storage/v1/object/public/showcase_media/public-posts/b9700000-0000-4000-8000-000000000001/0/photo.preview.abcdef0123456789.webp';
+
+    expect(canOptimizePreviewImage(copy)).toBe(false);
+    expect(buildOptimizedPreviewImageUrl(copy)).toBe(copy);
+    // A bounded preview keeps next/image's frame, read unoptimized.
+    expect(canOptimizePreviewImage(copiedPreview)).toBe(true);
+    expect(buildOptimizedPreviewImageUrl(copiedPreview)).toBe(copiedPreview);
+  });
+
   it('builds a bounded same-origin optimizer URL and leaves unsupported hosts unchanged', async () => {
     const {
       buildOptimizedPreviewImageUrl,

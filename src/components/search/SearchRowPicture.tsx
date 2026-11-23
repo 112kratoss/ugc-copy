@@ -54,7 +54,7 @@ export function SearchRowPicture({
       style={blur ? { backgroundImage: `url(${blur})` } : undefined}
     >
       {url ? (
-        // A preview the server already sized (a 720 px WebP), as a post card's own cover is drawn.
+        // A picture the server already sized for a row (the cover's 144 px thumb, or its 720 px preview where it has none).
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={url}

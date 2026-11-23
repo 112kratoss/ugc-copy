@@ -1,8 +1,8 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { GoTrueClient } from '@supabase/auth-js';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
 
-type AppleAuthClient = Pick<SupabaseClient['auth'], 'signInWithIdToken' | 'updateUser'>;
+type AppleAuthClient = Pick<GoTrueClient, 'signInWithIdToken' | 'updateUser'>;
 
 type AppleFullName = {
   givenName?: string | null;

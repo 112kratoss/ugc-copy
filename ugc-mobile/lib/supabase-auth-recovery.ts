@@ -1,4 +1,4 @@
-import type { Session } from '@supabase/supabase-js';
+import type { Session } from '@supabase/auth-js';
 
 export function isInvalidRefreshTokenError(error: unknown) {
   const message = getErrorMessage(error);

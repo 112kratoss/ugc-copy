@@ -1,4 +1,4 @@
-import { createClient, isAuthRetryableFetchError } from '@supabase/supabase-js';
+import { AuthClient, isAuthRetryableFetchError } from '@supabase/auth-js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSupabaseAuthFetch } from '../lib/supabase-fetch';
@@ -59,18 +59,23 @@ function stalledFetch() {
   }));
 }
 
+// The auth client wired as lib/supabase.ts wires the app's (the refresh timer
+// aside, so a test controls when a refresh happens).
 function clientWith(fetchImpl: typeof fetch, storage: ReturnType<typeof memoryStorage>) {
-  return createClient(SUPABASE_URL, 'publishable-key', {
-    global: { fetch: fetchImpl },
-    auth: {
+  return {
+    auth: new AuthClient({
+      url: `${SUPABASE_URL}/auth/v1`,
+      headers: { Authorization: 'Bearer publishable-key', apikey: 'publishable-key' },
+      fetch: fetchImpl,
       storage,
       storageKey: STORAGE_KEY,
       persistSession: true,
       autoRefreshToken: false,
       detectSessionInUrl: false,
+      flowType: 'pkce',
       skipAutoInitialize: true,
-    },
-  });
+    }),
+  };
 }
 
 function settlesWithin(promise: Promise<unknown>, ms: number) {
@@ -142,7 +147,9 @@ describe('Supabase sign-ins on a stalled network', () => {
     const session = storedSession();
     const storage = memoryStorage({
       [STORAGE_KEY]: session,
-      [`${STORAGE_KEY}-code-verifier`]: 'code-verifier',
+      // As auth-js writes it: JSON. Under the app's PKCE flow a raw value reads
+      // as no verifier, and the exchange would fail before any request.
+      [`${STORAGE_KEY}-code-verifier`]: JSON.stringify('code-verifier'),
     });
     const { fetch: authFetch } = createSupabaseAuthFetch({
       fetcher: stalledFetch() as unknown as typeof fetch,

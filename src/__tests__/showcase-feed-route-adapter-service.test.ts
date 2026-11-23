@@ -5,7 +5,7 @@ import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passth
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
-import { getShowcaseFeedRouteResponse } from '@/lib/showcase-feed-route-adapter-service';
+import { getShowcaseFeedRouteResponse, startShowcaseFeedReadLimit } from '@/lib/showcase-feed-route-adapter-service';
 import type { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
 
 function createFeedPage(overrides: Record<string, unknown> = {}) {
@@ -599,8 +599,98 @@ describe('showcase feed route adapter service', () => {
         })),
         getShowcaseFeedPage: vi.fn(async () => createFeedPage()) as unknown as typeof getShowcaseFeedPage,
         prepareShowcaseFeedReadAhead: vi.fn(async () => prepared) as unknown as typeof prepareShowcaseFeedReadAhead,
+        recordShowcaseFeedReadAheadEvent: vi.fn(async () => undefined),
+        runAfterResponse: vi.fn(),
+        logError: vi.fn(),
       };
     }
+
+    /** Runs what the route left for after its answer, as Next does once the response has gone. */
+    async function runAfterResponseTasks(dependencies: ReturnType<typeof readAheadDependencies>) {
+      for (const [task] of dependencies.runAfterResponse.mock.calls) await (task as () => Promise<unknown>)();
+    }
+
+    function readWith(dependencies: ReturnType<typeof readAheadDependencies>, query: string) {
+      return getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?${query}`, {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies,
+      });
+    }
+
+    it('counts a held ranking once its answer has gone, and nothing when there was none to hold', async () => {
+      const held = readAheadDependencies();
+      const response = await readWith(held, 'sort=for-you&category=media&offset=0&readAhead=1');
+
+      expect(response.status).toBe(200);
+      // Left for after the answer, never on its way.
+      expect(held.recordShowcaseFeedReadAheadEvent).not.toHaveBeenCalled();
+      await runAfterResponseTasks(held);
+      expect(held.recordShowcaseFeedReadAheadEvent.mock.calls).toEqual([['hold']]);
+
+      const empty = readAheadDependencies({ prepared: null });
+      await readWith(empty, 'sort=for-you&readAhead=1');
+      expect(empty.runAfterResponse).not.toHaveBeenCalled();
+    });
+
+    it("counts a token handed back as a claim or a miss, as the page's read says, and no other read", async () => {
+      const dependencies = readAheadDependencies();
+      vi.mocked(dependencies.getShowcaseFeedPage)
+        .mockImplementationOnce(async (options) => {
+          options.onReadAheadClaim?.(true);
+          return createFeedPage();
+        })
+        .mockImplementationOnce(async (options) => {
+          options.onReadAheadClaim?.(false);
+          return createFeedPage();
+        });
+
+      await readWith(dependencies, `sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`);
+      await readWith(dependencies, `sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`);
+      await readWith(dependencies, 'sort=for-you&category=media&offset=0');
+      await readWith(dependencies, `sort=for-you&offset=12&readAheadToken=${TOKEN}`);
+      await runAfterResponseTasks(dependencies);
+
+      expect(dependencies.recordShowcaseFeedReadAheadEvent.mock.calls).toEqual([['claim'], ['claim_miss']]);
+      const calls = vi.mocked(dependencies.getShowcaseFeedPage).mock.calls.map(([options]) => options);
+      expect(calls.map((options) => 'onReadAheadClaim' in options)).toEqual([true, true, false, false]);
+    });
+
+    it('counts no token sent without an account, which the app never sends', async () => {
+      const dependencies = readAheadDependencies({ userId: null });
+      vi.mocked(dependencies.getShowcaseFeedPage).mockImplementation(async (options) => {
+        options.onReadAheadClaim?.(false);
+        return createFeedPage();
+      });
+
+      const response = await getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`),
+        dependencies,
+      });
+      await runAfterResponseTasks(dependencies);
+
+      expect(response.status).toBe(200);
+      const [options] = vi.mocked(dependencies.getShowcaseFeedPage).mock.calls[0];
+      // The read itself is as before; only the count is left out.
+      expect(options).toMatchObject({ viewerUserId: null, readAheadToken: TOKEN });
+      expect('onReadAheadClaim' in options).toBe(false);
+      expect(dependencies.runAfterResponse).not.toHaveBeenCalled();
+      expect(dependencies.recordShowcaseFeedReadAheadEvent).not.toHaveBeenCalled();
+    });
+
+    it('answers the read whose count cannot be kept', async () => {
+      const dependencies = readAheadDependencies();
+      dependencies.runAfterResponse.mockImplementation(() => {
+        throw new Error('after() was called outside a request scope');
+      });
+
+      const response = await readWith(dependencies, 'sort=for-you&readAhead=1');
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ readAhead: { token: TOKEN, expiresInMs: 120_000 } });
+      expect(dependencies.logError).toHaveBeenCalledWith('Showcase feed read-ahead count failed:', expect.any(Error));
+    });
 
     it('ranks a signed-in first page ahead and answers only its token, never an ordinary page', async () => {
       const dependencies = readAheadDependencies();
@@ -732,6 +822,209 @@ describe('showcase feed route adapter service', () => {
       expect(await signedIn.json()).toMatchObject({ readAheadSupported: true });
       expect(await signedOut.json()).not.toHaveProperty('readAheadSupported');
       expect(await recent.json()).not.toHaveProperty('readAheadSupported');
+    });
+  });
+
+  // The route counts a signed-in read beside admission's lifecycle round trip
+  // (startShowcaseFeedReadLimit); the handler then reads that count instead of making its own.
+  describe('a read counted beside admission', () => {
+    const RESET_AT = '2026-11-23T10:10:00.000Z';
+
+    function signedInDependencies(answer: () => Promise<unknown>) {
+      return {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: vi.fn(() => createUserClient('user-1')),
+        enforceBackendRateLimit: vi.fn(answer) as unknown as typeof import('@/lib/backend-rate-limit').enforceBackendRateLimit,
+        getShowcaseFeedPage: vi.fn(async () => createFeedPage()) as unknown as typeof getShowcaseFeedPage,
+        logError: vi.fn(),
+      };
+    }
+
+    function signedInRequest(query = 'sort=for-you', headers: Record<string, string> = {}) {
+      return new Request(`http://localhost/api/showcase/feed?${query}`, {
+        headers: { Authorization: 'Bearer user-token', 'x-request-id': 'feed-counted-beside-1', ...headers },
+      });
+    }
+
+    it.each([
+      ['allowed', async () => ({ allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: RESET_AT })],
+      ['over the limit', async () => {
+        throw new BackendRateLimitError({ allowed: false, limit: 60, remaining: 0, retryAfterSeconds: 42, resetAt: RESET_AT });
+      }],
+      ['failed', async () => { throw new Error('limiter down'); }],
+    ])('is answered exactly as the handler answers its own count when it is %s', async (_case, answer) => {
+      const own = signedInDependencies(answer);
+      const ownResponse = await getShowcaseFeedRouteResponse({ request: signedInRequest(), dependencies: own });
+
+      const beside = signedInDependencies(answer);
+      const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', beside);
+      expect(startedReadLimit).toMatchObject({ scope: 'showcase-feed:for-you-read', key: 'user-1' });
+      const besideResponse = await getShowcaseFeedRouteResponse({
+        request: signedInRequest(),
+        dependencies: beside,
+        startedReadLimit,
+      });
+
+      expect(besideResponse.status).toBe(ownResponse.status);
+      expect(await besideResponse.text()).toBe(await ownResponse.text());
+      expect([...besideResponse.headers]).toEqual([...ownResponse.headers]);
+      expect(vi.mocked(beside.logError).mock.calls).toEqual(vi.mocked(own.logError).mock.calls);
+      // Counted once either way, under the same limit and key.
+      expect(beside.enforceBackendRateLimit).toHaveBeenCalledOnce();
+      expect(vi.mocked(beside.enforceBackendRateLimit).mock.calls[0][1])
+        .toEqual(vi.mocked(own.enforceBackendRateLimit).mock.calls[0][1]);
+    });
+
+    it.each([
+      ['sort=for-you', { scope: 'showcase-feed:for-you-read', limit: 60, windowSeconds: 600 }],
+      ['sort=recent', { scope: 'showcase-feed:read', limit: 240, windowSeconds: 600 }],
+      ['sort=top-sales&cursor=abc', { scope: 'showcase-feed:read', limit: 240, windowSeconds: 600 }],
+      ['sort=for-you&readAhead=1', { scope: 'showcase-feed:for-you-read', limit: 60, windowSeconds: 600 }],
+    ])('counts %s under the limit and key the handler would', async (query, limit) => {
+      const dependencies = signedInDependencies(async () => ({}));
+      const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(query), 'user-1', dependencies);
+      await startedReadLimit?.settled;
+      expect(dependencies.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), { ...limit, key: 'user-1' });
+    });
+
+    it.each([
+      'sort=recent&readAhead=1',
+      'sort=for-you&offset=12&readAhead=1',
+      'sort=for-you&cursor=abc&readAhead=1',
+    ])('counts nothing for a read-ahead the handler refuses before counting (%s)', (query) => {
+      const dependencies = signedInDependencies(async () => ({}));
+      expect(startShowcaseFeedReadLimit(signedInRequest(query), 'user-1', dependencies)).toBeNull();
+      expect(dependencies.enforceBackendRateLimit).not.toHaveBeenCalled();
+    });
+
+    it('leaves a service client it cannot make to the handler, which answers it as it always has', async () => {
+      const dependencies = signedInDependencies(async () => ({}));
+      vi.mocked(dependencies.createServiceClient).mockImplementation(() => {
+        throw new Error('supabaseUrl is required.');
+      });
+      expect(startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)).toBeNull();
+
+      const response = await getShowcaseFeedRouteResponse({ request: signedInRequest(), dependencies });
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: 'Failed to fetch showcase feed' });
+    });
+
+    it('settles a count that throws instead of rejecting, and never rejects', async () => {
+      const dependencies = signedInDependencies(async () => ({}));
+      vi.mocked(dependencies.enforceBackendRateLimit).mockImplementation(() => {
+        throw new Error('thrown synchronously');
+      });
+      const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies);
+      await expect(startedReadLimit!.settled).resolves.toMatchObject({
+        allowed: false,
+        error: new Error('thrown synchronously'),
+      });
+    });
+
+    it('is not read when it counted another key or limit: the handler counts the read itself', async () => {
+      const dependencies = signedInDependencies(async () => ({}));
+      for (const [scope, key] of [['showcase-feed:for-you-read', 'someone-else'], ['showcase-feed:read', 'user-1']]) {
+        const outcome = { allowed: true as const, state: { allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: RESET_AT }, durationMs: 1 };
+        const startedReadLimit = {
+          scope,
+          key,
+          settled: Promise.resolve(outcome),
+          claim: vi.fn(async () => outcome),
+          release: vi.fn(async () => undefined),
+        };
+        vi.mocked(dependencies.enforceBackendRateLimit).mockClear();
+        const response = await getShowcaseFeedRouteResponse({ request: signedInRequest(), dependencies, startedReadLimit });
+        expect(response.status).toBe(200);
+        expect(dependencies.enforceBackendRateLimit).toHaveBeenCalledOnce();
+        expect(dependencies.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+          scope: 'showcase-feed:for-you-read',
+          key: 'user-1',
+        }));
+        // Left unclaimed, so the route's release gives it back: the read is counted once.
+        expect(startedReadLimit.claim).not.toHaveBeenCalled();
+      }
+    });
+
+    describe('given back when the handler never claimed it', () => {
+      const STATE = { allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: RESET_AT };
+
+      function refundDependencies(answer: () => Promise<unknown>) {
+        return {
+          ...signedInDependencies(answer),
+          refundBackendRateLimit: vi.fn(async () => true),
+        };
+      }
+
+      it.each([
+        ['allowed', async () => STATE],
+        ['over the limit', async () => {
+          throw new BackendRateLimitError({ ...STATE, allowed: false, remaining: 0, retryAfterSeconds: 42 });
+        }],
+      ])('gives back a count the limiter made (%s), in the window it was made in', async (_case, answer) => {
+        const dependencies = refundDependencies(answer);
+        const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;
+
+        await startedReadLimit.release();
+
+        expect(dependencies.refundBackendRateLimit).toHaveBeenCalledOnce();
+        expect(dependencies.refundBackendRateLimit).toHaveBeenCalledWith(expect.anything(), {
+          scope: 'showcase-feed:for-you-read',
+          key: 'user-1',
+          windowSeconds: 600,
+          resetAt: RESET_AT,
+        });
+      });
+
+      it.each([
+        ['answered with an error', async () => { throw new Error('limiter down'); }],
+        ['thrown synchronously', () => { throw new Error('thrown'); }],
+      ])('gives nothing back for a check that %s, which may never have counted', async (_case, answer) => {
+        const dependencies = refundDependencies(answer as () => Promise<unknown>);
+        await startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!.release();
+        expect(dependencies.refundBackendRateLimit).not.toHaveBeenCalled();
+      });
+
+      it('gives a count back at most once, however often and however concurrently it is released', async () => {
+        const dependencies = refundDependencies(async () => STATE);
+        const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;
+
+        await Promise.all([startedReadLimit.release(), startedReadLimit.release()]);
+        await startedReadLimit.release();
+
+        expect(dependencies.refundBackendRateLimit).toHaveBeenCalledOnce();
+      });
+
+      it('leaves a count the handler claimed standing, whatever it said', async () => {
+        const dependencies = refundDependencies(async () => STATE);
+        const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;
+
+        const response = await getShowcaseFeedRouteResponse({ request: signedInRequest(), dependencies, startedReadLimit });
+        await startedReadLimit.release();
+
+        expect(response.status).toBe(200);
+        expect(dependencies.refundBackendRateLimit).not.toHaveBeenCalled();
+      });
+
+      it('logs a refund that failed and still settles: the read then stays counted', async () => {
+        const dependencies = refundDependencies(async () => STATE);
+        vi.mocked(dependencies.refundBackendRateLimit).mockRejectedValue(new Error('refund down'));
+
+        await expect(startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!.release()).resolves.toBeUndefined();
+
+        expect(dependencies.logError).toHaveBeenCalledWith('Showcase feed read limit refund failed:', new Error('refund down'));
+      });
+    });
+
+    it('reports the count and the wait for it to the performance monitor', async () => {
+      const dependencies = signedInDependencies(async () => ({}));
+      const request = signedInRequest('sort=for-you', { 'x-performance-monitor': 'load' });
+      const startedReadLimit = startShowcaseFeedReadLimit(request, 'user-1', dependencies);
+      const response = await getShowcaseFeedRouteResponse({ request, dependencies, startedReadLimit });
+
+      expect(response.status).toBe(200);
+      // The certification load test requires the rate-limit phase on every signed-in read.
+      expect(response.headers.get('Server-Timing')).toMatch(/(^|, )rate-limit;dur=\d/u);
+      expect(response.headers.get('Server-Timing')).toMatch(/(^|, )rate-limit-wait;dur=\d/u);
     });
   });
 });

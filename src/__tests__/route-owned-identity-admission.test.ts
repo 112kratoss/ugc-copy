@@ -24,6 +24,7 @@ vi.mock('@supabase/supabase-js', async (original) => ({
 }));
 vi.mock('@/lib/showcase-feed-route-adapter-service', () => ({
   getShowcaseFeedRouteResponse: vi.fn(async () => new Response('feed')),
+  startShowcaseFeedReadLimit: vi.fn(() => null),
 }));
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -172,6 +173,159 @@ describe('route-owned identity admission', () => {
       createUserClient: () => client(),
     })).status).toBe(200);
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  describe('work started beside the lifecycle round trip', () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((settle) => { resolve = settle; });
+      return { promise, resolve };
+    }
+    const ACTIVE = { state: 'active', session_valid: true, banned: false, created_at: '2026-09-21T00:00:00Z' };
+
+    function started(settled: Promise<unknown> = Promise.resolve('counted')) {
+      return { settled, release: vi.fn(async () => undefined) };
+    }
+    /** Collects what runs after the response, to run it when the test says. */
+    function afterResponse() {
+      const tasks: Array<() => Promise<void>> = [];
+      return {
+        tasks,
+        schedule: (task: () => Promise<void>) => { tasks.push(task); },
+        runAll: () => Promise.all(tasks.splice(0).map((task) => task())),
+      };
+    }
+
+    it('starts it from the verified subject while the round trip is out, and hands it to the handler once admitted', async () => {
+      const lifecycle = deferred<{ data: unknown; error: unknown }>();
+      const identity = client();
+      identity.rpc.mockImplementation(() => lifecycle.promise);
+      const work = started();
+      const besideLifecycle = vi.fn(() => work);
+      const handler = vi.fn(async () => new Response('feed'));
+      const after = afterResponse();
+
+      const pending = withRouteOwnedIdentityAdmission(
+        request(),
+        handler,
+        { createUserClient: () => identity },
+        besideLifecycle,
+        after.schedule,
+      );
+      await vi.waitFor(() => expect(besideLifecycle).toHaveBeenCalledOnce());
+      // The subject alone: the claims stay admission's own.
+      expect(besideLifecycle).toHaveBeenCalledWith({ userId: USER_ID });
+      expect(identity.rpc).toHaveBeenCalledOnce();
+      expect(besideLifecycle.mock.invocationCallOrder[0]).toBeLessThan(identity.rpc.mock.invocationCallOrder[0]);
+      expect(handler).not.toHaveBeenCalled();
+
+      lifecycle.resolve({ data: ACTIVE, error: null });
+      expect((await pending).status).toBe(200);
+      expect(handler).toHaveBeenCalledWith(expect.any(NextRequest), work);
+      // Released only after the answer, and only through the after-response runner.
+      expect(work.release).not.toHaveBeenCalled();
+      await after.runAll();
+      expect(work.release).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      [{ session_valid: false, state: 'active' }, 401],
+      [{ session_valid: true, state: 'merged' }, 409],
+      [null, 401],
+      [{ session_valid: true, state: 'unknown' }, 503],
+    ])('answers a refusal at once, exactly as without it, and releases it after (%j)', async (admission, status) => {
+      const count = deferred<string>();
+      const work = started(count.promise);
+      const handler = vi.fn(async () => new Response('feed'));
+      const after = afterResponse();
+
+      // The work is still out when the refusal is answered.
+      const response = await withRouteOwnedIdentityAdmission(
+        request(),
+        handler,
+        { createUserClient: () => client(admission) },
+        () => work,
+        after.schedule,
+      );
+      const alone = await withRouteOwnedIdentityAdmission(request(), handler, { createUserClient: () => client(admission) });
+      expect(response.status).toBe(status);
+      expect(response.status).toBe(alone.status);
+      expect(await response.json()).toEqual(await alone.json());
+      expect([...response.headers]).toEqual([...alone.headers]);
+      expect(handler).not.toHaveBeenCalled();
+
+      expect(work.release).not.toHaveBeenCalled();
+      expect(after.tasks).toHaveLength(1);
+      count.resolve('counted');
+      await after.runAll();
+      expect(work.release).toHaveBeenCalledOnce();
+    });
+
+    it('releases work the handler answered without using, after the answer', async () => {
+      const work = started(new Promise(() => undefined));
+      const after = afterResponse();
+
+      const response = await withRouteOwnedIdentityAdmission(
+        request(),
+        async () => new Response('early answer'),
+        { createUserClient: () => client() },
+        () => work,
+        after.schedule,
+      );
+
+      expect(await response.text()).toBe('early answer');
+      expect(after.tasks).toHaveLength(1);
+      await after.runAll();
+      expect(work.release).toHaveBeenCalledOnce();
+    });
+
+    it('never lets work that rejects go unhandled, admitted or refused', async () => {
+      for (const [admission, status] of [[undefined, 200], [{ session_valid: false, state: 'active' }, 401]] as const) {
+        const after = afterResponse();
+        const response = await withRouteOwnedIdentityAdmission(
+          request(),
+          async () => new Response('feed'),
+          { createUserClient: () => client(admission) },
+          () => ({
+            settled: Promise.reject(new Error('rejected beside admission')),
+            release: () => Promise.reject(new Error('release rejected')),
+          }),
+          after.schedule,
+        );
+        expect(response.status).toBe(status);
+        await expect(after.runAll()).resolves.toBeDefined();
+      }
+    });
+
+    it('runs the release after the response through after(), and at once outside a request scope', async () => {
+      const work = started();
+      // Called directly, as here, the route has no request scope, so after() throws and the
+      // release runs at once instead.
+      const response = await withRouteOwnedIdentityAdmission(
+        request(),
+        async () => new Response('feed'),
+        { createUserClient: () => client() },
+        () => work,
+      );
+      expect(response.status).toBe(200);
+      await vi.waitFor(() => expect(work.release).toHaveBeenCalledOnce());
+    });
+
+    it('starts nothing for a request without a token, or a token refused before the round trip', async () => {
+      const besideLifecycle = vi.fn(() => started(Promise.resolve()));
+      const after = afterResponse();
+      const tokenless = request();
+      tokenless.headers.delete('authorization');
+      const invalid = client();
+      invalid.auth.getClaims.mockResolvedValue({ data: null, error: new Error('bad token') } as never);
+      const agent = client(undefined, null, { sub: USER_ID, role: 'authenticated', client_id: 'client-claude' });
+
+      expect((await withRouteOwnedIdentityAdmission(tokenless, async () => new Response('feed'), {}, besideLifecycle, after.schedule)).status).toBe(200);
+      expect((await withRouteOwnedIdentityAdmission(request(), async () => new Response('feed'), { createUserClient: () => invalid }, besideLifecycle, after.schedule)).status).toBe(401);
+      expect((await withRouteOwnedIdentityAdmission(request(), async () => new Response('feed'), { createUserClient: () => agent }, besideLifecycle, after.schedule)).status).toBe(403);
+      expect(besideLifecycle).not.toHaveBeenCalled();
+      expect(after.tasks).toHaveLength(0);
+    });
   });
 
   it('rebuilds an admitted POST with its body, the fresh assertion and none of the caller\'s', async () => {

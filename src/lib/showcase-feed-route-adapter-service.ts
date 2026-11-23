@@ -2,7 +2,7 @@ import 'server-only';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import {
   applyPrivateNoStoreApiResponseHeaders,
@@ -17,6 +17,8 @@ import {
   SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
+  refundBackendRateLimit,
+  type BackendRateLimitState,
 } from '@/lib/backend-rate-limit';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { IDENTITY_PROXY_TIMING_HEADER } from '@/lib/identity-admission-assertion';
@@ -39,15 +41,23 @@ import {
 } from '@/lib/showcase';
 import { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
 import { isShowcaseFeedReadAheadToken } from '@/lib/showcase-feed-read-ahead';
+import {
+  recordShowcaseFeedReadAheadEvent,
+  type ShowcaseFeedReadAheadEvent,
+} from '@/lib/showcase-feed-read-ahead-counts';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 
 type ShowcaseFeedRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  refundBackendRateLimit?: typeof refundBackendRateLimit;
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   getShowcaseFeedPage?: typeof getShowcaseFeedPage;
   prepareShowcaseFeedReadAhead?: typeof prepareShowcaseFeedReadAhead;
+  recordShowcaseFeedReadAheadEvent?: (event: ShowcaseFeedReadAheadEvent) => Promise<void>;
+  runAfterResponse?: RunAfterResponse;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -57,12 +67,16 @@ function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undef
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    refundBackendRateLimit: dependencies?.refundBackendRateLimit ?? refundBackendRateLimit,
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
     getShowcaseFeedPage: dependencies?.getShowcaseFeedPage ?? getShowcaseFeedPage,
     // Read when a read-ahead arrives, not here: a request that is not one never needs it.
     prepareShowcaseFeedReadAhead: dependencies?.prepareShowcaseFeedReadAhead
       ?? ((options: Parameters<typeof prepareShowcaseFeedReadAhead>[0]) => prepareShowcaseFeedReadAhead(options)),
+    recordShowcaseFeedReadAheadEvent: dependencies?.recordShowcaseFeedReadAheadEvent
+      ?? ((event: ShowcaseFeedReadAheadEvent) => recordShowcaseFeedReadAheadEvent(event)),
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
@@ -90,9 +104,152 @@ async function getViewerUserId(
   }
 }
 
+/** The parts of a feed read's address the route reads before it counts the read. */
+type ShowcaseFeedReadQuery = {
+  limit: number;
+  tool: string | null;
+  cursor: string | null;
+  sort: ReturnType<typeof normalizeShowcaseSort>;
+  offset: number;
+  readAhead: boolean;
+};
+
+function readShowcaseFeedQuery(searchParams: URLSearchParams): ShowcaseFeedReadQuery {
+  const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
+  const cursor = searchParams.get('cursor');
+  return {
+    limit,
+    tool: searchParams.get('tool'),
+    cursor,
+    sort: normalizeShowcaseSort(searchParams.get('sort')),
+    offset: cursor ? 0 : normalizeShowcaseOffset(searchParams.get('offset'), searchParams.get('page'), limit),
+    readAhead: searchParams.get('readAhead') === '1',
+  };
+}
+
+/**
+ * Explore's read-ahead (the app, once Home has settled): a signed-in viewer's ranked first page,
+ * ranked now and held without a write, for the read that shows it to claim with its token.
+ * Anything else asking for one is refused, before it is counted, rather than answered with an
+ * ordinary page, which would open a session and mark its posts served for a page nobody is
+ * looking at.
+ */
+function refusesReadAhead(query: ShowcaseFeedReadQuery, viewerUserId: string | null): boolean {
+  return query.readAhead
+    && (query.sort !== 'for-you' || Boolean(query.cursor) || query.offset !== 0 || !viewerUserId);
+}
+
+/**
+ * Every sort is limited, not just for-you. The others were left open on the reasoning that they
+ * are cheap cached reads, but `top-sales` scans every public post per call, and an unthrottled
+ * expensive read is exactly what an abusive client will find. The non-personalized ceiling is
+ * deliberately four times the for-you one: it is there to stop a script, not to shape browsing.
+ */
+function showcaseFeedReadRateLimit(sort: ShowcaseFeedReadQuery['sort']) {
+  return sort === 'for-you' ? SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT : SHOWCASE_FEED_READ_RATE_LIMIT;
+}
+
+type ShowcaseFeedReadLimitOutcome =
+  | { allowed: true; state: BackendRateLimitState; durationMs: number }
+  | { allowed: false; error: unknown; durationMs: number };
+
+/** A signed-in read's count, started beside admission's lifecycle round trip. */
+export type StartedShowcaseFeedReadLimit = {
+  scope: string;
+  key: string;
+  /** Settles once the count is in, with the limiter's answer or its error; never rejects. */
+  settled: Promise<ShowcaseFeedReadLimitOutcome>;
+  /** The handler's read of the count at its limit step: the count then stands, whatever it says. */
+  claim: () => Promise<ShowcaseFeedReadLimitOutcome>;
+  /**
+   * Run once the request has been answered (`route-owned-identity-admission.ts`): gives the count
+   * back when the handler never claimed it (admission refused the read, or the handler answered
+   * before its limit step), so such a read spends nothing, as before the count moved. Waits for
+   * the count first; never rejects.
+   */
+  release: () => Promise<void>;
+};
+
+/**
+ * Count a signed-in read against its read limit from the token's locally verified subject while
+ * admission's lifecycle round trip is still out (`app/api/showcase/feed/route.ts`), so the read
+ * waits for the slower of the two instead of both. It counts what the handler below would count
+ * for that viewer, under the same scope, limit, window and key, and nothing for a read the
+ * handler refuses before counting (a read-ahead it will not serve). The handler reads the answer
+ * only once admission has passed (`claim`). A read the handler never claims, because admission
+ * refused it or the handler answered first, gets its count back after the answer (`release`,
+ * through `refund_backend_rate_limit`), so it spends nothing, as before the count moved. Null when
+ * nothing was started; the handler then counts the read itself.
+ */
+export function startShowcaseFeedReadLimit(
+  request: Request,
+  viewerUserId: string,
+  dependencies?: ShowcaseFeedRouteDependencies,
+): StartedShowcaseFeedReadLimit | null {
+  const resolved = resolveDependencies(dependencies);
+  const query = readShowcaseFeedQuery(new URL(request.url).searchParams);
+  if (refusesReadAhead(query, viewerUserId)) return null;
+  const readRateLimit = showcaseFeedReadRateLimit(query.sort);
+  let serviceClient: ReturnType<typeof createServiceClient>;
+  try {
+    serviceClient = resolved.createServiceClient();
+  } catch {
+    // The handler meets the same failure in its own count and answers it as it always has.
+    return null;
+  }
+  const startedAt = performance.now();
+  const settled = new Promise<BackendRateLimitState>((resolve) => {
+    // In the executor, so a dependency that throws instead of rejecting settles as a failure too.
+    resolve(resolved.enforceBackendRateLimit(serviceClient, { ...readRateLimit, key: viewerUserId }));
+  }).then(
+    (state): ShowcaseFeedReadLimitOutcome => ({ allowed: true, state, durationMs: performance.now() - startedAt }),
+    (error: unknown): ShowcaseFeedReadLimitOutcome => ({
+      allowed: false,
+      error,
+      durationMs: performance.now() - startedAt,
+    }),
+  );
+  let claimed = false;
+  let released = false;
+  return {
+    scope: readRateLimit.scope,
+    key: viewerUserId,
+    settled,
+    claim: () => {
+      claimed = true;
+      return settled;
+    },
+    release: async () => {
+      // Once, whoever calls it and however often: a count is given back at most once.
+      if (claimed || released) return;
+      released = true;
+      const outcome = await settled;
+      if (claimed) return;
+      // The count is in whenever the limiter answered, allowed or over the limit. A failed check
+      // may never have counted, so nothing is given back for it.
+      const counted = outcome.allowed
+        ? outcome.state
+        : outcome.error instanceof BackendRateLimitError ? outcome.error.state : null;
+      if (!counted) return;
+      try {
+        await resolved.refundBackendRateLimit(serviceClient, {
+          scope: readRateLimit.scope,
+          key: viewerUserId,
+          windowSeconds: readRateLimit.windowSeconds,
+          resetAt: counted.resetAt,
+        });
+      } catch (error) {
+        // The read stays counted: its account sees one more read in this window than it made.
+        resolved.logError('Showcase feed read limit refund failed:', error);
+      }
+    },
+  };
+}
+
 async function handleShowcaseFeedGET(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
+  startedReadLimit: StartedShowcaseFeedReadLimit | null,
 ) {
   try {
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
@@ -117,6 +274,16 @@ async function handleShowcaseFeedGET(
       response.headers.set('x-scaling-certification-timing', renderedTimings);
       return response;
     };
+    // Explore's read-ahead counts (`showcase-feed-read-ahead-counts.ts`), kept
+    // once the answer has gone. A count that cannot be scheduled is lost; the
+    // read it counts never is.
+    const countReadAhead = (event: ShowcaseFeedReadAheadEvent) => {
+      try {
+        dependencies.runAfterResponse(() => dependencies.recordShowcaseFeedReadAheadEvent(event));
+      } catch (error) {
+        dependencies.logError('Showcase feed read-ahead count failed:', error);
+      }
+    };
     if (timingEnabled) {
       // Admission can run in the proxy or in the regional route handler.
       for (const entry of request.headers.get(IDENTITY_PROXY_TIMING_HEADER)?.split(',') ?? []) {
@@ -125,9 +292,8 @@ async function handleShowcaseFeedGET(
       }
     }
     const searchParams = new URL(request.url).searchParams;
-    const limit = Math.min(parsePositiveInt(searchParams.get('limit'), SHOWCASE_PAGE_SIZE), 24);
-    const tool = searchParams.get('tool');
-    const cursor = searchParams.get('cursor');
+    const query = readShowcaseFeedQuery(searchParams);
+    const { limit, tool, cursor, sort, offset, readAhead } = query;
     const authStartedAt = performance.now();
     const actor = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
     recordPhase('auth', performance.now() - authStartedAt);
@@ -138,15 +304,7 @@ async function handleShowcaseFeedGET(
       );
     }
     const viewerUserId = actor.viewerUserId;
-    const sort = normalizeShowcaseSort(searchParams.get('sort'));
-    const offset = cursor ? 0 : normalizeShowcaseOffset(searchParams.get('offset'), searchParams.get('page'), limit);
-    // Explore's read-ahead (the app, once Home has settled): a signed-in
-    // viewer's ranked first page, ranked now and held without a write, for the
-    // read that shows it to claim with its token. Anything else asking for one
-    // is refused rather than answered with an ordinary page, which would open
-    // a session and mark its posts served for a page nobody is looking at.
-    const readAhead = searchParams.get('readAhead') === '1';
-    if (readAhead && (sort !== 'for-you' || cursor || offset !== 0 || !viewerUserId)) {
+    if (refusesReadAhead(query, viewerUserId)) {
       return NextResponse.json(
         {
           error: 'Only a signed-in first page of a ranked lane can be read ahead.',
@@ -187,29 +345,43 @@ async function handleShowcaseFeedGET(
       && !isSameSiteBrowserFetch(request);
     const anonymousKeyHash = identityless ? null : anonymousIdentity?.anonymousKeyHash ?? null;
 
-    // Every sort is limited, not just for-you. The others were left open on the
-    // reasoning that they are cheap cached reads, but `top-sales` scans every
-    // public post per call, and an unthrottled expensive read is exactly what
-    // an abusive client will find. The non-personalized ceiling is deliberately
-    // four times the for-you one: it is there to stop a script, not to shape
-    // browsing.
+    // Every read is counted against its read limit before any feed work. A signed-in read is
+    // normally counted already, beside admission's lifecycle round trip: that count is read
+    // here when it was made under the limit and key this step would use (both come from the same
+    // address and the same verified subject, so it always is), and answered exactly as this
+    // step's own count would be. Otherwise the read is counted here, as it always was, and the
+    // count started beside admission, never claimed, is given back after the answer.
     {
       const limiterStartedAt = performance.now();
-      const serviceClient = dependencies.createServiceClient();
-      const readRateLimit = sort === 'for-you'
-        ? SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT
-        : SHOWCASE_FEED_READ_RATE_LIMIT;
-      try {
-        await dependencies.enforceBackendRateLimit(serviceClient, {
-          ...readRateLimit,
-          key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
-        });
-        recordPhase('rate_limit', performance.now() - limiterStartedAt);
-      } catch (error) {
-        if (error instanceof BackendRateLimitError) {
-          return applyPrivateNoStoreApiResponseHeaders(createBackendRateLimitResponse(error), request);
+      const readRateLimit = showcaseFeedReadRateLimit(sort);
+      let limitFailure: { error: unknown } | null = null;
+      if (
+        viewerUserId
+        && startedReadLimit?.key === viewerUserId
+        && startedReadLimit.scope === readRateLimit.scope
+      ) {
+        const outcome = await startedReadLimit.claim();
+        // What admission's round trip did not already cover.
+        recordPhase('rate_limit_wait', performance.now() - limiterStartedAt);
+        if (outcome.allowed) recordPhase('rate_limit', outcome.durationMs);
+        else limitFailure = { error: outcome.error };
+      } else {
+        const serviceClient = dependencies.createServiceClient();
+        try {
+          await dependencies.enforceBackendRateLimit(serviceClient, {
+            ...readRateLimit,
+            key: viewerUserId ?? dependencies.getFeedNetworkKeyHash(request),
+          });
+          recordPhase('rate_limit', performance.now() - limiterStartedAt);
+        } catch (error) {
+          limitFailure = { error };
         }
-        dependencies.logError('Showcase feed rate limit failed:', error);
+      }
+      if (limitFailure) {
+        if (limitFailure.error instanceof BackendRateLimitError) {
+          return applyPrivateNoStoreApiResponseHeaders(createBackendRateLimitResponse(limitFailure.error), request);
+        }
+        dependencies.logError('Showcase feed rate limit failed:', limitFailure.error);
         return NextResponse.json(
           { error: 'Failed to check feed request limits.' },
           { status: 500, headers: createPrivateNoStoreApiResponseHeaders(request) },
@@ -228,6 +400,7 @@ async function handleShowcaseFeedGET(
         ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
       });
       recordPhase('feed_total', performance.now() - feedStartedAt);
+      if (prepared) countReadAhead('hold');
       // Null: nothing to hold (no active algorithm, an empty ranking). The app
       // then reads the page the ordinary way when Explore opens.
       return withPhaseTimings(NextResponse.json(
@@ -256,6 +429,12 @@ async function handleShowcaseFeedGET(
       // identity-less For you first page is the cached bootstrap.
       bypassCache: (sort === 'for-you' && !identityless) || Boolean(cursor),
       ...(readAheadToken ? { readAheadToken } : {}),
+      // Counted only for a reader with an account, a guest's included, as every
+      // hold is: a token sent without one is never the app's (it reads ahead
+      // only with a bearer token), so it cannot land among the misses.
+      ...(readAheadToken && viewerUserId
+        ? { onReadAheadClaim: (claimed: boolean) => countReadAhead(claimed ? 'claim' : 'claim_miss') }
+        : {}),
       ...(seedBucket === null ? {} : { seedBucket }),
       ...(fresh ? { fresh } : {}),
       ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
@@ -294,12 +473,15 @@ async function handleShowcaseFeedGET(
 export async function getShowcaseFeedRouteResponse({
   dependencies,
   request,
+  startedReadLimit = null,
 }: {
   dependencies?: ShowcaseFeedRouteDependencies;
   request: Request;
+  /** This read's count, when the route started it beside admission (`startShowcaseFeedReadLimit`). */
+  startedReadLimit?: StartedShowcaseFeedReadLimit | null;
 }) {
   const resolvedDependencies = resolveDependencies(dependencies);
   return resolvedDependencies.withProviderFetchRequestId(getApiRequestId(request), async () => (
-    handleShowcaseFeedGET(request, resolvedDependencies)
+    handleShowcaseFeedGET(request, resolvedDependencies, startedReadLimit)
   ));
 }

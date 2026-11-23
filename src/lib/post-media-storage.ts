@@ -11,6 +11,8 @@ export const POST_MEDIA_PATH_COLUMNS = [
   'display_storage_path',
   'rendition_storage_path',
   'teaser_storage_path',
+  // The row thumb search draws (2026-11-23), only ever beside a public preview.
+  'thumb_storage_path',
 ] as const;
 
 export type PostMediaPathColumn = (typeof POST_MEDIA_PATH_COLUMNS)[number];

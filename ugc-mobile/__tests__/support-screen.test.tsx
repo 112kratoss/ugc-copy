@@ -4,7 +4,7 @@
 
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
@@ -169,8 +169,20 @@ vi.mock('@/lib/theme', () => ({
 import { ApiError } from '../lib/api-client';
 import SupportScreen from '../app/support';
 
-const NOW = Date.now();
+// The thread's clock, pinned to a local midday. The fixtures are dated minutes
+// before it and drawn under "Today"; dated from the real clock, they all fell on
+// the day before for the first minutes after midnight, wherever the suite ran.
+const NOW = new Date(2026, 5, 15, 12, 0, 0).getTime();
 const iso = (minutesAgo: number) => new Date(NOW - minutesAgo * 60_000).toISOString();
+
+beforeAll(() => {
+  // Without fake timers this mocks Date alone; the screen's timers stay real.
+  vi.setSystemTime(NOW);
+});
+
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 function message(overrides: Record<string, unknown>) {
   return { author: 'user', body: 'Hello', createdAt: iso(60), editedAt: null, deletedAt: null, replyTo: null, reactions: [], attachment: null, ...overrides };

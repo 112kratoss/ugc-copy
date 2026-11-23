@@ -1,4 +1,4 @@
-import type { Session } from '@supabase/supabase-js';
+import type { Session } from '@supabase/auth-js';
 import { describe, expect, it } from 'vitest';
 
 import {

@@ -1,6 +1,6 @@
 // No URL polyfill: Expo's runtime installs a spec-compliant URL and
-// URLSearchParams on native (expo/src/winter), which supabase-js uses as is.
-import { createClient, type Session } from '@supabase/supabase-js';
+// URLSearchParams on native (expo/src/winter), which auth-js uses as is.
+import { AuthClient, type GoTrueClient, type Session } from '@supabase/auth-js';
 import { Platform } from 'react-native';
 
 import { env, isMobileEnvConfigured } from './env';
@@ -44,24 +44,51 @@ const supabaseAuthFetch = createSupabaseAuthFetch();
  */
 export const duringSignOut = supabaseAuthFetch.duringSignOut;
 
-export const supabase = createClient(
-  isSupabaseConfigured ? env.supabaseUrl : 'https://missing-mobile-env.supabase.co',
-  isSupabaseConfigured ? env.supabasePublishableKey : 'missing-mobile-env',
-  {
-    global: { fetch: supabaseAuthFetch.fetch },
-    auth: {
-      // Native refresh tokens are SecureStore-only. Expo web uses the
-      // process-local adapter above and never browser-persistent storage.
-      storage: supabaseAuthStorage,
-      storageKey: supabaseAuthStorageKey,
-      autoRefreshToken: true,
-      persistSession: true,
-      detectSessionInUrl: false,
-      flowType: 'pkce',
-      skipAutoInitialize: true,
+/**
+ * The version of the installed `@supabase/auth-js`, named in the
+ * `X-Client-Info` header so Supabase's logs tell this client's requests apart.
+ * `__tests__/supabase-auth-client.test.ts` holds it to the installed package.
+ */
+export const AUTH_JS_VERSION = '2.105.4';
+
+const supabaseUrl = (isSupabaseConfigured ? env.supabaseUrl : 'https://missing-mobile-env.supabase.co').trim();
+const supabaseKey = isSupabaseConfigured ? env.supabasePublishableKey : 'missing-mobile-env';
+
+/**
+ * Supabase Auth's client alone. The app asks Supabase for nothing but auth (the
+ * session, its refresh, sign-in and sign-out); every read and write of data goes
+ * through the API. supabase-js's `createClient` also builds Realtime, PostgREST
+ * and Storage clients, about 148 KB of minified code evaluated at launch, and
+ * listens for auth events on Realtime's behalf, which reads the stored session
+ * once more on every launch. This is the auth client `createClient` makes, set
+ * up as `createClient` sets it up: the same `/auth/v1` URL, the publishable key
+ * as `apikey` and bearer, the fetch below unwrapped, and the same auth options.
+ * `__tests__/supabase-auth-client.test.ts` holds it to `createClient`'s, request
+ * by request, for every auth call the app makes.
+ */
+export const supabase: { readonly auth: GoTrueClient } = {
+  auth: new AuthClient({
+    url: new URL('auth/v1', supabaseUrl.endsWith('/') ? supabaseUrl : `${supabaseUrl}/`).href,
+    headers: {
+      Authorization: `Bearer ${supabaseKey}`,
+      apikey: supabaseKey,
+      'X-Client-Info': `auth-js-react-native/${AUTH_JS_VERSION}`,
     },
-  },
-);
+    fetch: supabaseAuthFetch.fetch,
+    // Native refresh tokens are SecureStore-only. Expo web uses the
+    // process-local adapter above and never browser-persistent storage.
+    storage: supabaseAuthStorage,
+    storageKey: supabaseAuthStorageKey,
+    autoRefreshToken: true,
+    persistSession: true,
+    detectSessionInUrl: false,
+    flowType: 'pkce',
+    skipAutoInitialize: true,
+    // As createClient passed it: unset, which auth-js reads as no time limit on
+    // its lock (navigator.locks on the web build; a no-op on native).
+    lockAcquireTimeout: undefined,
+  }),
+};
 
 let secureStorageSignOutPromise: Promise<void> | null = null;
 

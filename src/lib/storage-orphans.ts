@@ -219,6 +219,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   post_content_embeddings: TELEMETRY,
   post_feed_stats: TELEMETRY,
   post_media_object_cleanup: UPLOAD_BOOKKEEPING,
+  // Public copies being made or no longer served: the job removes each one no post_media row records.
+  post_media_public_copy_queue: UPLOAD_BOOKKEEPING,
   post_save_events: TELEMETRY,
   post_saves: NO_TEXT,
   // Search's vectors of a post's public text: a hash and 384 numbers per row.
@@ -259,6 +261,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   search_terms: SEARCH_DICTIONARY,
   // Words an operator took out of typeahead: a lowercase word and a note per row.
   search_suggestion_denylist: SEARCH_DENYLIST,
+  // Explore's read-ahead: an event name and an hour's count.
+  showcase_feed_read_ahead_counters: TELEMETRY,
   showcase_media_revocations: UPLOAD_BOOKKEEPING,
   showcase_saves: NO_TEXT,
   upload_byte_global_counters: NO_TEXT,
@@ -280,7 +284,7 @@ const EXACT_PATH_COLUMNS: ReadonlyArray<{ table: string; columns: readonly strin
   { table: 'posts', columns: ['showcase_asset_path', 'output_url'] },
   {
     table: 'post_media',
-    columns: ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path'],
+    columns: ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path', 'thumb_storage_path'],
   },
   { table: 'generation_input_media', columns: ['storage_path'] },
   { table: 'post_resource_purchase_media', columns: ['storage_path', 'preview_storage_path', 'rendition_storage_path'] },
@@ -718,6 +722,12 @@ export type OrphanRemovalOutcome =
   | 'named'
   | 'failed';
 
+/** Array columns that record a stored object's path exactly, asked by overlap. */
+const EXACT_PATH_ARRAY_COLUMNS: ReadonlyArray<{ table: string; column: string }> = [
+  // A post's recorded public copies (`public-posts/`), which a sync can record anew.
+  { table: 'post_media', column: 'public_copy_paths' },
+];
+
 async function isNamedByExactPath(client: SupabaseClient, bucket: string, path: string): Promise<boolean> {
   const values = [path, `${bucket}/${path}`];
   const reads = EXACT_PATH_COLUMNS.flatMap(({ table, columns }) => columns.map(async (column) => {
@@ -725,7 +735,12 @@ async function isNamedByExactPath(client: SupabaseClient, bucket: string, path: 
     if (error) throw new Error(`Could not read ${table}.${column}: ${error.message ?? 'unknown error'}`);
     return (data ?? []).length > 0;
   }));
-  return (await Promise.all(reads)).some(Boolean);
+  const arrayReads = EXACT_PATH_ARRAY_COLUMNS.map(async ({ table, column }) => {
+    const { data, error } = await client.from(table).select(column).overlaps(column, values).limit(1);
+    if (error) throw new Error(`Could not read ${table}.${column}: ${error.message ?? 'unknown error'}`);
+    return (data ?? []).length > 0;
+  });
+  return (await Promise.all([...reads, ...arrayReads])).some(Boolean);
 }
 
 /**

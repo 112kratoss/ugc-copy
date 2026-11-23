@@ -1758,6 +1758,7 @@ export async function getPersonalizedShowcaseFeedPage({
   offset,
   onRankedPageItems,
   prepared = null,
+  onPreparedServed,
   seedBucket = null,
   serviceClient,
   viewerUserId,
@@ -1789,6 +1790,8 @@ export async function getPersonalizedShowcaseFeedPage({
    * assignment is no longer the one it was ranked under.
    */
   prepared?: PreparedRankedFeedSession | null;
+  /** Called when the page returned is `prepared`'s, served in place of a new ranking. */
+  onPreparedServed?: () => void;
   /**
    * The seed bucket the reader's previous page named (`pageInfo.seedBucket`),
    * for a ranking the shared seed drives; ignored when stale or absent.
@@ -1921,7 +1924,10 @@ export async function getPersonalizedShowcaseFeedPage({
         timed,
         viewerUserId,
       }));
-      if (served) return served;
+      if (served) {
+        onPreparedServed?.();
+        return served;
+      }
     }
   }
 

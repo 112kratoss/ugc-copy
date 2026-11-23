@@ -36,6 +36,7 @@ import {
   removePostMediaObjects,
   type PostMediaPathColumn,
 } from '@/lib/post-media-storage';
+import { removeQueuedPostMediaPublicCopies } from '@/lib/post-media-public-copies';
 
 export function getCanonicalPostShowcaseAssetPath(
   storagePath: string | null | undefined,
@@ -344,16 +345,36 @@ function createRateLimitResult(error: BackendRateLimitError): PostDeleteRouteRes
   };
 }
 
+/**
+ * The tombstone or the delete queued the public copies of the post's
+ * uploaded media in its own statement (post-media-public-copies.ts); they go
+ * before the answer, and the job retries any that fail.
+ */
+async function removePublicCopiesAfterDelete(
+  adminSupabase: SupabaseClient,
+  postId: string,
+  removeQueued: typeof removeQueuedPostMediaPublicCopies,
+) {
+  try {
+    await removeQueued(adminSupabase, { postId });
+  } catch (error) {
+    logBackendError('failed_to_remove_public_post_media_after_delete', { error });
+  }
+}
+
 export async function deleteOwnerPostForRoute({
   adminSupabase,
   ownerUserId,
   postId,
   forceDelete = false,
+  removeQueuedPublicCopies = removeQueuedPostMediaPublicCopies,
 }: {
   adminSupabase: SupabaseClient;
   ownerUserId: string;
   postId: string;
   forceDelete?: boolean;
+  /** Test seam for the inline removal of the post's public media copies. */
+  removeQueuedPublicCopies?: typeof removeQueuedPostMediaPublicCopies;
 }): Promise<PostDeleteRouteResult> {
   try {
     await enforceBackendRateLimit(adminSupabase, {
@@ -501,9 +522,11 @@ export async function deleteOwnerPostForRoute({
     }
 
     invalidateShowcaseFeedCache();
+    await removePublicCopiesAfterDelete(adminSupabase, postId, removeQueuedPublicCopies);
 
     // Media and resource files are deliberately retained: they are what the
-    // buyer paid to keep.
+    // buyer paid to keep. Only their public copies go: buyers read the
+    // private objects through /api/media.
     return {
       ok: true,
       body: {
@@ -530,6 +553,7 @@ export async function deleteOwnerPostForRoute({
   }
 
   invalidateShowcaseFeedCache();
+  await removePublicCopiesAfterDelete(adminSupabase, postId, removeQueuedPublicCopies);
 
   const removablePaths = [
     ...(removableShowcasePath ? [removableShowcasePath] : []),

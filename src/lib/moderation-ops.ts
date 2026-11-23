@@ -1,4 +1,10 @@
 import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
+import { logBackendWarning } from '@/lib/backend-logger';
+import {
+  publicCopyPathOf,
+  removeQueuedPostMediaPublicCopies,
+  syncPostMediaPublicCopies,
+} from '@/lib/post-media-public-copies';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { runPagedQuery } from '@/lib/admin-paged-query';
@@ -22,6 +28,7 @@ const POST_MEDIA_PATH_COLUMNS = [
   'rendition_storage_path',
   'teaser_storage_path',
   'display_storage_path',
+  'thumb_storage_path',
 ] as const;
 
 export type PostModerationQueueItem = {
@@ -252,6 +259,7 @@ type PostMediaModerationRow = {
   rendition_storage_path: string | null;
   display_storage_path?: string | null;
   teaser_storage_path: string | null;
+  thumb_storage_path?: string | null;
   external_url: string | null;
 };
 
@@ -436,6 +444,16 @@ async function readDeletedGenerationOwnerId(
     : null;
 }
 
+/** The public media copies of a post still queued for removal (post-media-public-copies.ts). */
+async function countQueuedPublicCopies(supabase: SupabaseClient, postId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('post_media_public_copy_queue')
+    .select('public_path', { count: 'exact', head: true })
+    .eq('post_id', postId);
+  if (error) throw databaseError('Failed to read the post\'s queued public media copies', error);
+  return count ?? 0;
+}
+
 export async function revokePostPublicMedia(
   supabase: SupabaseClient,
   postId: string,
@@ -452,7 +470,7 @@ export async function revokePostPublicMedia(
       .maybeSingle(),
     supabase
       .from('post_media')
-      .select('storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path, display_storage_path, external_url')
+      .select('storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path, display_storage_path, thumb_storage_path, external_url')
       .eq('post_id', postId),
   ]);
 
@@ -529,22 +547,31 @@ export async function revokePostPublicMedia(
   for (const row of mediaRows) {
     if (row.external_url?.trim()) hasExternalReference = true;
   }
-
   const canonicalStoragePaths = [...storagePaths];
+  // The public copy of each of the post's own private objects (post-media-public-copies.ts):
+  // the take-down cleared their records in its own transaction; the objects go here with the
+  // rest, verified, whether or not a copy was ever made. Not counted: the count is the post's
+  // own media.
+  const publicCopyPaths = canonicalStoragePaths
+    .map((path) => publicCopyPathOf(postId, path))
+    .filter((path): path is string => path !== null);
+  const removedPaths = [...canonicalStoragePaths, ...publicCopyPaths];
 
-  if (canonicalStoragePaths.length > 0) {
-    const removal = await removePostMediaObjects(supabase, canonicalStoragePaths);
+  if (removedPaths.length > 0) {
+    const removal = await removePostMediaObjects(supabase, removedPaths);
     if (removal.error) {
       throw databaseError('Failed to revoke taken-down public media', removal.error);
     }
 
     const verification = await Promise.all(
-      canonicalStoragePaths.map((path) => supabase.storage.from(postMediaStorageBucket(path)).exists(path)),
+      removedPaths.map((path) => supabase.storage.from(postMediaStorageBucket(path)).exists(path)),
     );
     if (verification.some((result) => result.data === true)) {
       throw new Error('Taken-down public media still exists after Storage revocation.');
     }
   }
+  // Their queue rows: each object is already gone, so this only settles them.
+  await removeQueuedPostMediaPublicCopies(supabase, { postId });
 
   return {
     revokedMediaCount: canonicalStoragePaths.length,
@@ -1143,6 +1170,26 @@ export async function applyPostModerationAction(
   const requiresMediaRevocation = result.mediaRevocationRequired
     && (result.status === 'applied' || result.status === 'already_applied');
   if (!requiresMediaRevocation) {
+    if (result.status === 'applied' || result.status === 'already_applied') {
+      // A hide keeps the post's private media for its owner and buyers, but
+      // its public copies were queued by the hide itself and go now. A
+      // restore puts them back for a post anyone may read again.
+      if (result.action === 'restore') {
+        // Speed only: the restore stands either way, and its media is served
+        // through /api/media until a later save or the backfill copies it.
+        await syncPostMediaPublicCopies(supabase, result.postId).catch((copyError: unknown) => {
+          logBackendWarning('failed_to_copy_public_post_media', { error: copyError });
+        });
+      } else {
+        await removeQueuedPostMediaPublicCopies(supabase, { postId: result.postId });
+        // Every row the post still has, not only those this call put off: a
+        // row rescheduled by an earlier attempt, or held while a copy begun
+        // minutes ago may still land, is media that may yet be public.
+        if (await countQueuedPublicCopies(supabase, result.postId) > 0) {
+          throw new Error('Public copies of the hidden post\'s media are still queued for removal; the revocation job removes them within the hour.');
+        }
+      }
+    }
     return result;
   }
 

@@ -650,6 +650,67 @@ describe('updateOwnerPostForRoute', () => {
       expect(cacheMocks.invalidateShowcaseFeedCache).toHaveBeenCalledTimes(1);
       expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).not.toHaveBeenCalled();
     });
+
+    // The public copies of a post's uploaded media (post-media-public-copies.ts).
+    describe('the public copies of its uploaded media', () => {
+      async function saveWithCopies(
+        post: Record<string, unknown>,
+        body: PostUpdateRequestBody,
+        copies: {
+          sync?: PostUpdateDependencies['syncPostMediaPublicCopies'];
+          removeQueued?: PostUpdateDependencies['removeQueuedPostMediaPublicCopies'];
+        } = {},
+      ) {
+        const order: string[] = [];
+        const syncPostMediaPublicCopies = vi.fn(copies.sync ?? (async () => {
+          order.push('sync');
+          return { begun: 0, committed: 0, refused: 0, failed: 0 };
+        }));
+        const removeQueuedPostMediaPublicCopies = vi.fn(copies.removeQueued ?? (async () => {
+          order.push('remove');
+          return { due: 0, held: 0, released: 0, removed: 0, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
+        }));
+        const { client } = createSupabaseMock({ post, bundle: null });
+        const result = await updateOwnerPostForRoute({
+          adminSupabase: client,
+          ownerUserId: 'user-1',
+          postId: 'post-1',
+          body,
+          dependencies: { ...createDependencies(), syncPostMediaPublicCopies, removeQueuedPostMediaPublicCopies },
+        });
+        return { result, client, order, syncPostMediaPublicCopies, removeQueuedPostMediaPublicCopies };
+      }
+
+      it('makes what a post kept public is missing, then removes what the save queued, before the answer', async () => {
+        const { result, client, order, syncPostMediaPublicCopies, removeQueuedPostMediaPublicCopies } = await saveWithCopies(
+          textPost({}),
+          { visibility: 'public', title: 'Lighting notes, revised' },
+        );
+
+        expect(result.ok).toBe(true);
+        // Sync first: it takes back the queued copies of media a gallery save kept.
+        expect(order).toEqual(['sync', 'remove']);
+        expect(syncPostMediaPublicCopies).toHaveBeenCalledWith(client, 'post-1');
+        expect(removeQueuedPostMediaPublicCopies).toHaveBeenCalledWith(client, { postId: 'post-1' });
+      });
+
+      it('removes the copies of a post made private, and makes none', async () => {
+        const { result, order, syncPostMediaPublicCopies } = await saveWithCopies(textPost({}), { visibility: 'private' });
+
+        expect(result.ok).toBe(true);
+        expect(syncPostMediaPublicCopies).not.toHaveBeenCalled();
+        expect(order).toEqual(['remove']);
+      });
+
+      it('answers the committed save when the copies can be neither made nor removed', async () => {
+        const { result } = await saveWithCopies(textPost({}), { visibility: 'public' }, {
+          sync: async () => { throw new Error('storage unavailable'); },
+          removeQueued: async () => { throw new Error('storage unavailable'); },
+        });
+
+        expect(result.ok).toBe(true);
+      });
+    });
   });
 
   // Found in review (2026-11-17): every edit wrote the post's visibility and
@@ -4004,6 +4065,7 @@ describe('updateOwnerPostForRoute', () => {
           width: 800,
           height: 600,
           displayStoragePath: null,
+          thumbStoragePath: null,
         })),
       },
     });
