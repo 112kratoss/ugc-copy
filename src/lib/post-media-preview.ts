@@ -97,7 +97,8 @@ export async function encodePostMediaThumb(preview: Buffer): Promise<Buffer> {
  * them (review of #906). The database holds the same rule
  * (`post_media_thumb_beside_public_preview_check`).
  */
-const CREATION_FOLDER_PATH = /^showcase\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^/]/;
+export const POST_MEDIA_THUMB_FOLDER_PATTERN = '^showcase/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[^/]';
+const CREATION_FOLDER_PATH = new RegExp(POST_MEDIA_THUMB_FOLDER_PATTERN);
 
 /** Whether a row thumb may be made for media stored at `storagePath`: only in a creation's public folder. */
 export function canStorePostMediaThumb(storagePath: string): boolean {

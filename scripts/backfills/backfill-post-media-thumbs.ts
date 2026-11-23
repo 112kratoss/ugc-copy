@@ -1,6 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 
-import { canStorePostMediaThumb, encodePostMediaThumb, storePostMediaThumb } from '../../src/lib/post-media-preview';
+import {
+  canStorePostMediaThumb,
+  encodePostMediaThumb,
+  POST_MEDIA_THUMB_FOLDER_PATTERN,
+  storePostMediaThumb,
+} from '../../src/lib/post-media-preview';
 import { queueUnrecordedShowcaseMedia } from '../../src/lib/unrecorded-showcase-media';
 import {
   logBackfillExecutionMode,
@@ -76,7 +81,8 @@ type CandidateRow = {
 };
 
 // A candidate is a ready preview with no thumb, in a creation's public folder
-// (the only place a thumb may be: `canStorePostMediaThumb`), of a post search
+// (the only place a thumb may be: `canStorePostMediaThumb`, matched here by the
+// same pattern, so a row that can never get one is never read), of a post search
 // can show: public, visible, not archived, not labelled (search_post_picture's
 // rules) and not deleted-but-kept for its buyers (tombstoned). Private,
 // hidden, archived and taken-down posts get none, and a taken-down row naming
@@ -87,7 +93,7 @@ async function countCandidates(after: string | null): Promise<number> {
     .from('post_media')
     .select('id, posts!inner(id)', { count: 'exact', head: true })
     .eq('preview_status', 'ready')
-    .like('preview_storage_path', 'showcase/%')
+    .filter('preview_storage_path', 'match', POST_MEDIA_THUMB_FOLDER_PATTERN)
     .is('thumb_storage_path', null)
     .eq('posts.visibility', 'public')
     .eq('posts.review_status', 'visible')
@@ -105,7 +111,7 @@ async function readPage(after: string | null, size: number): Promise<CandidateRo
     .from('post_media')
     .select('id, storage_path, preview_storage_path, posts!inner(id)')
     .eq('preview_status', 'ready')
-    .like('preview_storage_path', 'showcase/%')
+    .filter('preview_storage_path', 'match', POST_MEDIA_THUMB_FOLDER_PATTERN)
     .is('thumb_storage_path', null)
     .eq('posts.visibility', 'public')
     .eq('posts.review_status', 'visible')
@@ -126,7 +132,7 @@ async function main() {
   const limit = readLimit();
   let after = readAfter();
   const total = await countCandidates(after);
-  console.log(`${total} post media row(s) with a public preview and no thumb${after ? ` after ${after}` : ''}; this pass takes up to ${limit}.`);
+  console.log(`${total} cover(s) in a creation's public folder with no thumb, of posts search can show${after ? `, after ${after}` : ''}; this pass takes up to ${limit}.`);
 
   let examined = 0;
   let built = 0;

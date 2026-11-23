@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import { POST_MEDIA_THUMB_FOLDER_PATTERN } from '@/lib/post-media-preview';
 import { POST_MEDIA_PATH_COLUMNS } from '@/lib/post-media-storage';
 
 // What the migration does to rows is held by
@@ -78,9 +79,7 @@ describe('post media search thumbs migration', () => {
     // The folder is the one the revocation queue takes, so every thumb a row
     // stops naming can be queued (review of #906), and the code holds the same rule.
     expect(read('20261101100659_sweeps_queue_unrecorded_showcase_media.sql')).toContain(`WHERE named.path ~ '${CREATION_FOLDER}'`);
-    expect(source('src/lib/post-media-preview.ts')).toContain(
-      'const CREATION_FOLDER_PATH = /^showcase\\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\/[^/]/;',
-    );
+    expect(POST_MEDIA_THUMB_FOLDER_PATTERN).toBe(CREATION_FOLDER);
   });
 
   it('drops a thumb its preview leaves behind and queues every thumb a row stops naming', () => {
@@ -176,7 +175,7 @@ describe('post media search thumbs migration', () => {
     expect(backfill).toContain('if (!canStorePostMediaThumb(naming)) {');
     for (const filter of [
       "posts!inner(id)",
-      ".like('preview_storage_path', 'showcase/%')",
+      ".filter('preview_storage_path', 'match', POST_MEDIA_THUMB_FOLDER_PATTERN)",
       ".eq('posts.visibility', 'public')",
       ".eq('posts.review_status', 'visible')",
       ".is('posts.archived_at', null)",
