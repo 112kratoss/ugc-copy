@@ -90,14 +90,25 @@ export function useBookPull({
   refreshing,
   onRefresh,
   enabled = true,
+  paused = false,
   contentTop = 0,
   androidRestTop,
 }: {
   /** The screen's own pull state, as it gave `RefreshControl` before. */
   refreshing: boolean;
   onRefresh: () => void;
-  /** Off where the screen has nothing to refresh (signed out). */
+  /**
+   * Off where the screen has nothing to refresh (signed out). On iOS this takes
+   * the platform's control away, which builds the list's content again: only
+   * for a state that lasts.
+   */
   enabled?: boolean;
+  /**
+   * Held off for a moment (a card's pictures being swiped), with nothing in the
+   * tree changed on either platform. Android's pull takes no new touch; iOS
+   * needs nothing, since a list that cannot scroll cannot be pulled.
+   */
+  paused?: boolean;
   /** As given to `RefreshBookChip`: Android's own circle comes to rest where the book's does. */
   contentTop?: number;
   androidRestTop?: number;
@@ -109,7 +120,8 @@ export function useBookPull({
   const distance = useSharedValue(0);
   const released = useSharedValue(false);
   const refreshingNow = useSharedValue(refreshing);
-  const enabledNow = useSharedValue(enabled);
+  const takesPulls = enabled && !paused;
+  const enabledNow = useSharedValue(takesPulls);
   const startX = useSharedValue(0);
   const startY = useSharedValue(0);
   const decided = useSharedValue(false);
@@ -126,10 +138,10 @@ export function useBookPull({
   }, [refreshing, refreshingNow, released]);
   // Read by the pan, never by what is drawn: switching the pull off or on must
   // not change the tree around the list, or the list is built again from its top
-  // (Explore turns it off for every swipe through a card's pictures).
+  // (Explore pauses it for every swipe through a card's pictures).
   useEffect(() => {
-    enabledNow.value = enabled;
-  }, [enabled, enabledNow]);
+    enabledNow.value = takesPulls;
+  }, [takesPulls, enabledNow]);
 
   // Called from the pull's release on the UI thread, or by the platform's
   // control. A screen that turns the refresh down leaves the circle nothing to
@@ -225,7 +237,7 @@ export function useBookPull({
         // Never told: it lets go at release and the book takes its place.
         refreshing={false}
         onRefresh={fireRefresh}
-        enabled={enabled && !refreshing}
+        enabled={takesPulls && !refreshing}
         size="large"
         colors={[theme.colors.onPrimary]}
         progressBackgroundColor={theme.colors.primaryFill}
@@ -325,8 +337,16 @@ export function RefreshBookChip({
   // place through its linger and exit, then goes back to waiting for a pull.
   const [lastTop, setLastTop] = useState(top);
   if (top !== undefined && top !== lastTop) setLastTop(top);
+  // A refresh the screen names no place for (a pull) starting in that linger
+  // is the pull's: the circle goes back to where a pull's rests.
+  const [wasRefreshing, setWasRefreshing] = useState(refreshing);
+  if (refreshing !== wasRefreshing) {
+    setWasRefreshing(refreshing);
+    if (refreshing && top === undefined && lastTop !== undefined) setLastTop(undefined);
+  }
   const pinnedTop = top ?? lastTop;
-  const pinned = pinnedTop !== undefined || !pull;
+  const hasPull = Boolean(pull);
+  const pinned = pinnedTop !== undefined || !hasPull;
   // A pull's circle is always there to be pulled down; a pinned one comes and goes.
   const [mounted, setMounted] = useState(held || !pinned);
   const hold = useSharedValue(0);
@@ -345,12 +365,14 @@ export function RefreshBookChip({
       return undefined;
     }
     // Stay through the exit, then leave, or under a pull, wait for the next one.
+    // (`hasPull`, not `pull`: the screen's pull is a new object every render, and
+    // a screen that renders through the exit would put it off for good.)
     const timer = setTimeout(() => {
-      if (pull && top === undefined) setLastTop(undefined);
+      if (hasPull && top === undefined) setLastTop(undefined);
       else setMounted(false);
     }, EXIT_MS);
     return () => clearTimeout(timer);
-  }, [held, pinned, pull, top]);
+  }, [held, pinned, hasPull, top]);
 
   useEffect(() => {
     if (!mounted) return;

@@ -40,8 +40,18 @@ function List() {
   return React.createElement('list');
 }
 
-function PullHarness({ refreshing, onRefresh, enabled }: { refreshing: boolean; onRefresh: () => void; enabled?: boolean }) {
-  const screenPull = useBookPull({ refreshing, onRefresh, enabled });
+function PullHarness({
+  refreshing,
+  onRefresh,
+  enabled,
+  paused,
+}: {
+  refreshing: boolean;
+  onRefresh: () => void;
+  enabled?: boolean;
+  paused?: boolean;
+}) {
+  const screenPull = useBookPull({ refreshing, onRefresh, enabled, paused });
   pull = screenPull;
   return (
     <BookPullArea pull={screenPull}>
@@ -83,6 +93,16 @@ describe('the pull on iOS', () => {
     renderPull(false, onRefresh);
     renderer.act(() => pull.refreshControl!.props.onRefresh!());
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the platform control while paused: taking it away builds the list content again', () => {
+    const onRefresh = vi.fn();
+    const tree = renderPull(false, onRefresh);
+    // Explore pauses the pull for every swipe through a card's pictures.
+    renderer.act(() => tree.update(<PullHarness refreshing={false} onRefresh={onRefresh} paused />));
+    expect(pull.refreshControl).toBeDefined();
+    renderer.act(() => tree.update(<PullHarness refreshing={false} onRefresh={onRefresh} />));
+    expect(pull.refreshControl).toBeDefined();
   });
 });
 
@@ -208,6 +228,18 @@ describe('the pull on Android', () => {
     expect(onRefresh).not.toHaveBeenCalled();
   });
 
+  it('takes no touch while paused, with its pan and control both still there', () => {
+    const onRefresh = vi.fn();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<PullHarness refreshing={false} onRefresh={onRefresh} paused />);
+    });
+    const manager = pullDown(gestureOf(tree), 200);
+    expect(manager.fail).toHaveBeenCalledTimes(1);
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(pull.refreshControl!.props.enabled).toBe(false);
+  });
+
   it('keeps the list mounted where it is as the pull is switched off and on', () => {
     listMounts = 0;
     const onRefresh = vi.fn();
@@ -316,5 +348,40 @@ describe('RefreshBookChip', () => {
     advance(400);
     expect(placedTop(tree)).toBe(refreshBookChipTop('ios', 59));
     expect(chipIn(tree)).toHaveLength(1);
+  });
+
+  const placedTopOf = (tree: renderer.ReactTestRenderer) =>
+    tree.root.findAll((node) => node.type === 'view' && node.props.style?.position === 'absolute' && node.props.style?.top !== undefined)[0]
+      ?.props.style.top;
+
+  it('gives up the pill\'s place to a pull that starts while it lingers', () => {
+    renderPull(false, () => {});
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing pull={pull} contentTop={59} top={140} />);
+    });
+    advance(50);
+    renderer.act(() => tree.update(<RefreshBookChip refreshing={false} pull={pull} contentTop={59} />));
+    expect(placedTopOf(tree)).toBe(140);
+    advance(200);
+    // A pull refresh, with no place named, while the pill's circle still lingers.
+    renderer.act(() => tree.update(<RefreshBookChip refreshing pull={pull} contentTop={59} />));
+    expect(placedTopOf(tree)).toBe(refreshBookChipTop('ios', 59));
+  });
+
+  it('leaves the pill\'s place on time though the screen draws again through the exit', () => {
+    renderPull(false, () => {});
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<RefreshBookChip refreshing pull={pull} contentTop={59} top={140} />);
+    });
+    advance(50);
+    renderer.act(() => tree.update(<RefreshBookChip refreshing={false} pull={pull} contentTop={59} />));
+    // The screen's pull is a new object at every render (useBookPull returns one).
+    for (let step = 0; step < 12; step += 1) {
+      advance(100);
+      renderer.act(() => tree.update(<RefreshBookChip refreshing={false} pull={{ ...pull }} contentTop={59} />));
+    }
+    expect(placedTopOf(tree)).toBe(refreshBookChipTop('ios', 59));
   });
 });

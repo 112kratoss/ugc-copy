@@ -680,7 +680,7 @@ export default function ShowcaseScreen() {
   const pull = useBookPull({
     refreshing: pullRefreshing,
     onRefresh: handleRefresh,
-    enabled: !isSwipingMedia,
+    paused: isSwipingMedia,
     contentTop: topInset,
     androidRestTop: newPostsPillTop,
   });

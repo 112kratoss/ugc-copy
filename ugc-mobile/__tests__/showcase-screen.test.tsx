@@ -687,6 +687,34 @@ describe('Showcase screen', () => {
     renderer.act(() => tree!.unmount());
   });
 
+  // On iOS a ScrollView draws its refresh control as a sibling of its content:
+  // taking the control away for a swipe rebuilt every card, the carousel under
+  // the finger included. A swipe stops the grid's scroll and pauses the pull.
+  it('keeps the pull control while a card\'s pictures are swiped', () => {
+    queryState.pages = [lanePage([{ id: 'post-1' }])];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    try {
+      const listProps = () => tree!.root.find((node) => String(node.type) === 'flash-list').props;
+      const control = listProps().refreshControl;
+      expect(control).toBeDefined();
+      const pin = pinProps(listProps() as ListProps, 0) as PinProps & { onScrollToggle: (scrolling: boolean) => void };
+
+      renderer.act(() => pin.onScrollToggle(true));
+      expect(listProps().scrollEnabled).toBe(false);
+      expect(listProps().refreshControl).toBeDefined();
+      expect(listProps().refreshControl.type).toBe(control.type);
+
+      renderer.act(() => pin.onScrollToggle(false));
+      expect(listProps().scrollEnabled).toBe(true);
+      expect(listProps().refreshControl).toBeDefined();
+    } finally {
+      if (tree) renderer.act(() => tree!.unmount());
+    }
+  });
+
   // The server files the report as that delivery's `report` feed event, the
   // one way the ranker hears it.
   it('names the delivery a ranked tile was reported from', async () => {
