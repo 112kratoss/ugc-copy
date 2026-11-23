@@ -102,6 +102,7 @@ import {
   flattenShowcaseFeedPages,
   getShowcaseFeedSessionContext,
 } from '@/lib/showcase-feed-query';
+import { requestFreshRanking } from '@/lib/feed-fresh-ranking';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import { scheduleExploreReadAhead, startExploreReadAhead } from '@/lib/explore-read-ahead';
 import {
@@ -621,6 +622,8 @@ export function HomeDashboard() {
   // one waits for the queued impressions inside its own read
   // (`showcaseFeedLaneQueryOptions`), as a lane switch's does.
   const refreshFirstPage = () => {
+    // The reader asked: the first page is ranked afresh (`lib/feed-fresh-ranking.ts`).
+    requestFreshRanking(activeChip.filters, identityUserId);
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
     queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {

@@ -397,6 +397,7 @@ import {
 import { showcaseFeedLaneQueryOptions } from '../lib/showcase-feed-lane';
 import { createShowcaseFeedViewerQueryKey } from '../lib/showcase-feed-query';
 import { searchScreenOpener } from '../lib/open-search-screen';
+import { takeFreshRanking } from '../lib/feed-fresh-ranking';
 
 const T0 = Date.parse('2026-10-14T09:00:00.000Z');
 let now = T0;
@@ -995,8 +996,12 @@ describe('Home screen', () => {
     // A pull, by contrast, holds the control until its page has loaded.
     const pulled = deferred<void>();
     queryState.refetch.mockImplementation(() => pulled.promise);
+    takeFreshRanking({ sort: 'for-you' }, 'viewer-1');
     renderer.act(() => listProps(tree).refreshControl.props.onRefresh());
     expect(listProps(tree).refreshControl.props.refreshing).toBe(true);
+    // And asks the server to rank the lane's first page anew, not serve the
+    // ranking it made moments ago (the same posts came back).
+    expect(takeFreshRanking({ sort: 'for-you' }, 'viewer-1')).toBe(true);
     await renderer.act(async () => {
       pulled.resolve();
       await settlePromises();

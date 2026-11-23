@@ -1762,6 +1762,7 @@ export async function getPersonalizedShowcaseFeedPage({
   serviceClient,
   viewerUserId,
   onPhaseTiming,
+  fresh = false,
 }: {
   anonymousKeyHash: string | null;
   cursor: string | null;
@@ -1796,6 +1797,14 @@ export async function getPersonalizedShowcaseFeedPage({
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
+  /**
+   * A first page the reader asked for again themselves (a pull to refresh,
+   * "New posts"): ranked afresh, never served from a session ranked within the
+   * reuse window. That window keeps a read nobody asked for twice (a cold
+   * start's, Home's read ahead) from serving page one twice; a reader who asks
+   * again wants the ranking redone, with what they have seen since moved back.
+   */
+  fresh?: boolean;
 }): Promise<ShowcaseFeedPage> {
   const timed = createPhaseTimer(onPhaseTiming);
   if (cursor) {
@@ -1830,7 +1839,7 @@ export async function getPersonalizedShowcaseFeedPage({
       serviceClient,
       viewerUserId,
     })),
-    offset === 0
+    offset === 0 && !fresh
       ? timed('session_reuse', () => findReusableSession({
         anonymousKeyHash,
         filters,
@@ -1864,7 +1873,8 @@ export async function getPersonalizedShowcaseFeedPage({
   if (offset === 0) {
     // A newer session may belong to another algorithm or experiment. Retain
     // the exact scoped lookup in that case so an older valid session wins.
-    const reusableSession = candidateSession
+    // A refresh reuses none (`fresh`; `candidateSession` is null for it too).
+    const reusableSession = !fresh && candidateSession
       && (candidateSession.algorithm_version_id !== algorithm.id
         || candidateSession.experiment_assignment_id !== experimentAssignmentId)
       ? await timed('session_reuse_fallback', () => findReusableSession({

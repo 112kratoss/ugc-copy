@@ -11,8 +11,14 @@ import {
   resetExploreReadAheadForTests,
   startExploreReadAhead,
 } from '../lib/explore-read-ahead';
+import { requestFreshRanking } from '../lib/feed-fresh-ranking';
 import { installRankedFirstPageDrain } from '../lib/feed-ranked-page-drain';
-import { createShowcaseFeedQueryKey, type ShowcaseFeedFilters } from '../lib/showcase-feed-query';
+import {
+  createShowcaseFeedQueryKey,
+  getShowcaseFeedPageParams,
+  type ShowcaseFeedFilters,
+} from '../lib/showcase-feed-query';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   getReelEndSlideState,
   parseShowcaseFeedLane,
@@ -154,6 +160,46 @@ describe('the lane query', () => {
       } finally {
         installRankedFirstPageDrain(null);
       }
+    });
+  });
+
+  describe("a reader's own refresh", () => {
+    const freshQuery = mobileApiContract.endpoints.getShowcaseFeed.freshFirstPage.query;
+    /** The feed read with its parameters typed, so a test can read what each call sent. */
+    const feedApi = () => ({ getShowcaseFeed: vi.fn(async (_params?: Record<string, unknown>) => ({ items: [] })) });
+
+    it('asks the next first page of that lane for a fresh ranking, once', async () => {
+      const api = feedApi();
+      const options = showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1');
+
+      requestFreshRanking({ sort: 'for-you' }, 'user-1');
+      await options.queryFn({ pageParam: { offset: 0 } });
+      // A read nobody asked for (an invalidation, a mount) is served as before.
+      await options.queryFn({ pageParam: { offset: 0 } });
+
+      expect(api.getShowcaseFeed.mock.calls[0][0]).toMatchObject({ fresh: Number(freshQuery.fresh), offset: 0, sort: 'for-you' });
+      expect(api.getShowcaseFeed.mock.calls[1][0]).not.toHaveProperty('fresh');
+    });
+
+    it('leaves a next page to its session, and another lane or viewer to its own refresh', async () => {
+      const api = feedApi();
+      requestFreshRanking({ sort: 'for-you' }, 'user-1');
+
+      await showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1').queryFn({ pageParam: { cursor: 'cursor-2', feedSessionId: 'session-1' } });
+      await showcaseFeedLaneQueryOptions(api, { sort: 'for-you', category: 'text' }, 'user-1').queryFn({ pageParam: { offset: 0 } });
+      await showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-2').queryFn({ pageParam: { offset: 0 } });
+      for (const [params] of api.getShowcaseFeed.mock.calls) expect(params).not.toHaveProperty('fresh');
+
+      // Still waiting for the read it was asked for.
+      await showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1').queryFn({ pageParam: { offset: 0 } });
+      expect(api.getShowcaseFeed.mock.calls[3][0]).toMatchObject({ fresh: 1 });
+    });
+
+    it('sends it only where the server reads it: a For you first page', () => {
+      expect(getShowcaseFeedPageParams({ sort: 'for-you', offset: 0, fresh: true })).toMatchObject({ fresh: 1 });
+      expect(getShowcaseFeedPageParams({ sort: 'recent', offset: 0, fresh: true })).not.toHaveProperty('fresh');
+      expect(getShowcaseFeedPageParams({ sort: 'for-you', offset: 12, fresh: true })).not.toHaveProperty('fresh');
+      expect(getShowcaseFeedPageParams({ sort: 'for-you', cursor: 'cursor-2', fresh: true })).not.toHaveProperty('fresh');
     });
   });
 

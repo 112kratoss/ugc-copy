@@ -1465,6 +1465,8 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   prepared?: PreparedRankedFeedSession | null;
   /** The previous page's `pageInfo.seedBucket`, for a ranking the shared seed drives. */
   seedBucket?: number | null;
+  /** A first page the reader asked for again: ranked afresh (`getPersonalizedShowcaseFeedPage`). */
+  fresh?: boolean;
   adminSupabase?: ReturnType<typeof createServiceClient>;
   /**
    * Handed the page's items as soon as they are known, for the caller to start
@@ -1502,6 +1504,7 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
     serviceClient: adminSupabase,
     viewerUserId: params.viewerUserId,
     onPhaseTiming: params.onPhaseTiming,
+    ...(params.fresh ? { fresh: true } : {}),
   });
   // Already under way for a page ranked afresh. A page served from a session
   // written before (a cursor page, a reused session) is known only now, and
@@ -1665,6 +1668,12 @@ export async function getShowcaseFeedPage(options: {
    * bucket is recent, so it continues the same order.
    */
   seedBucket?: number | null;
+  /**
+   * A For you first page the reader asked for again (a pull to refresh, "New
+   * posts"): ranked afresh rather than served from a session ranked within the
+   * reuse window. Ignored on any other page.
+   */
+  fresh?: boolean;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<ShowcaseFeedPage> {
   const { category, sort, offset, limit } = options;
@@ -1709,6 +1718,7 @@ export async function getShowcaseFeedPage(options: {
         anonymousKeyHash: options.anonymousKeyHash ?? null,
         cursor: options.cursor ?? null,
         seedBucket: options.seedBucket ?? null,
+        fresh: Boolean(options.fresh) && offset === 0 && !options.cursor,
         prepared: options.readAheadToken && offset === 0 && !options.cursor
           ? await measureReadAheadTake(() => takePreparedShowcaseFeedSession(options.readAheadToken as string, {
             anonymousKeyHash: options.anonymousKeyHash ?? null,

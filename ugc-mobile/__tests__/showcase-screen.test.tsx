@@ -254,6 +254,7 @@ import { getMagicTabBarMetrics } from '../lib/tab-bar-layout';
 import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
 import { NEW_POSTS_PROBE_MIN_LANE_AGE_MS } from '../lib/use-new-posts-probe';
 import { searchScreenOpener } from '../lib/open-search-screen';
+import { takeFreshRanking } from '../lib/feed-fresh-ranking';
 
 function feedItem() {
   return {
@@ -710,6 +711,27 @@ describe('Showcase screen', () => {
       renderer.act(() => pin.onScrollToggle(false));
       expect(listProps().scrollEnabled).toBe(true);
       expect(listProps().refreshControl).toBeDefined();
+    } finally {
+      if (tree) renderer.act(() => tree!.unmount());
+    }
+  });
+
+  // A pull is the reader asking again: the server must rank the first page
+  // anew, not serve the ranking it made moments ago (the same posts came back).
+  it('asks a fresh ranking of the lane it refreshes on a pull', async () => {
+    queryState.pages = [lanePage([{ id: 'post-1' }])];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    try {
+      const listProps = () => tree!.root.find((node) => String(node.type) === 'flash-list').props;
+      expect(takeFreshRanking({ category: 'media' }, 'viewer-1')).toBe(false);
+      await renderer.act(async () => {
+        listProps().refreshControl.props.onRefresh();
+      });
+      expect(queryState.refetch).toHaveBeenCalled();
+      expect(takeFreshRanking({ category: 'media' }, 'viewer-1')).toBe(true);
     } finally {
       if (tree) renderer.act(() => tree!.unmount());
     }
