@@ -583,7 +583,7 @@ describe('deleteOwnerPostForRoute', () => {
       attachments: [],
       allow_remix: false,
     };
-    const removal = { due: 2, removed: 2, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
+    const removal = { due: 2, held: 0, released: 0, removed: 2, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
 
     it('go before the answer when the post is deleted', async () => {
       const { client } = createSupabaseMock({ purchases: [], post: uploadPost, bundle: null });

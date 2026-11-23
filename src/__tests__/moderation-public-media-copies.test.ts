@@ -19,9 +19,15 @@ const PREVIEW_COPY = `public-posts/${POST}/0/photo.preview.0123456789abcdef.webp
 function moderatedUploadPost({
   action,
   objectsStay = false,
+  copyInFlight = false,
+  copyFails = false,
 }: {
   action: 'hide' | 'take_down' | 'restore';
   objectsStay?: boolean;
+  /** A copy of the post's media began minutes ago: its rows are held after removal. */
+  copyInFlight?: boolean;
+  /** The restore's copy cannot be made: Storage or the database refuses. */
+  copyFails?: boolean;
 }) {
   const objects = new Set<string>([
     `post_media/${ORIGINAL}`, `post_media/${PREVIEW}`,
@@ -55,27 +61,38 @@ function moderatedUploadPost({
     }
     if (name === 'finish_post_media_public_copy_removal') {
       const row = queue.get(args.p_copy_path as string);
-      if (row && row.claim_token === args.p_claim_token) queue.delete(row.public_path);
-      return { data: true, error: null };
+      if (!row || row.claim_token !== args.p_claim_token) return { data: 'released', error: null };
+      row.claim_token = null;
+      if (copyInFlight) return { data: 'held', error: null };
+      queue.delete(row.public_path);
+      return { data: 'removed', error: null };
     }
     if (name === 'reschedule_post_media_public_copy_removal') {
       const row = queue.get(args.p_copy_path as string);
       if (row) row.claim_token = null;
       return { data: null, error: null };
     }
-    if (name === 'begin_post_media_public_copies') return { data: [], error: null };
+    if (name === 'begin_post_media_public_copies') {
+      return copyFails ? { data: null, error: { message: 'storage unavailable' } } : { data: [], error: null };
+    }
     throw new Error(`unexpected rpc ${name}`);
   });
 
   const result = (data: unknown) => {
+    let head = false;
     const query = {
-      select: () => query,
+      select: (_columns?: string, options?: { head?: boolean }) => {
+        head = Boolean(options?.head);
+        return query;
+      },
       eq: () => query,
       lte: () => query,
       order: () => query,
       maybeSingle: async () => ({ data, error: null }),
       limit: async () => ({ data, error: null }),
-      then: (resolve: (value: { data: unknown; error: null }) => unknown) => Promise.resolve({ data, error: null }).then(resolve),
+      then: (resolve: (value: { data: unknown; count?: number; error: null }) => unknown) => Promise.resolve(head
+        ? { data: null, count: Array.isArray(data) ? data.length : 0, error: null }
+        : { data, error: null }).then(resolve),
     };
     return query;
   };
@@ -151,9 +168,28 @@ describe('moderation and the public copies of a post\'s uploaded media', () => {
 
     await expect(applyPostModerationAction(post.client, {
       postId: POST, reviewerId: REVIEWER, action: 'hide', reason: 'Under review', idempotencyKey: 'hide-2',
-    })).rejects.toThrow('could not be removed yet');
+    })).rejects.toThrow('still queued for removal');
     // Still queued for the job.
     expect(post.queue.size).toBe(2);
+  });
+
+  it('a hide reports copies still queued, as when a copy begun minutes ago may still land', async () => {
+    const post = moderatedUploadPost({ action: 'hide', copyInFlight: true });
+
+    await expect(applyPostModerationAction(post.client, {
+      postId: POST, reviewerId: REVIEWER, action: 'hide', reason: 'Under review', idempotencyKey: 'hide-3',
+    })).rejects.toThrow('still queued for removal');
+    // Removed and verified gone; the rows wait out the copy's window for the job.
+    expect(post.removed.sort()).toEqual([`showcase_media/${ORIGINAL_COPY}`, `showcase_media/${PREVIEW_COPY}`]);
+    expect(post.queue.size).toBe(2);
+  });
+
+  it('a restore stands when its copies cannot be made', async () => {
+    const post = moderatedUploadPost({ action: 'restore', copyFails: true });
+
+    await expect(applyPostModerationAction(post.client, {
+      postId: POST, reviewerId: REVIEWER, action: 'restore', reason: 'Report dismissed', idempotencyKey: 'restore-2',
+    })).resolves.toMatchObject({ status: 'applied', action: 'restore' });
   });
 
   it('a restore makes the copies again', async () => {

@@ -668,7 +668,7 @@ describe('updateOwnerPostForRoute', () => {
         }));
         const removeQueuedPostMediaPublicCopies = vi.fn(copies.removeQueued ?? (async () => {
           order.push('remove');
-          return { due: 0, removed: 0, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
+          return { due: 0, held: 0, released: 0, removed: 0, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
         }));
         const { client } = createSupabaseMock({ post, bundle: null });
         const result = await updateOwnerPostForRoute({

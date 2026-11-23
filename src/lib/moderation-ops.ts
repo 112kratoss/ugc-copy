@@ -441,6 +441,16 @@ async function readDeletedGenerationOwnerId(
     : null;
 }
 
+/** The public media copies of a post still queued for removal (post-media-public-copies.ts). */
+async function countQueuedPublicCopies(supabase: SupabaseClient, postId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('post_media_public_copy_queue')
+    .select('public_path', { count: 'exact', head: true })
+    .eq('post_id', postId);
+  if (error) throw databaseError('Failed to read the post\'s queued public media copies', error);
+  return count ?? 0;
+}
+
 export async function revokePostPublicMedia(
   supabase: SupabaseClient,
   postId: string,
@@ -1162,11 +1172,16 @@ export async function applyPostModerationAction(
       // its public copies were queued by the hide itself and go now. A
       // restore puts them back for a post anyone may read again.
       if (result.action === 'restore') {
-        await syncPostMediaPublicCopies(supabase, result.postId);
+        // Speed only: the restore stands either way, and its media is served
+        // through /api/media until a later save or the backfill copies it.
+        await syncPostMediaPublicCopies(supabase, result.postId).catch(() => undefined);
       } else {
-        const removal = await removeQueuedPostMediaPublicCopies(supabase, { postId: result.postId });
-        if (removal.rescheduled > 0) {
-          throw new Error('Public copies of the hidden post\'s media could not be removed yet; the revocation job retries them.');
+        await removeQueuedPostMediaPublicCopies(supabase, { postId: result.postId });
+        // Every row the post still has, not only those this call put off: a
+        // row rescheduled by an earlier attempt, or held while a copy begun
+        // minutes ago may still land, is media that may yet be public.
+        if (await countQueuedPublicCopies(supabase, result.postId) > 0) {
+          throw new Error('Public copies of the hidden post\'s media are still queued for removal; the revocation job removes them within the hour.');
         }
       }
     }

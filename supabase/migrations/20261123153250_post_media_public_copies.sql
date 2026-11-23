@@ -96,6 +96,10 @@ CREATE TABLE public.post_media_public_copy_queue (
   last_error text,
   claimed_at timestamptz,
   claim_token uuid,
+  -- When the latest copy of this path was begun: a copy that Storage has not
+  -- finished can land after a removal verified the object gone, so the row
+  -- stays until 15 minutes after the copy began (finish holds it).
+  copy_began_at timestamptz,
   CONSTRAINT post_media_public_copy_queue_path_check CHECK (
     starts_with(public_path, 'public-posts/' || post_id::text || '/')
     AND length(public_path) > length('public-posts/' || post_id::text || '/')
@@ -348,10 +352,47 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION public.assert_post_media_public_copies_allowed();
 
--- Step one of making copies: names each of the post's own private objects
--- with no recorded copy yet and queues its copy path before any object
--- exists, so a copy whose function dies is still removed. Nothing for a post
--- anyone signed out may not read, nor for a copy whose removal is under way.
+-- The post's own private objects a copy may be made of now: named by one of
+-- its rows (a feed rendition once it is ready, as readers are only served one
+-- then), held by Storage at a size, and not recorded on every row naming
+-- them. A source Storage no longer holds is left out, so a post is never
+-- tried again and again for an object that cannot be copied.
+CREATE FUNCTION public.post_media_public_copy_sources(p_post_id uuid)
+RETURNS TABLE (private_object text, public_object text, object_bytes bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT
+    named.object_path,
+    public.post_media_public_copy_path(p_post_id, named.object_path),
+    max(stored.size_bytes)
+  FROM public.post_media AS media
+  CROSS JOIN LATERAL (VALUES
+    (media.storage_path),
+    (media.preview_storage_path),
+    (media.display_storage_path),
+    (CASE WHEN media.rendition_status = 'ready' THEN media.rendition_storage_path END),
+    (media.teaser_storage_path)
+  ) AS named(object_path)
+  CROSS JOIN LATERAL (
+    SELECT (objects.metadata->>'size')::bigint AS size_bytes
+    FROM storage.objects AS objects
+    WHERE objects.bucket_id = 'post_media' AND objects.name = named.object_path
+  ) AS stored
+  WHERE media.post_id = p_post_id
+    AND public.post_media_public_copy_path(p_post_id, named.object_path) IS NOT NULL
+    AND NOT (public.post_media_public_copy_path(p_post_id, named.object_path) = ANY(media.public_copy_paths))
+    AND stored.size_bytes > 0
+  GROUP BY named.object_path;
+$$;
+
+-- Step one of making copies: names each copy source of the post and queues
+-- its copy path before any object exists, so a copy whose function dies is
+-- still removed. Nothing for a post anyone signed out may not read, nor for a
+-- copy whose removal is under way. The queue row is stamped with when the
+-- copy began: a removal must not let it go while the copy may still land.
 CREATE FUNCTION public.begin_post_media_public_copies(p_post_id uuid)
 RETURNS TABLE (source_path text, copy_path text)
 LANGUAGE plpgsql
@@ -366,37 +407,26 @@ BEGIN
   END IF;
 
   RETURN QUERY
-  WITH named AS (
-    SELECT DISTINCT
-      named_path.value AS private_object,
-      public.post_media_public_copy_path(p_post_id, named_path.value) AS public_object
-    FROM public.post_media AS media
-    CROSS JOIN LATERAL unnest(ARRAY[
-      media.storage_path, media.preview_storage_path, media.display_storage_path,
-      media.rendition_storage_path, media.teaser_storage_path
-    ]) AS named_path(value)
-    WHERE media.post_id = p_post_id
-      AND public.post_media_public_copy_path(p_post_id, named_path.value) IS NOT NULL
-      AND NOT (public.post_media_public_copy_path(p_post_id, named_path.value) = ANY(media.public_copy_paths))
-  ),
-  wanted AS (
-    SELECT named.private_object, named.public_object
-    FROM named
+  WITH wanted AS (
+    SELECT found.private_object, found.public_object
+    FROM public.post_media_public_copy_sources(p_post_id) AS found
     WHERE NOT EXISTS (
       SELECT 1
       FROM public.post_media_public_copy_queue AS queued
-      WHERE queued.public_path = named.public_object
+      WHERE queued.public_path = found.public_object
         AND queued.claimed_at > now() - interval '1 hour'
     )
   ),
   tracked AS (
-    INSERT INTO public.post_media_public_copy_queue AS queued (public_path, post_id, reason, next_attempt_at)
-    SELECT wanted.public_object, p_post_id, 'copying', now() + interval '15 minutes'
+    INSERT INTO public.post_media_public_copy_queue AS queued
+      (public_path, post_id, reason, next_attempt_at, copy_began_at)
+    SELECT wanted.public_object, p_post_id, 'copying', now() + interval '15 minutes', now()
     FROM wanted
     ON CONFLICT (public_path) DO UPDATE
       SET reason = 'copying',
           claimed_at = NULL,
           claim_token = NULL,
+          copy_began_at = EXCLUDED.copy_began_at,
           next_attempt_at = GREATEST(queued.next_attempt_at, EXCLUDED.next_attempt_at)
     RETURNING queued.public_path
   )
@@ -408,7 +438,9 @@ $$;
 
 -- Step two: records each copy whose object Storage holds at its source's
 -- size, on every row naming the source, while the post may still be read by
--- anyone. Any copy not recorded stays queued, due now, for the worker.
+-- anyone. A copy another sync of the post already recorded is committed as it
+-- stands (two syncs may run at once). Any copy not recorded stays queued, due
+-- now, for the worker, which removes it under a claim.
 CREATE FUNCTION public.commit_post_media_public_copies(p_post_id uuid, p_copy_paths text[])
 RETURNS text[]
 LANGUAGE plpgsql
@@ -444,6 +476,32 @@ BEGIN
     v_source := 'private-posts/' || substr(v_copy, 14);
     v_source_size := NULL;
     v_copy_size := NULL;
+
+    -- Already recorded by another sync of the post, which verified it: it is
+    -- served, so it is committed here too (and recorded on any row naming its
+    -- source that lacks it), never queued for removal.
+    IF v_allowed AND EXISTS (
+      SELECT 1 FROM public.post_media AS media
+      WHERE media.post_id = p_post_id
+        AND v_copy = ANY(media.public_copy_paths)
+        AND v_source = ANY(ARRAY[
+          media.storage_path, media.preview_storage_path, media.display_storage_path,
+          media.rendition_storage_path, media.teaser_storage_path
+        ])
+    ) THEN
+      UPDATE public.post_media AS media
+      SET public_copy_paths = media.public_copy_paths || v_copy
+      WHERE media.post_id = p_post_id
+        AND v_source = ANY(ARRAY[
+          media.storage_path, media.preview_storage_path, media.display_storage_path,
+          media.rendition_storage_path, media.teaser_storage_path
+        ])
+        AND NOT (v_copy = ANY(media.public_copy_paths));
+      DELETE FROM public.post_media_public_copy_queue
+      WHERE public_path = v_copy AND claimed_at IS NULL;
+      v_committed := array_append(v_committed, v_copy);
+      CONTINUE;
+    END IF;
 
     IF v_allowed
       AND EXISTS (
@@ -490,7 +548,8 @@ BEGIN
     END IF;
 
     -- Not recorded: whatever the copy made stays queued until it is removed.
-    -- A claim under way is let go, so its finish cannot drop this row.
+    -- A claim under way is let go, so its finish cannot drop this row; when
+    -- the copy began is kept, so a removal holds the row through it.
     INSERT INTO public.post_media_public_copy_queue AS queued (public_path, post_id, reason, next_attempt_at)
     VALUES (v_copy, p_post_id, 'copy_refused', now())
     ON CONFLICT (public_path) DO UPDATE
@@ -549,24 +608,41 @@ BEGIN
 END;
 $$;
 
--- After Storage confirmed the object gone. False when a commit let the claim
--- go meanwhile: the row stays and the next run removes the object again.
+-- After Storage confirmed the object gone: 'removed' when the row leaves;
+-- 'held' when a copy of the path began less than 15 minutes ago, since it may
+-- still land after this check (the row stays, due again once that window has
+-- passed); 'released' when a commit let the claim go meanwhile (the row stays
+-- and the next run removes the object again).
 CREATE FUNCTION public.finish_post_media_public_copy_removal(p_copy_path text, p_claim_token uuid)
-RETURNS boolean
-LANGUAGE sql
+RETURNS text
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  WITH removed AS (
-    DELETE FROM public.post_media_public_copy_queue
-    WHERE public_path = p_copy_path
-      AND claim_token = p_claim_token
-    RETURNING 1
-  )
-  SELECT EXISTS (SELECT 1 FROM removed);
+BEGIN
+  UPDATE public.post_media_public_copy_queue
+  SET claimed_at = NULL,
+      claim_token = NULL,
+      next_attempt_at = copy_began_at + interval '15 minutes'
+  WHERE public_path = p_copy_path
+    AND claim_token = p_claim_token
+    AND copy_began_at > now() - interval '15 minutes';
+  IF FOUND THEN
+    RETURN 'held';
+  END IF;
+
+  DELETE FROM public.post_media_public_copy_queue
+  WHERE public_path = p_copy_path
+    AND claim_token = p_claim_token;
+  IF FOUND THEN
+    RETURN 'removed';
+  END IF;
+  RETURN 'released';
+END;
 $$;
 
--- A removal that failed: tried again after 10 minutes, doubling to a day.
+-- A removal that failed: tried again after 10 minutes, doubling to an hour,
+-- since what waits is media of a post nobody signed out may read any more.
 CREATE FUNCTION public.reschedule_post_media_public_copy_removal(
   p_copy_path text,
   p_claim_token uuid,
@@ -580,8 +656,8 @@ AS $$
   UPDATE public.post_media_public_copy_queue
   SET attempt_count = attempt_count + 1,
       next_attempt_at = now() + LEAST(
-        interval '24 hours',
-        interval '10 minutes' * power(2, LEAST(attempt_count, 8))
+        interval '1 hour',
+        interval '10 minutes' * power(2, LEAST(attempt_count, 3))
       ),
       last_error = left(coalesce(p_error, 'unknown error'), 1000),
       claimed_at = NULL,
@@ -590,39 +666,46 @@ AS $$
     AND claim_token = p_claim_token;
 $$;
 
--- Posts anyone may read with a private object of their own and no recorded
--- copy of it. The maintenance job asks only for posts already served at
--- least one copy (a derivative a sweep built since); the backfill asks for
--- every such post.
+-- Posts anyone may read with copy sources (post_media_public_copy_sources),
+-- newest first, a page at a time: pass the last row's (post_created_at,
+-- post_id) to read the next one, so posts whose copies keep failing never
+-- hold back older ones. The maintenance job asks only for posts already
+-- served at least one copy (a derivative a sweep built since); the backfill
+-- asks for every such post, and reads what each would add.
 CREATE FUNCTION public.list_post_media_public_copy_candidates(
   p_limit integer,
-  p_include_unserved boolean DEFAULT false
+  p_include_unserved boolean DEFAULT false,
+  p_before_created_at timestamptz DEFAULT NULL,
+  p_before_post_id uuid DEFAULT NULL
 )
-RETURNS TABLE (post_id uuid, owner_user_id uuid)
+RETURNS TABLE (
+  post_id uuid,
+  owner_user_id uuid,
+  post_created_at timestamptz,
+  missing_objects integer,
+  missing_bytes bigint
+)
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = ''
 AS $$
-  SELECT post.id, post.user_id
+  SELECT post.id, post.user_id, post.created_at, sources.objects, sources.bytes
   FROM public.posts AS post
   JOIN public.profiles AS owner ON owner.id = post.user_id
+  CROSS JOIN LATERAL (
+    SELECT count(*)::integer AS objects, coalesce(sum(found.object_bytes), 0)::bigint AS bytes
+    FROM public.post_media_public_copy_sources(post.id) AS found
+  ) AS sources
   WHERE post.visibility = 'public'
     AND post.archived_at IS NULL
     AND post.review_status = 'visible'
     AND post.tombstoned_at IS NULL
     AND NOT post.is_nsfw
     AND owner.identity_state = 'active'
-    AND EXISTS (
-      SELECT 1
-      FROM public.post_media AS media
-      CROSS JOIN LATERAL unnest(ARRAY[
-        media.storage_path, media.preview_storage_path, media.display_storage_path,
-        media.rendition_storage_path, media.teaser_storage_path
-      ]) AS named_path(value)
-      WHERE media.post_id = post.id
-        AND public.post_media_public_copy_path(post.id, named_path.value) IS NOT NULL
-        AND NOT (public.post_media_public_copy_path(post.id, named_path.value) = ANY(media.public_copy_paths))
+    AND (
+      p_before_created_at IS NULL
+      OR (post.created_at, post.id) < (p_before_created_at, p_before_post_id)
     )
     AND (
       p_include_unserved
@@ -631,26 +714,29 @@ AS $$
         WHERE media.post_id = post.id AND cardinality(media.public_copy_paths) > 0
       )
     )
-  ORDER BY post.created_at DESC, post.id
+    AND sources.objects > 0
+  ORDER BY post.created_at DESC, post.id DESC
   LIMIT greatest(1, least(coalesce(p_limit, 50), 500));
 $$;
 
 REVOKE ALL ON FUNCTION public.post_media_public_copy_path(uuid, text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.post_media_public_copies_allowed(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.post_media_public_copy_sources(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.begin_post_media_public_copies(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.commit_post_media_public_copies(uuid, text[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.claim_post_media_public_copy_removal(text) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.finish_post_media_public_copy_removal(text, uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.reschedule_post_media_public_copy_removal(text, uuid, text) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.list_post_media_public_copy_candidates(integer, boolean) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.list_post_media_public_copy_candidates(integer, boolean, timestamptz, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.post_media_public_copy_path(uuid, text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.post_media_public_copies_allowed(uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.post_media_public_copy_sources(uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.begin_post_media_public_copies(uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.commit_post_media_public_copies(uuid, text[]) TO service_role;
 GRANT EXECUTE ON FUNCTION public.claim_post_media_public_copy_removal(text) TO service_role;
 GRANT EXECUTE ON FUNCTION public.finish_post_media_public_copy_removal(text, uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.reschedule_post_media_public_copy_removal(text, uuid, text) TO service_role;
-GRANT EXECUTE ON FUNCTION public.list_post_media_public_copy_candidates(integer, boolean) TO service_role;
+GRANT EXECUTE ON FUNCTION public.list_post_media_public_copy_candidates(integer, boolean, timestamptz, uuid) TO service_role;
 
 -- Trigger bodies and the revoke step are not callable APIs.
 REVOKE ALL ON FUNCTION public.revoke_post_media_public_copies(uuid, text) FROM PUBLIC, anon, authenticated, service_role;

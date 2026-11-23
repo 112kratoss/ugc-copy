@@ -93,7 +93,13 @@ describe('post media public copies migration', () => {
     const begin = definition('CREATE FUNCTION public.begin_post_media_public_copies(p_post_id uuid)');
     expect(begin).toContain('PERFORM 1 FROM public.posts WHERE id = p_post_id FOR UPDATE;');
     expect(begin).toContain('IF NOT FOUND OR NOT public.post_media_public_copies_allowed(p_post_id) THEN RETURN;');
-    expect(begin).toContain("INSERT INTO public.post_media_public_copy_queue AS queued (public_path, post_id, reason, next_attempt_at) SELECT wanted.public_object, p_post_id, 'copying'");
+    // Stamped with when the copy began, so a removal holds the row through it.
+    expect(begin).toContain("INSERT INTO public.post_media_public_copy_queue AS queued (public_path, post_id, reason, next_attempt_at, copy_began_at) SELECT wanted.public_object, p_post_id, 'copying', now() + interval '15 minutes', now()");
+    // Only sources Storage holds, and a feed rendition once ready.
+    expect(begin).toContain('FROM public.post_media_public_copy_sources(p_post_id) AS found');
+    const sources = definition('CREATE FUNCTION public.post_media_public_copy_sources(p_post_id uuid)');
+    expect(sources).toContain("(CASE WHEN media.rendition_status = 'ready' THEN media.rendition_storage_path END)");
+    expect(sources).toContain("WHERE objects.bucket_id = 'post_media' AND objects.name = named.object_path");
 
     const commit = definition('CREATE FUNCTION public.commit_post_media_public_copies(p_post_id uuid, p_copy_paths text[])');
     expect(commit).toContain('SELECT post.user_id INTO v_owner_id FROM public.posts AS post WHERE post.id = p_post_id FOR UPDATE;');
@@ -104,8 +110,18 @@ describe('post media public copies migration', () => {
     expect(commit).toContain("WHERE objects.bucket_id = 'post_media' AND objects.name = v_source;");
     expect(commit).toContain("WHERE objects.bucket_id = 'showcase_media' AND objects.name = v_copy;");
     expect(commit).toContain('IF v_source_size > 0 AND v_copy_size = v_source_size THEN');
+    // A copy another sync of the post already recorded is committed as it stands, never queued for removal.
+    expect(commit).toContain("IF v_allowed AND EXISTS ( SELECT 1 FROM public.post_media AS media WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths)");
+    expect(commit).toContain('DELETE FROM public.post_media_public_copy_queue WHERE public_path = v_copy AND claimed_at IS NULL; v_committed := array_append(v_committed, v_copy); CONTINUE;');
     // A copy not recorded stays queued, due now, its claim let go.
     expect(commit).toContain("VALUES (v_copy, p_post_id, 'copy_refused', now()) ON CONFLICT (public_path) DO UPDATE SET reason = 'copy_refused', next_attempt_at = now(), claimed_at = NULL, claim_token = NULL;");
+  });
+
+  it('pages the candidates by (created_at, id), newest first, so failing posts hold back none', () => {
+    const list = definition('CREATE FUNCTION public.list_post_media_public_copy_candidates(');
+    expect(list).toContain('OR (post.created_at, post.id) < (p_before_created_at, p_before_post_id)');
+    expect(list).toContain('ORDER BY post.created_at DESC, post.id DESC');
+    expect(list).toContain('coalesce(sum(found.object_bytes), 0)::bigint AS bytes');
   });
 
   it('hands a removal a claim token under the post\'s lock and never drops a served copy', () => {
@@ -114,8 +130,13 @@ describe('post media public copies migration', () => {
     // The rows recording it are locked, so a sweep dropping it queues it again after the delete.
     expect(claim).toContain('WHERE media.post_id = v_post_id AND p_copy_path = ANY(media.public_copy_paths) FOR UPDATE; IF FOUND THEN DELETE');
     expect(claim).toContain("RETURN jsonb_build_object('outcome', 'served');");
-    expect(definition('CREATE FUNCTION public.finish_post_media_public_copy_removal(p_copy_path text, p_claim_token uuid)'))
-      .toContain('AND claim_token = p_claim_token');
+    const finish = definition('CREATE FUNCTION public.finish_post_media_public_copy_removal(p_copy_path text, p_claim_token uuid)');
+    expect(finish).toContain('AND claim_token = p_claim_token');
+    // A copy begun under 15 minutes ago may land after the check: the row is held, not dropped.
+    expect(finish).toContain("next_attempt_at = copy_began_at + interval '15 minutes' WHERE public_path = p_copy_path AND claim_token = p_claim_token AND copy_began_at > now() - interval '15 minutes'; IF FOUND THEN RETURN 'held';");
+    // A removal of media nobody may read any more is retried within the hour.
+    expect(definition('CREATE FUNCTION public.reschedule_post_media_public_copy_removal('))
+      .toContain("LEAST( interval '1 hour', interval '10 minutes' * power(2, LEAST(attempt_count, 3)) )");
   });
 
   it('keeps the queue and every function off the Data API but for the service role', () => {
@@ -130,7 +151,8 @@ describe('post media public copies migration', () => {
       'claim_post_media_public_copy_removal(text)',
       'finish_post_media_public_copy_removal(text, uuid)',
       'reschedule_post_media_public_copy_removal(text, uuid, text)',
-      'list_post_media_public_copy_candidates(integer, boolean)',
+      'post_media_public_copy_sources(uuid)',
+      'list_post_media_public_copy_candidates(integer, boolean, timestamptz, uuid)',
     ]) {
       expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${signature} FROM PUBLIC, anon, authenticated;`);
       expect(sql).toContain(`GRANT EXECUTE ON FUNCTION public.${signature} TO service_role;`);

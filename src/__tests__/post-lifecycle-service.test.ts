@@ -230,7 +230,7 @@ describe('restoreOwnerPostForRoute', () => {
           }),
           removeQueued: vi.fn(async () => {
             order.push('remove');
-            return { due: 1, removed: 1, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
+            return { due: 1, held: 0, released: 0, removed: 1, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
           }),
         },
       };

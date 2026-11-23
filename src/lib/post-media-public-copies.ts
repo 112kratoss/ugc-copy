@@ -196,14 +196,15 @@ export async function syncPostMediaPublicCopies(
   ));
   result.committed = madePaths.filter((path) => committed.has(path)).length;
 
-  const refused = madePaths.filter((path) => !committed.has(path));
-  result.refused = refused.length;
-  if (refused.length > 0) {
-    // Queued, due now, by the commit: this only saves the worker a trip.
+  result.refused = madePaths.filter((path) => !committed.has(path)).length;
+  if (result.refused > 0) {
+    // Queued, due now, by the commit. Removed only under a claim, which
+    // re-reads the rows under the post's lock: another sync of the post may
+    // have recorded the same object meanwhile, and it is never removed then.
     try {
-      await client.storage.from(PUBLIC_POST_MEDIA_COPY_BUCKET).remove(refused);
+      await removeQueuedPostMediaPublicCopies(client, { postId });
     } catch {
-      // The queue row stays; the worker removes it.
+      // The rows stay queued; the job removes them.
     }
   }
   return result;
@@ -211,8 +212,15 @@ export async function syncPostMediaPublicCopies(
 
 export type PostMediaPublicCopyRemovalSummary = {
   due: number;
-  /** Objects removed and verified gone. */
+  /** Objects removed and verified gone, their rows settled. */
   removed: number;
+  /**
+   * Objects removed and verified gone whose rows stay a while: a copy of the
+   * path began under 15 minutes ago and may still land.
+   */
+  held: number;
+  /** Objects removed whose rows a commit took back meanwhile: removed again next run. */
+  released: number;
   /** Rows that turned out to be recorded copies again: left served. */
   served: number;
   /** Rows already handled by another run. */
@@ -288,9 +296,12 @@ async function removeQueuedCopy(
     p_claim_token: token,
   });
   if (finish.error) throw finish.error;
-  // False: a commit let the claim go meanwhile. The object is gone either
-  // way; the row stays for the next run to verify again.
-  summary.removed += 1;
+  // 'held': a copy of the path may still land, so the row stays until its
+  // window ends and the next run checks again. 'released': a commit took the
+  // row back meanwhile; the object is gone, and the next run removes it again.
+  if (finish.data === 'held') summary.held += 1;
+  else if (finish.data === 'released') summary.released += 1;
+  else summary.removed += 1;
 }
 
 /**
@@ -319,7 +330,7 @@ export async function removeQueuedPostMediaPublicCopies(
   } = {},
 ): Promise<PostMediaPublicCopyRemovalSummary> {
   const summary: PostMediaPublicCopyRemovalSummary = {
-    due: 0, removed: 0, served: 0, gone: 0, rescheduled: 0, stuck: 0,
+    due: 0, removed: 0, held: 0, released: 0, served: 0, gone: 0, rescheduled: 0, stuck: 0,
   };
   if (postId !== undefined && !UUID.test(postId)) {
     throw new Error('A post id is required for public media copy removal.');
@@ -364,28 +375,75 @@ export async function removeQueuedPostMediaPublicCopies(
 }
 
 /**
- * Posts anyone may read with an own private object that has no recorded copy.
- * `includeUnserved: false` (the job) asks only for posts already served at
- * least one copy, so a deploy copies nothing on its own: existing posts wait
- * for the backfill (`scripts/backfills/backfill-post-media-public-copies.ts`).
+ * Posts anyone may read with copy sources (an own private object Storage holds,
+ * not yet recorded as copied; a feed rendition once it is ready), newest first,
+ * a page at a time: pass the last one as `before` for the next page, so posts
+ * whose copies keep failing never hold back older ones. `includeUnserved:
+ * false` (the job) asks only for posts already served at least one copy, so a
+ * deploy copies nothing on its own: existing posts wait for the backfill
+ * (`scripts/backfills/backfill-post-media-public-copies.ts`).
  */
-export type PostMissingPublicCopies = { postId: string; ownerUserId: string };
+export type PostMissingPublicCopies = {
+  postId: string;
+  ownerUserId: string;
+  createdAt: string;
+  missingObjects: number;
+  missingBytes: number;
+};
 
 export async function listPostsMissingPublicCopies(
   client: SupabaseClient,
-  { limit, includeUnserved }: { limit: number; includeUnserved: boolean },
+  {
+    limit,
+    includeUnserved,
+    before,
+  }: {
+    limit: number;
+    includeUnserved: boolean;
+    before?: Pick<PostMissingPublicCopies, 'createdAt' | 'postId'> | null;
+  },
 ): Promise<PostMissingPublicCopies[]> {
   const { data, error } = await client.rpc('list_post_media_public_copy_candidates', {
     p_limit: limit,
     p_include_unserved: includeUnserved,
+    p_before_created_at: before?.createdAt ?? null,
+    p_before_post_id: before?.postId ?? null,
   });
   if (error) throw error;
   return (Array.isArray(data) ? data : []).flatMap((row) => {
-    const { post_id: postId, owner_user_id: ownerUserId } = (row ?? {}) as Record<string, unknown>;
-    return typeof postId === 'string' && UUID.test(postId) && typeof ownerUserId === 'string' && UUID.test(ownerUserId)
-      ? [{ postId, ownerUserId }]
+    const value = (row ?? {}) as Record<string, unknown>;
+    const { post_id: postId, owner_user_id: ownerUserId, post_created_at: createdAt } = value;
+    return typeof postId === 'string' && UUID.test(postId)
+      && typeof ownerUserId === 'string' && UUID.test(ownerUserId)
+      && typeof createdAt === 'string'
+      ? [{
+          postId,
+          ownerUserId,
+          createdAt,
+          missingObjects: Number(value.missing_objects ?? 0),
+          missingBytes: Number(value.missing_bytes ?? 0),
+        }]
       : [];
   });
+}
+
+/** Every post `listPostsMissingPublicCopies` would list, page after page; read only. */
+export async function countPostsMissingPublicCopies(
+  client: SupabaseClient,
+  { includeUnserved, pageSize = 500 }: { includeUnserved: boolean; pageSize?: number },
+): Promise<{ posts: number; objects: number; bytes: number }> {
+  const total = { posts: 0, objects: 0, bytes: 0 };
+  let before: PostMissingPublicCopies | null = null;
+  for (;;) {
+    const page: PostMissingPublicCopies[] = await listPostsMissingPublicCopies(client, { limit: pageSize, includeUnserved, before });
+    for (const post of page) {
+      total.posts += 1;
+      total.objects += post.missingObjects;
+      total.bytes += post.missingBytes;
+    }
+    if (page.length < pageSize) return total;
+    before = page[page.length - 1];
+  }
 }
 
 export async function hasPendingPostMediaPublicCopyWork(client: SupabaseClient): Promise<boolean> {
@@ -416,8 +474,8 @@ export async function maintainPostMediaPublicCopies(
     now = new Date(),
     clock = Date.now,
     timeBudgetMs = POST_MEDIA_PUBLIC_COPY_TIME_BUDGET_MS,
-    syncLimit = 25,
-  }: { now?: Date; clock?: () => number; timeBudgetMs?: number; syncLimit?: number } = {},
+    syncPageSize = 25,
+  }: { now?: Date; clock?: () => number; timeBudgetMs?: number; syncPageSize?: number } = {},
 ): Promise<PostMediaPublicCopyMaintenance> {
   let stuck: PostMediaPublicCopiesStuckError | null = null;
   let removal: PostMediaPublicCopyRemovalSummary;
@@ -432,14 +490,25 @@ export async function maintainPostMediaPublicCopies(
   const synced = { posts: 0, committed: 0, refused: 0, failed: 0 };
   const copiedPosts: PostMissingPublicCopies[] = [];
   const startedAt = clock();
-  for (const candidate of await listPostsMissingPublicCopies(client, { limit: syncLimit, includeUnserved: false })) {
-    if (clock() - startedAt >= timeBudgetMs) break;
-    const result = await syncPostMediaPublicCopies(client, candidate.postId);
-    synced.posts += 1;
-    synced.committed += result.committed;
-    synced.refused += result.refused;
-    synced.failed += result.failed;
-    if (result.committed > 0) copiedPosts.push(candidate);
+  // Page after page, oldest last, until the time is spent: a post whose copy
+  // keeps failing costs one attempt a run and never holds back the others.
+  let before: PostMissingPublicCopies | null = null;
+  pages: for (;;) {
+    const page: PostMissingPublicCopies[] = await listPostsMissingPublicCopies(
+      client,
+      { limit: syncPageSize, includeUnserved: false, before },
+    );
+    for (const candidate of page) {
+      if (clock() - startedAt >= timeBudgetMs) break pages;
+      const result = await syncPostMediaPublicCopies(client, candidate.postId);
+      synced.posts += 1;
+      synced.committed += result.committed;
+      synced.refused += result.refused;
+      synced.failed += result.failed;
+      if (result.committed > 0) copiedPosts.push(candidate);
+    }
+    if (page.length < syncPageSize) break;
+    before = page[page.length - 1];
   }
 
   if (stuck) throw stuck;

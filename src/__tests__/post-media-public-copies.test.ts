@@ -24,13 +24,16 @@ type QueueRow = {
   next_attempt_at: string;
   created_at: string;
   claim_token: string | null;
+  copy_began_at?: string | null;
 };
 
 /**
  * An in-memory stand-in for the database functions (the SQL itself is held
  * by post_media_public_copies.test.sql) and the two buckets. It answers the
- * way the migration's functions do: begin queues before naming, commit records
- * only verified copies of an allowed post, claim hands out a token.
+ * way the migration's functions do: begin names only sources Storage holds and
+ * queues before naming, stamped; commit records only verified copies of an
+ * allowed post and takes one already recorded as committed; claim hands out a
+ * token; finish holds a row whose copy began under 15 minutes ago.
  */
 function fakeDatabase({
   allowed = true,
@@ -62,13 +65,15 @@ function fakeDatabase({
         for (const path of row.paths) {
           const copy = publicCopyPathOf(POST, path);
           if (!copy || row.public_copy_paths.includes(copy) || pairs.some((pair) => pair.copy_path === copy)) continue;
+          if (!state.objects.has(`post_media/${path}`)) continue;
           if (state.queue.get(copy)?.claim_token) continue;
           state.queue.set(copy, {
             public_path: copy,
             post_id: POST,
             next_attempt_at: new Date(now.getTime() + 15 * 60_000).toISOString(),
-            created_at: now.toISOString(),
+            created_at: state.queue.get(copy)?.created_at ?? now.toISOString(),
             claim_token: null,
+            copy_began_at: now.toISOString(),
           });
           pairs.push({ source_path: path, copy_path: copy });
         }
@@ -80,6 +85,15 @@ function fakeDatabase({
       for (const copy of args.p_copy_paths as string[]) {
         const source = `private-posts/${copy.slice('public-posts/'.length)}`;
         const queued = state.queue.get(copy);
+        if (state.allowed && state.rows.some((row) => row.paths.includes(source) && row.public_copy_paths.includes(copy))) {
+          // Recorded by another sync of the post: committed as it stands.
+          for (const row of state.rows) {
+            if (row.paths.includes(source) && !row.public_copy_paths.includes(copy)) row.public_copy_paths.push(copy);
+          }
+          if (queued && !queued.claim_token) state.queue.delete(copy);
+          committed.push(copy);
+          continue;
+        }
         if (state.allowed && queued && !queued.claim_token && state.objects.has(`showcase_media/${copy}`)) {
           for (const row of state.rows) {
             if (row.paths.includes(source) && !row.public_copy_paths.includes(copy)) row.public_copy_paths.push(copy);
@@ -88,7 +102,10 @@ function fakeDatabase({
           committed.push(copy);
         } else {
           state.queue.set(copy, {
-            public_path: copy, post_id: POST, next_attempt_at: now.toISOString(), created_at: now.toISOString(), claim_token: null,
+            created_at: now.toISOString(),
+            copy_began_at: null,
+            ...queued,
+            public_path: copy, post_id: POST, next_attempt_at: now.toISOString(), claim_token: null,
           });
         }
       }
@@ -108,9 +125,15 @@ function fakeDatabase({
     }
     if (name === 'finish_post_media_public_copy_removal') {
       const queued = state.queue.get(args.p_copy_path as string);
-      if (queued?.claim_token !== args.p_claim_token) return { data: false, error: null };
+      if (!queued || queued.claim_token !== args.p_claim_token) return { data: 'released', error: null };
+      const began = queued.copy_began_at ? Date.parse(queued.copy_began_at) : null;
+      if (began !== null && began > now.getTime() - 15 * 60_000) {
+        queued.claim_token = null;
+        queued.next_attempt_at = new Date(began + 15 * 60_000).toISOString();
+        return { data: 'held', error: null };
+      }
       state.queue.delete(args.p_copy_path as string);
-      return { data: true, error: null };
+      return { data: 'removed', error: null };
     }
     if (name === 'reschedule_post_media_public_copy_removal') {
       const queued = state.queue.get(args.p_copy_path as string);
@@ -121,13 +144,16 @@ function fakeDatabase({
       return { data: null, error: null };
     }
     if (name === 'list_post_media_public_copy_candidates') {
-      const missing = state.allowed && state.rows.some((row) => row.paths.some((path) => {
+      const missing = state.rows.flatMap((row) => row.paths.filter((path) => {
         const copy = publicCopyPathOf(POST, path);
-        return copy && !row.public_copy_paths.includes(copy);
+        return copy && !row.public_copy_paths.includes(copy) && state.objects.has(`post_media/${path}`);
       }));
       const served = state.rows.some((row) => row.public_copy_paths.length > 0);
+      const listed = state.allowed && missing.length > 0 && (args.p_include_unserved || served) && !args.p_before_post_id;
       return {
-        data: missing && (args.p_include_unserved || served) ? [{ post_id: POST, owner_user_id: OWNER }] : [],
+        data: listed
+          ? [{ post_id: POST, owner_user_id: OWNER, post_created_at: now.toISOString(), missing_objects: missing.length, missing_bytes: 1000 }]
+          : [],
         error: null,
       };
     }
@@ -259,9 +285,33 @@ describe('syncPostMediaPublicCopies', () => {
       return answer(name, args);
     });
     expect(await syncPostMediaPublicCopies(client, POST)).toEqual({ begun: 2, committed: 0, refused: 2, failed: 0 });
+    // Removed under a claim, never by a raw remove: a claim re-reads the rows.
+    expect(state.rpcCalls.filter((call) => call.name === 'claim_post_media_public_copy_removal')).toHaveLength(2);
     expect(state.removed).toEqual([`showcase_media/${ORIGINAL_COPY}`, `showcase_media/${PREVIEW_COPY}`]);
-    // Still queued, due now: the worker verifies them gone.
-    expect([...state.queue.keys()]).toEqual([ORIGINAL_COPY, PREVIEW_COPY]);
+    expect(state.objects.has(`showcase_media/${ORIGINAL_COPY}`)).toBe(false);
+    // The copies began moments ago, so their rows stay until one could no longer land.
+    expect([...state.queue.values()].map((row) => [row.public_path, row.claim_token, row.next_attempt_at])).toEqual([
+      [ORIGINAL_COPY, null, '2026-11-23T12:15:00.000Z'],
+      [PREVIEW_COPY, null, '2026-11-23T12:15:00.000Z'],
+    ]);
+  });
+
+  // Review of #908: a second sync's refused commit used to remove the object
+  // the first had just recorded, leaving the row naming a dead URL.
+  it('lets two syncs of one post run at once without removing what either recorded', async () => {
+    const { client, state } = fakeDatabase();
+
+    const [first, second] = await Promise.all([
+      syncPostMediaPublicCopies(client, POST),
+      syncPostMediaPublicCopies(client, POST),
+    ]);
+
+    expect(first.committed + second.committed).toBeGreaterThanOrEqual(2);
+    expect(first.refused + second.refused).toBe(0);
+    expect(state.removed).toEqual([]);
+    expect(state.objects.has(`showcase_media/${ORIGINAL_COPY}`)).toBe(true);
+    expect(state.rows[0].public_copy_paths).toEqual([ORIGINAL_COPY, PREVIEW_COPY]);
+    expect(state.queue.size).toBe(0);
   });
 
   it('refuses a pair outside the post\'s own folder before Storage sees it', async () => {
@@ -293,6 +343,17 @@ describe('removeQueuedPostMediaPublicCopies', () => {
       .toMatchObject({ due: 1, removed: 1, rescheduled: 0 });
     expect(state.objects.has(`showcase_media/${ORIGINAL_COPY}`)).toBe(false);
     expect(state.queue.size).toBe(0);
+  });
+
+  it('holds the row of a copy begun minutes ago after verifying it gone, since that copy may still land', async () => {
+    const copying: QueueRow = { ...due(ORIGINAL_COPY), copy_began_at: new Date(now.getTime() - 5 * 60_000).toISOString() };
+    const { client, state } = fakeDatabase({ queue: [copying] });
+    state.objects.add(`showcase_media/${ORIGINAL_COPY}`);
+
+    expect(await removeQueuedPostMediaPublicCopies(client, { postId: POST, now }))
+      .toMatchObject({ due: 1, removed: 0, held: 1 });
+    expect(state.objects.has(`showcase_media/${ORIGINAL_COPY}`)).toBe(false);
+    expect(state.queue.get(ORIGINAL_COPY)).toMatchObject({ claim_token: null, next_attempt_at: '2026-11-23T12:10:00.000Z' });
   });
 
   it('never removes a copy a row records again', async () => {
@@ -352,7 +413,7 @@ describe('maintainPostMediaPublicCopies', () => {
     state.objects.add(`showcase_media/${ORIGINAL_COPY}`);
     const result = await maintainPostMediaPublicCopies(client, { now: new Date('2026-11-23T12:00:00.000Z') });
     expect(result.synced).toEqual({ posts: 1, committed: 1, refused: 0, failed: 0 });
-    expect(result.copiedPosts).toEqual([{ postId: POST, ownerUserId: OWNER }]);
+    expect(result.copiedPosts).toMatchObject([{ postId: POST, ownerUserId: OWNER }]);
     expect(state.rows[0].public_copy_paths).toEqual([ORIGINAL_COPY, PREVIEW_COPY]);
   });
 

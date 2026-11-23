@@ -40,7 +40,7 @@ vi.mock('@/lib/post-media-public-copies', () => ({
   maintainPostMediaPublicCopies: vi.fn(async () => {
     passes.order.push('post media public copies');
     return {
-      removal: { due: 2, removed: 2, served: 0, gone: 0, rescheduled: 0, stuck: 0 },
+      removal: { due: 2, held: 0, released: 0, removed: 2, served: 0, gone: 0, rescheduled: 0, stuck: 0 },
       synced: { posts: 1, committed: 1, refused: 0, failed: 0 },
       copiedPosts: [{ postId: POST, ownerUserId: OWNER }],
     };
