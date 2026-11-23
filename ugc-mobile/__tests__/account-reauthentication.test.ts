@@ -1,4 +1,4 @@
-import type { Session, User } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/auth-js';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' } }));

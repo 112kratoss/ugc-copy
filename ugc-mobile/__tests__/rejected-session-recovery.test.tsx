@@ -2,7 +2,7 @@
 (global as typeof globalThis & { __DEV__: boolean }).__DEV__ = true;
 (global as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import { AuthApiError } from '@supabase/supabase-js';
+import { AuthApiError } from '@supabase/auth-js';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

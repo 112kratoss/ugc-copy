@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { GoTrueClient } from '@supabase/auth-js';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 
@@ -12,10 +12,7 @@ import * as WebBrowser from 'expo-web-browser';
  * use … to sign in" prompt, or closes the sheet, is a cancel, not a failure.
  */
 
-type GoogleAuthClient = Pick<
-  SupabaseClient['auth'],
-  'exchangeCodeForSession' | 'signInWithOAuth'
->;
+type GoogleAuthClient = Pick<GoTrueClient, 'exchangeCodeForSession' | 'signInWithOAuth'>;
 
 const GOOGLE_AUTH_CANCELED = 'ERR_GOOGLE_AUTH_CANCELED';
 

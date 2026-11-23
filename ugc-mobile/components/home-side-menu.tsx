@@ -1,4 +1,4 @@
-import type { User } from '@supabase/supabase-js';
+import type { User } from '@supabase/auth-js';
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import {

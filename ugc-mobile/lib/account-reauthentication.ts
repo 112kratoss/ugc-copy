@@ -1,4 +1,4 @@
-import type { Session, SupabaseClient, User } from '@supabase/supabase-js';
+import type { GoTrueClient, Session, User } from '@supabase/auth-js';
 import { Platform } from 'react-native';
 
 import { authorizeNativeAppleAccountDeletion } from './apple-auth';
@@ -98,7 +98,7 @@ export async function reauthenticateAccountForDeletion({
   googleSignIn?: typeof signInWithGoogleOAuth;
   method: AccountDeletionReauthentication;
   platform?: string;
-  supabase: SupabaseClient;
+  supabase: { auth: GoTrueClient };
 }): Promise<{ session?: Session; appleAuthorizationCode?: string }> {
   if (method.method === 'password') {
     if (!currentUser.email) {

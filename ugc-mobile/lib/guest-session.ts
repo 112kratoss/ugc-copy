@@ -1,4 +1,4 @@
-import type { Session, User } from '@supabase/supabase-js';
+import type { Session, User } from '@supabase/auth-js';
 
 /**
  * Guest identity, kept out of auth.tsx so it can be unit tested.
