@@ -152,6 +152,21 @@ describe('FeedClient: a card whose media is gone', () => {
         expect(screen.queryByTestId('card:archived-post')).not.toBeInTheDocument();
     });
 
+    // What is gone is the file the card held: a post its creator edited with
+    // new media while the feed was open comes back with that media.
+    it('lets the post back on a later page when it comes with other media', async () => {
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+        await failAndWaitForRemoval();
+
+        const edited = item('archived-post');
+        edited.mediaItems = [{ ...edited.mediaItems![0]!, url: '/api/media?bucket=post_media&path=private-posts%2Farchived-post%2Fnew-photo.jpg' }];
+        await act(async () => {
+            answerGuestPageOne({ ...feed, items: [edited, item('live-post')] });
+        });
+
+        await waitFor(() => expect(screen.getByTestId('card:archived-post')).toBeInTheDocument());
+    });
+
     it('keeps the post out for the rest of the visit, when the feed opens again with it', async () => {
         render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
         await failAndWaitForRemoval();

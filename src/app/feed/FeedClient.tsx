@@ -106,14 +106,29 @@ type LaneCacheEntry = {
 
 type FeedbackNotice = { tone: 'success' | 'error'; message: string } | null;
 
-type HiddenFromLane = { postIds: Set<string>; creatorIds: Set<string> };
+type HiddenFromLane = {
+    postIds: Set<string>;
+    creatorIds: Set<string>;
+    /**
+     * Media addresses found gone when they failed to load. The address, not
+     * the post: a post edited with new media comes back with that media, and
+     * one archived keeps the address a cached page still names.
+     */
+    goneMediaUrls: Set<string>;
+};
+
+function emptyHiddenFromLane(): HiddenFromLane {
+    return { postIds: new Set(), creatorIds: new Set(), goneMediaUrls: new Set() };
+}
 
 /**
  * A post the viewer removed this visit (not interested, hidden, reported or
- * blocked), or one whose media was found gone when it failed to load.
+ * blocked), or one that still holds media found gone when it failed to load.
  */
 function isHiddenFromLane(hidden: HiddenFromLane, item: ShowcaseFeedItem) {
-    return hidden.postIds.has(item.id) || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id));
+    return hidden.postIds.has(item.id)
+        || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id))
+        || Boolean(hidden.goneMediaUrls.size && item.mediaItems?.some((media) => hidden.goneMediaUrls.has(media.url)));
 }
 
 /**
@@ -127,11 +142,11 @@ const removedThisVisit = new Map<string, HiddenFromLane>();
 function getRemovedThisVisit(viewerId: string | null): HiddenFromLane {
     // The server renders the feed for every visitor; only a browser has a
     // visit, and a server-wide map would keep one entry per viewer for good.
-    if (typeof window === 'undefined') return { postIds: new Set(), creatorIds: new Set() };
+    if (typeof window === 'undefined') return emptyHiddenFromLane();
     const key = viewerId ?? 'signed-out';
     let removed = removedThisVisit.get(key);
     if (!removed) {
-        removed = { postIds: new Set(), creatorIds: new Set() };
+        removed = emptyHiddenFromLane();
         removedThisVisit.set(key, removed);
     }
     return removed;
@@ -1080,7 +1095,7 @@ export default function FeedClient({
         mediaItem: ShowcaseMediaItem,
     ): Promise<'removed' | 'retry'> => {
         if (await checkMediaAvailability(mediaItem.url) !== 'gone') return 'retry';
-        removedForViewer.postIds.add(postId);
+        removedForViewer.goneMediaUrls.add(mediaItem.url);
         removeFromLane((item) => item.id === postId);
         removeFromHomeShelf({ postId });
         return 'removed';
