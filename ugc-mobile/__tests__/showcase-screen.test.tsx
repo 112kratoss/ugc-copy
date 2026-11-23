@@ -254,7 +254,7 @@ import { getMagicTabBarMetrics } from '../lib/tab-bar-layout';
 import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
 import { NEW_POSTS_PROBE_MIN_LANE_AGE_MS } from '../lib/use-new-posts-probe';
 import { searchScreenOpener } from '../lib/open-search-screen';
-import { takeFreshRanking } from '../lib/feed-fresh-ranking';
+import { isFreshRankingRequested, resetFreshRankingForTests } from '../lib/feed-fresh-ranking';
 
 function feedItem() {
   return {
@@ -719,6 +719,7 @@ describe('Showcase screen', () => {
   // A pull is the reader asking again: the server must rank the first page
   // anew, not serve the ranking it made moments ago (the same posts came back).
   it('asks a fresh ranking of the lane it refreshes on a pull', async () => {
+    resetFreshRankingForTests();
     queryState.pages = [lanePage([{ id: 'post-1' }])];
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -726,13 +727,44 @@ describe('Showcase screen', () => {
     });
     try {
       const listProps = () => tree!.root.find((node) => String(node.type) === 'flash-list').props;
-      expect(takeFreshRanking({ category: 'media' }, 'viewer-1')).toBe(false);
+      expect(isFreshRankingRequested({ category: 'media' }, 'viewer-1')).toBe(false);
       await renderer.act(async () => {
         listProps().refreshControl.props.onRefresh();
       });
       expect(queryState.refetch).toHaveBeenCalled();
-      expect(takeFreshRanking({ category: 'media' }, 'viewer-1')).toBe(true);
+      expect(isFreshRankingRequested({ category: 'media' }, 'viewer-1')).toBe(true);
     } finally {
+      resetFreshRankingForTests();
+      if (tree) renderer.act(() => tree!.unmount());
+    }
+  });
+
+  // Starting again would cancel the first read on the phone only: the server
+  // would still rank and serve a page nobody sees.
+  it('lets a refresh asked while one is out wait for it', async () => {
+    resetFreshRankingForTests();
+    queryState.pages = [lanePage([{ id: 'post-1' }])];
+    let finish: () => void = () => undefined;
+    queryState.refetch.mockImplementation(() => new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    try {
+      const listProps = () => tree!.root.find((node) => String(node.type) === 'flash-list').props;
+      queryState.refetch.mockClear();
+      renderer.act(() => listProps().refreshControl.props.onRefresh());
+      // "New posts" tapped before the pull's page landed.
+      renderer.act(() => hostElement(tree!, 'new-posts-pill').props.onPress());
+      expect(queryState.refetch).toHaveBeenCalledTimes(1);
+      await renderer.act(async () => {
+        finish();
+      });
+    } finally {
+      queryState.refetch.mockImplementation(() => Promise.resolve());
+      resetFreshRankingForTests();
       if (tree) renderer.act(() => tree!.unmount());
     }
   });

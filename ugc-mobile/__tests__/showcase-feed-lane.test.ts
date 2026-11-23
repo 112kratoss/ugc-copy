@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FEED_WINDOW_PAGE_LIMIT } from '../lib/feed-page-window';
 import { HOME_FEED_CHIPS } from '../lib/home-feed-view-model';
@@ -11,7 +11,14 @@ import {
   resetExploreReadAheadForTests,
   startExploreReadAhead,
 } from '../lib/explore-read-ahead';
-import { requestFreshRanking } from '../lib/feed-fresh-ranking';
+import {
+  FRESH_RANKING_TTL_MS,
+  isFreshRankingRequested,
+  requestFreshRanking,
+  resetFreshRankingForTests,
+  runLaneRefresh,
+  type LaneRefreshInFlight,
+} from '../lib/feed-fresh-ranking';
 import { installRankedFirstPageDrain } from '../lib/feed-ranked-page-drain';
 import {
   createShowcaseFeedQueryKey,
@@ -168,7 +175,11 @@ describe('the lane query', () => {
     /** The feed read with its parameters typed, so a test can read what each call sent. */
     const feedApi = () => ({ getShowcaseFeed: vi.fn(async (_params?: Record<string, unknown>) => ({ items: [] })) });
 
-    it('asks the next first page of that lane for a fresh ranking, once', async () => {
+    beforeEach(() => {
+      resetFreshRankingForTests();
+    });
+
+    it('asks the next first page of that lane for a fresh ranking, spent once it is answered', async () => {
       const api = feedApi();
       const options = showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1');
 
@@ -179,6 +190,28 @@ describe('the lane query', () => {
 
       expect(api.getShowcaseFeed.mock.calls[0][0]).toMatchObject({ fresh: Number(freshQuery.fresh), offset: 0, sort: 'for-you' });
       expect(api.getShowcaseFeed.mock.calls[1][0]).not.toHaveProperty('fresh');
+    });
+
+    it('asks again on the retry of a read that failed', async () => {
+      const api = feedApi();
+      api.getShowcaseFeed.mockRejectedValueOnce(new Error('offline'));
+      const options = showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1');
+
+      requestFreshRanking({ sort: 'for-you' }, 'user-1');
+      await expect(options.queryFn({ pageParam: { offset: 0 } })).rejects.toThrow('offline');
+      await options.queryFn({ pageParam: { offset: 0 } });
+
+      expect(api.getShowcaseFeed.mock.calls[1][0]).toMatchObject({ fresh: 1 });
+      expect(isFreshRankingRequested({ sort: 'for-you' }, 'user-1')).toBe(false);
+    });
+
+    it('lets a request no read took lapse, so a read long after is served as before', async () => {
+      const api = feedApi();
+      requestFreshRanking({ sort: 'for-you' }, 'user-1', Date.now() - FRESH_RANKING_TTL_MS - 1);
+
+      await showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1').queryFn({ pageParam: { offset: 0 } });
+
+      expect(api.getShowcaseFeed.mock.calls[0][0]).not.toHaveProperty('fresh');
     });
 
     it('leaves a next page to its session, and another lane or viewer to its own refresh', async () => {
@@ -193,6 +226,47 @@ describe('the lane query', () => {
       // Still waiting for the read it was asked for.
       await showcaseFeedLaneQueryOptions(api, { sort: 'for-you' }, 'user-1').queryFn({ pageParam: { offset: 0 } });
       expect(api.getShowcaseFeed.mock.calls[3][0]).toMatchObject({ fresh: 1 });
+    });
+
+    describe('one refresh at a time', () => {
+      const lane = { sort: 'for-you' } as const;
+
+      it('lets a second refresh while the first is out wait for it, rather than read and rank again', async () => {
+        const inFlight: LaneRefreshInFlight = { current: null };
+        let finish: () => void = () => undefined;
+        const start = vi.fn(() => new Promise<void>((resolve) => {
+          finish = resolve;
+        }));
+
+        const pull = runLaneRefresh(inFlight, { filters: lane, identityUserId: 'user-1', lanePages: 2, start });
+        // "New posts" tapped before the pull's page landed.
+        const pill = runLaneRefresh(inFlight, { filters: lane, identityUserId: 'user-1', lanePages: 1, start });
+
+        expect(pill).toBe(pull);
+        expect(start).toHaveBeenCalledTimes(1);
+        finish();
+        await pull;
+        // Over, so the next refresh starts a read of its own.
+        await runLaneRefresh(inFlight, { filters: lane, identityUserId: 'user-1', lanePages: 1, start: async () => undefined });
+        expect(inFlight.current).toBeNull();
+      });
+
+      it('asks a fresh ranking only for a lane with pages: a lane still loading has its read on the way', () => {
+        const inFlight: LaneRefreshInFlight = { current: null };
+        void runLaneRefresh(inFlight, { filters: lane, identityUserId: 'user-1', lanePages: 0, start: async () => undefined });
+        expect(isFreshRankingRequested(lane, 'user-1')).toBe(false);
+
+        void runLaneRefresh({ current: null }, { filters: lane, identityUserId: 'user-1', lanePages: 1, start: async () => undefined });
+        expect(isFreshRankingRequested(lane, 'user-1')).toBe(true);
+      });
+
+      it('never lets one lane\'s refresh stand for another\'s', () => {
+        const inFlight: LaneRefreshInFlight = { current: null };
+        const start = vi.fn(() => new Promise<void>(() => undefined));
+        void runLaneRefresh(inFlight, { filters: lane, identityUserId: 'user-1', lanePages: 1, start });
+        void runLaneRefresh(inFlight, { filters: { sort: 'recent' }, identityUserId: 'user-1', lanePages: 1, start });
+        expect(start).toHaveBeenCalledTimes(2);
+      });
     });
 
     it('sends it only where the server reads it: a For you first page', () => {

@@ -102,7 +102,7 @@ import {
   flattenShowcaseFeedPages,
   getShowcaseFeedSessionContext,
 } from '@/lib/showcase-feed-query';
-import { requestFreshRanking } from '@/lib/feed-fresh-ranking';
+import { runLaneRefresh, type LaneRefreshInFlight } from '@/lib/feed-fresh-ranking';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import { scheduleExploreReadAhead, startExploreReadAhead } from '@/lib/explore-read-ahead';
 import {
@@ -621,17 +621,23 @@ export function HomeDashboard() {
   // tap and no page of the old session can be asked meanwhile. A ranked page
   // one waits for the queued impressions inside its own read
   // (`showcaseFeedLaneQueryOptions`), as a lane switch's does.
-  const refreshFirstPage = () => {
-    // The reader asked: the first page is ranked afresh (`lib/feed-fresh-ranking.ts`).
-    requestFreshRanking(activeChip.filters, identityUserId);
-    lastLoadMorePageCountRef.current = null;
-    lastLoadMoreAtRef.current = 0;
-    queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
-      if (!current?.pages.length) return current;
-      return { pages: current.pages.slice(0, 1), pageParams: [{ offset: 0 }] };
-    });
-    return feedQuery.refetch();
-  };
+  // The reader asked, so the first page is ranked afresh, one refresh at a
+  // time (`runLaneRefresh` in lib/feed-fresh-ranking.ts).
+  const laneRefreshRef = useRef<LaneRefreshInFlight['current']>(null);
+  const refreshFirstPage = () => runLaneRefresh(laneRefreshRef, {
+    filters: activeChip.filters,
+    identityUserId,
+    lanePages: feedQuery.data?.pages.length ?? 0,
+    start: () => {
+      lastLoadMorePageCountRef.current = null;
+      lastLoadMoreAtRef.current = 0;
+      queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
+        if (!current?.pages.length) return current;
+        return { pages: current.pages.slice(0, 1), pageParams: [{ offset: 0 }] };
+      });
+      return feedQuery.refetch();
+    },
+  });
 
   const handleRefresh = () => {
     haptic.light();

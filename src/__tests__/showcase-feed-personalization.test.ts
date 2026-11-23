@@ -2256,6 +2256,20 @@ describe('for-you-rules v3 wiring', () => {
       expect(persisted).toHaveLength(1);
     });
 
+    // A refresh's read can still claim a ranking held for it: that one was made
+    // for this page and never shown, which is all a fresh one would be.
+    it('serves a refresh the ranking read ahead for it, without ranking again', async () => {
+      const prepared = await prepare(v3Client({ candidates }).client);
+      expect(prepared).not.toBeNull();
+      const { client, persisted, rpc } = v3Client({ candidates });
+
+      const page = await serve(client, prepared, { fresh: true });
+
+      expect(rpc.mock.calls.map(([name]) => name)).not.toContain('get_ranked_feed_candidates_v3');
+      expect(persisted).toHaveLength(1);
+      expect(page.items.length).toBeGreaterThan(0);
+    });
+
     it.each([
       ['the active algorithm changed since (an activation or a rollback)', { algorithmId: 'algorithm-retired' }],
       ['the viewer is in another experiment arm now', { experimentAssignmentId: 41 }],

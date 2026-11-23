@@ -1,6 +1,6 @@
 import type { MagicbookletApiClient } from './api-client';
 import { noteShowcaseFeedReadAheadSupport, takeExploreReadAheadToken } from './explore-read-ahead';
-import { takeFreshRanking } from './feed-fresh-ranking';
+import { isFreshRankingRequested, settleFreshRanking } from './feed-fresh-ranking';
 import { drainBeforeRankedFirstPage } from './feed-ranked-page-drain';
 import { FEED_WINDOW_PAGE_LIMIT, getPreviousFeedPageParam } from './feed-page-window';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
@@ -76,9 +76,10 @@ export function showcaseFeedLaneQueryOptions(
     initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
     queryFn: async ({ pageParam }: { pageParam: ShowcaseFeedPageParam }) => {
       const firstPage = !pageParam.cursor && !pageParam.offset;
-      // A first page the reader asked for again (a pull, "New posts"): taken
-      // before anything waits, so the read it was asked for is the one that has it.
-      const fresh = firstPage && takeFreshRanking(filters, identityUserId);
+      // A first page the reader asked for again (a pull, "New posts"): asked
+      // on every try, so a retry of a failed read asks again, and spent once
+      // a read that asked is answered (`lib/feed-fresh-ranking.ts`).
+      const fresh = firstPage && isFreshRankingRequested(filters, identityUserId);
       // The read that draws Explore's first page claims the ranking read
       // ahead for it, which the server persists and marks served only now.
       const readAheadToken = firstPage
@@ -97,6 +98,7 @@ export function showcaseFeedLaneQueryOptions(
         ...(readAheadToken ? { readAheadToken } : {}),
         ...(fresh ? { fresh } : {}),
       }));
+      if (fresh) settleFreshRanking(filters, identityUserId);
       noteShowcaseFeedReadAheadSupport(filters, page);
       return page;
     },
