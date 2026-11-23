@@ -1,4 +1,5 @@
 import { postMediaStorageBucket, removePostMediaObjects } from '@/lib/post-media-storage';
+import { logBackendWarning } from '@/lib/backend-logger';
 import {
   publicCopyPathOf,
   removeQueuedPostMediaPublicCopies,
@@ -1174,7 +1175,9 @@ export async function applyPostModerationAction(
       if (result.action === 'restore') {
         // Speed only: the restore stands either way, and its media is served
         // through /api/media until a later save or the backfill copies it.
-        await syncPostMediaPublicCopies(supabase, result.postId).catch(() => undefined);
+        await syncPostMediaPublicCopies(supabase, result.postId).catch((copyError: unknown) => {
+          logBackendWarning('failed_to_copy_public_post_media', { error: copyError });
+        });
       } else {
         await removeQueuedPostMediaPublicCopies(supabase, { postId: result.postId });
         // Every row the post still has, not only those this call put off: a

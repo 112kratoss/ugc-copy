@@ -258,6 +258,8 @@ async function main() {
       queuedReasons: [...new Set((queued.data ?? []).map((row) => (row as { reason: string }).reason))],
       recordedAfterWrite: (recordedAfterWrite.data ?? []).reduce((sum, row) => sum + ((row as { public_copy_paths: string[] }).public_copy_paths?.length ?? 0), 0),
       removed: removal.removed,
+      // Verified gone, rows kept while a copy begun minutes ago may still land.
+      held: removal.held,
       publicObjectsLeft: left.length,
       publicUrlStatusAfter: fetchedAfter,
     };

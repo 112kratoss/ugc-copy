@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(64);
+select plan(71);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at) values
   ('ac100000-0000-4000-8000-000000000001', 'copies-owner@example.invalid', 'authenticated', 'authenticated', '{}', '{}', now()),
@@ -84,8 +84,10 @@ select is(public.commit_post_media_public_copies('bc100000-0000-4000-8000-000000
   array['public-posts/bc100000-0000-4000-8000-000000000001/0/photo.jpg'], 'a verified copy is recorded');
 select is((select public_copy_paths from public.post_media where post_id = 'bc100000-0000-4000-8000-000000000001'),
   array['public-posts/bc100000-0000-4000-8000-000000000001/0/photo.jpg'], 'on the row that names its source');
-select is((select count(*)::integer from public.post_media_public_copy_queue where post_id = 'bc100000-0000-4000-8000-000000000001'), 0,
-  'and leaves the queue');
+select is((select reason from public.post_media_public_copy_queue where post_id = 'bc100000-0000-4000-8000-000000000001'), 'copying',
+  'its queue row stays while a copy begun under 15 minutes ago may still land');
+select is(public.claim_post_media_public_copy_removal('public-posts/bc100000-0000-4000-8000-000000000001/0/photo.jpg')->>'outcome',
+  'served', 'a claim on it answers served and takes nothing');
 select is((select count(*)::integer from public.begin_post_media_public_copies('bc100000-0000-4000-8000-000000000001')), 0,
   'a recorded copy is not begun again');
 select throws_ok($$select public.commit_post_media_public_copies('bc100000-0000-4000-8000-000000000001',
@@ -111,8 +113,8 @@ select is(public.commit_post_media_public_copies('bd100000-0000-4000-8000-000000
 select is(public.commit_post_media_public_copies('bd100000-0000-4000-8000-000000000001',
   array['public-posts/bd100000-0000-4000-8000-000000000001/0/photo.jpg']),
   array['public-posts/bd100000-0000-4000-8000-000000000001/0/photo.jpg'], 'sync B commits the copy A recorded');
-select is((select count(*)::integer from public.post_media_public_copy_queue where post_id = 'bd100000-0000-4000-8000-000000000001'), 0,
-  'and queues nothing a removal could take');
+select is(public.claim_post_media_public_copy_removal('public-posts/bd100000-0000-4000-8000-000000000001/0/photo.jpg')->>'outcome',
+  'served', 'and leaves nothing a removal could take');
 select is(pg_temp.recorded('bd100000-0000-4000-8000-000000000001'), 1, 'the copy stays recorded');
 
 -- Only objects Storage holds are copy sources, and a feed rendition only once it is ready.
@@ -239,9 +241,46 @@ select is(public.claim_post_media_public_copy_removal('public-posts/bc200000-000
   'claimed', 'an unrecorded queued copy is claimed for removal');
 select is(public.finish_post_media_public_copy_removal('public-posts/bc200000-0000-4000-8000-000000000001/0/photo.jpg',
   'ac000000-0000-4000-8000-000000000000'), 'released', 'a finish without the claim''s token removes nothing');
+update public.post_media_public_copy_queue set copy_began_at = now() - interval '16 minutes'
+where public_path = 'public-posts/bc200000-0000-4000-8000-000000000001/0/photo.jpg';
 select is(public.finish_post_media_public_copy_removal('public-posts/bc200000-0000-4000-8000-000000000001/0/photo.jpg',
   (select claim_token from public.post_media_public_copy_queue where public_path = 'public-posts/bc200000-0000-4000-8000-000000000001/0/photo.jpg')),
-  'removed', 'the claim''s own finish settles the row');
+  'removed', 'the claim''s own finish settles the row once no copy of it may still land');
+
+-- A second sync's stamp survives the first sync's commit, so the post leaving
+-- public view while that copy is still landing holds the removal through it.
+do $$ begin perform pg_temp.copied_post('bf100000-0000-4000-8000-000000000001'); end $$;
+select ok(exists(select 1 from public.post_media_public_copy_queue
+  where public_path = 'public-posts/bf100000-0000-4000-8000-000000000001/0/photo.jpg' and copy_began_at = now()),
+  'a commit keeps the row of a copy begun under 15 minutes ago');
+update public.posts set visibility = 'private' where id = 'bf100000-0000-4000-8000-000000000001';
+select ok((select copy_began_at = now() and reason = 'unexposed' from public.post_media_public_copy_queue
+  where public_path = 'public-posts/bf100000-0000-4000-8000-000000000001/0/photo.jpg'),
+  'the post leaving public view re-queues it with that stamp');
+select is(public.finish_post_media_public_copy_removal('public-posts/bf100000-0000-4000-8000-000000000001/0/photo.jpg',
+  ((public.claim_post_media_public_copy_removal('public-posts/bf100000-0000-4000-8000-000000000001/0/photo.jpg'))->>'token')::uuid),
+  'held', 'so the removal holds the row through the copy still landing');
+
+-- A refused commit keeps when the copy began, and its removal holds too.
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, showcase_asset_path)
+values ('bf200000-0000-4000-8000-000000000001', 'ac100000-0000-4000-8000-000000000001', 'private', 'image', 'manual', 'media',
+  'private-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg');
+insert into public.post_media (post_id, storage_path, media_kind, sort_order)
+values ('bf200000-0000-4000-8000-000000000001', 'private-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg', 'image', 0);
+update public.posts set visibility = 'public' where id = 'bf200000-0000-4000-8000-000000000001';
+insert into storage.objects (bucket_id, name, metadata) values
+  ('post_media', 'private-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg', '{"size":100}'),
+  ('showcase_media', 'public-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg', '{"size":100}');
+do $$ begin perform * from public.begin_post_media_public_copies('bf200000-0000-4000-8000-000000000001'); end $$;
+update public.posts set visibility = 'private' where id = 'bf200000-0000-4000-8000-000000000001';
+select is(public.commit_post_media_public_copies('bf200000-0000-4000-8000-000000000001',
+  array['public-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg']), '{}'::text[], 'a commit after the post left public view is refused');
+select ok((select reason = 'copy_refused' and copy_began_at = now() from public.post_media_public_copy_queue
+  where public_path = 'public-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg'),
+  'and keeps when the copy began');
+select is(public.finish_post_media_public_copy_removal('public-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg',
+  ((public.claim_post_media_public_copy_removal('public-posts/bf200000-0000-4000-8000-000000000001/0/photo.jpg'))->>'token')::uuid),
+  'held', 'so its removal holds through it too');
 
 do $$ begin perform pg_temp.copied_post('bcd00000-0000-4000-8000-000000000001'); end $$;
 update public.posts set visibility = 'private' where id = 'bcd00000-0000-4000-8000-000000000001';

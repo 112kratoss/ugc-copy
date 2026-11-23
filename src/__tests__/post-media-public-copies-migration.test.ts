@@ -105,14 +105,15 @@ describe('post media public copies migration', () => {
     expect(commit).toContain('SELECT post.user_id INTO v_owner_id FROM public.posts AS post WHERE post.id = p_post_id FOR UPDATE;');
     // Serialized with the owner leaving the active state, which holds no post lock.
     expect(commit).toContain('PERFORM 1 FROM public.profiles WHERE id = v_owner_id FOR SHARE; v_allowed := public.post_media_public_copies_allowed(p_post_id);');
-    // A sweep that replaced the source meanwhile left nothing recording it: it stays queued.
-    expect(commit).toContain('IF EXISTS ( SELECT 1 FROM public.post_media AS media WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths) ) THEN DELETE FROM public.post_media_public_copy_queue WHERE public_path = v_copy;');
+    // A sweep that replaced the source meanwhile left nothing recording it: it stays queued. The
+    // rows recording it are locked before its row goes, and a row stamped by a copy that may still land stays.
+    expect(commit).toContain("PERFORM 1 FROM public.post_media AS media WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths) FOR UPDATE; IF FOUND THEN DELETE FROM public.post_media_public_copy_queue WHERE public_path = v_copy AND (copy_began_at IS NULL OR copy_began_at <= now() - interval '15 minutes');");
     expect(commit).toContain("WHERE objects.bucket_id = 'post_media' AND objects.name = v_source;");
     expect(commit).toContain("WHERE objects.bucket_id = 'showcase_media' AND objects.name = v_copy;");
     expect(commit).toContain('IF v_source_size > 0 AND v_copy_size = v_source_size THEN');
     // A copy another sync of the post already recorded is committed as it stands, never queued for removal.
-    expect(commit).toContain("IF v_allowed AND EXISTS ( SELECT 1 FROM public.post_media AS media WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths)");
-    expect(commit).toContain('DELETE FROM public.post_media_public_copy_queue WHERE public_path = v_copy AND claimed_at IS NULL; v_committed := array_append(v_committed, v_copy); CONTINUE;');
+    expect(commit).toContain("PERFORM 1 FROM public.post_media AS media WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths) FOR UPDATE; IF v_allowed AND FOUND THEN");
+    expect(commit).toContain("DELETE FROM public.post_media_public_copy_queue WHERE public_path = v_copy AND claimed_at IS NULL AND (copy_began_at IS NULL OR copy_began_at <= now() - interval '15 minutes'); v_committed := array_append(v_committed, v_copy); CONTINUE;");
     // A copy not recorded stays queued, due now, its claim let go.
     expect(commit).toContain("VALUES (v_copy, p_post_id, 'copy_refused', now()) ON CONFLICT (public_path) DO UPDATE SET reason = 'copy_refused', next_attempt_at = now(), claimed_at = NULL, claim_token = NULL;");
   });
@@ -128,7 +129,9 @@ describe('post media public copies migration', () => {
     const claim = definition('CREATE FUNCTION public.claim_post_media_public_copy_removal(p_copy_path text)');
     expect(claim).toContain('PERFORM 1 FROM public.posts WHERE id = v_post_id FOR UPDATE;');
     // The rows recording it are locked, so a sweep dropping it queues it again after the delete.
-    expect(claim).toContain('WHERE media.post_id = v_post_id AND p_copy_path = ANY(media.public_copy_paths) FOR UPDATE; IF FOUND THEN DELETE');
+    expect(claim).toContain('WHERE media.post_id = v_post_id AND p_copy_path = ANY(media.public_copy_paths) FOR UPDATE; IF FOUND THEN');
+    // A served copy keeps its row while a copy of it begun under 15 minutes ago may still land.
+    expect(claim).toContain("SET next_attempt_at = copy_began_at + interval '15 minutes' WHERE public_path = p_copy_path AND copy_began_at > now() - interval '15 minutes'; IF NOT FOUND THEN DELETE");
     expect(claim).toContain("RETURN jsonb_build_object('outcome', 'served');");
     const finish = definition('CREATE FUNCTION public.finish_post_media_public_copy_removal(p_copy_path text, p_claim_token uuid)');
     expect(finish).toContain('AND claim_token = p_claim_token');

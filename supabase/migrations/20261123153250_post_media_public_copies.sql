@@ -20,7 +20,8 @@
 -- then remove the objects at once and the showcase-media-revocations job
 -- retries what they miss. An object is made only after a queue row names it,
 -- and a queue row leaves only when the copy is recorded or its object is
--- verified gone, so no copy can exist that nothing will remove.
+-- verified gone, and not while a copy of its path begun under 15 minutes ago
+-- may still land, so no copy can exist that nothing will remove.
 
 ALTER TABLE public.post_media
   ADD COLUMN public_copy_paths text[] NOT NULL DEFAULT '{}'::text[];
@@ -122,7 +123,7 @@ REVOKE ALL ON TABLE public.post_media_public_copy_queue FROM PUBLIC, anon, authe
 GRANT SELECT ON TABLE public.post_media_public_copy_queue TO service_role;
 
 COMMENT ON TABLE public.post_media_public_copy_queue IS
-  'Public copies of post media that may exist unrecorded: being made, or no longer served. The worker removes each one not recorded on a row when it is due; a row leaves only when its copy is recorded or verified gone.';
+  'Public copies of post media that may exist unrecorded: being made, or no longer served. The worker removes each one not recorded on a row when it is due; a row leaves only when its copy is recorded or verified gone, and never while a copy of its path begun under 15 minutes ago (copy_began_at) may still land.';
 
 -- Clears what the post's rows record and queues every copy, due now. Run in
 -- the transaction of the write that ended the post's public reading.
@@ -479,16 +480,14 @@ BEGIN
 
     -- Already recorded by another sync of the post, which verified it: it is
     -- served, so it is committed here too (and recorded on any row naming its
-    -- source that lacks it), never queued for removal.
-    IF v_allowed AND EXISTS (
-      SELECT 1 FROM public.post_media AS media
-      WHERE media.post_id = p_post_id
-        AND v_copy = ANY(media.public_copy_paths)
-        AND v_source = ANY(ARRAY[
-          media.storage_path, media.preview_storage_path, media.display_storage_path,
-          media.rendition_storage_path, media.teaser_storage_path
-        ])
-    ) THEN
+    -- source that lacks it), never queued for removal. The rows recording it
+    -- are locked first, as the claim does: a sweep or a row delete that drops
+    -- it (neither takes the post lock) waits for this transaction and queues
+    -- it again after the delete below, or went first and it is not found.
+    PERFORM 1 FROM public.post_media AS media
+    WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths)
+    FOR UPDATE;
+    IF v_allowed AND FOUND THEN
       UPDATE public.post_media AS media
       SET public_copy_paths = media.public_copy_paths || v_copy
       WHERE media.post_id = p_post_id
@@ -497,8 +496,13 @@ BEGIN
           media.rendition_storage_path, media.teaser_storage_path
         ])
         AND NOT (v_copy = ANY(media.public_copy_paths));
+      -- A copy of the path begun under 15 minutes ago may still land: its row
+      -- stays until then, so a later revoke keeps the stamp and a removal
+      -- holds through it. The claim drops it as served once it is due.
       DELETE FROM public.post_media_public_copy_queue
-      WHERE public_path = v_copy AND claimed_at IS NULL;
+      WHERE public_path = v_copy
+        AND claimed_at IS NULL
+        AND (copy_began_at IS NULL OR copy_began_at <= now() - interval '15 minutes');
       v_committed := array_append(v_committed, v_copy);
       CONTINUE;
     END IF;
@@ -534,13 +538,16 @@ BEGIN
           AND NOT (v_copy = ANY(media.public_copy_paths));
         -- A sweep that replaced the source on the row meanwhile (it takes no
         -- post lock) left nothing recording the copy: it stays queued below.
-        -- The rows the update recorded it on stay locked to this transaction,
-        -- so a sweep that drops it later queues it again after this delete.
-        IF EXISTS (
-          SELECT 1 FROM public.post_media AS media
-          WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths)
-        ) THEN
-          DELETE FROM public.post_media_public_copy_queue WHERE public_path = v_copy;
+        -- The rows recording it are locked to this transaction, so a sweep
+        -- that drops it later queues it again after this delete; and a row
+        -- stamped by another sync's copy, which may still land, stays.
+        PERFORM 1 FROM public.post_media AS media
+        WHERE media.post_id = p_post_id AND v_copy = ANY(media.public_copy_paths)
+        FOR UPDATE;
+        IF FOUND THEN
+          DELETE FROM public.post_media_public_copy_queue
+          WHERE public_path = v_copy
+            AND (copy_began_at IS NULL OR copy_began_at <= now() - interval '15 minutes');
           v_committed := array_append(v_committed, v_copy);
           CONTINUE;
         END IF;
@@ -592,7 +599,15 @@ BEGIN
   WHERE media.post_id = v_post_id AND p_copy_path = ANY(media.public_copy_paths)
   FOR UPDATE;
   IF FOUND THEN
-    DELETE FROM public.post_media_public_copy_queue WHERE public_path = p_copy_path;
+    -- Served. A copy of the path begun under 15 minutes ago may still land,
+    -- so its row stays until then; any other row leaves.
+    UPDATE public.post_media_public_copy_queue
+    SET next_attempt_at = copy_began_at + interval '15 minutes'
+    WHERE public_path = p_copy_path
+      AND copy_began_at > now() - interval '15 minutes';
+    IF NOT FOUND THEN
+      DELETE FROM public.post_media_public_copy_queue WHERE public_path = p_copy_path;
+    END IF;
     RETURN jsonb_build_object('outcome', 'served');
   END IF;
 

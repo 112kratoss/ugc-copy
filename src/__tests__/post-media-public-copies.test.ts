@@ -55,6 +55,14 @@ function fakeDatabase({
     rpcCalls: [] as Array<{ name: string; args: Record<string, unknown> }>,
   };
   let tokens = 0;
+  // A copy of the path begun under 15 minutes ago may still land: the row stays.
+  const recentlyBegun = (row: QueueRow | undefined) => Boolean(
+    (row?.copy_began_at && Date.parse(row.copy_began_at) > now.getTime() - 15 * 60_000),
+  );
+  const settle = (copy: string) => {
+    const queued = state.queue.get(copy);
+    if (queued && !queued.claim_token && !recentlyBegun(queued)) state.queue.delete(copy);
+  };
 
   const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
     state.rpcCalls.push({ name, args });
@@ -90,7 +98,7 @@ function fakeDatabase({
           for (const row of state.rows) {
             if (row.paths.includes(source) && !row.public_copy_paths.includes(copy)) row.public_copy_paths.push(copy);
           }
-          if (queued && !queued.claim_token) state.queue.delete(copy);
+          settle(copy);
           committed.push(copy);
           continue;
         }
@@ -98,7 +106,7 @@ function fakeDatabase({
           for (const row of state.rows) {
             if (row.paths.includes(source) && !row.public_copy_paths.includes(copy)) row.public_copy_paths.push(copy);
           }
-          state.queue.delete(copy);
+          settle(copy);
           committed.push(copy);
         } else {
           state.queue.set(copy, {
@@ -115,7 +123,9 @@ function fakeDatabase({
       const copy = args.p_copy_path as string;
       if (!state.queue.has(copy)) return { data: { outcome: 'gone' }, error: null };
       if (state.rows.some((row) => row.public_copy_paths.includes(copy))) {
-        state.queue.delete(copy);
+        const queued = state.queue.get(copy)!;
+        if (recentlyBegun(queued)) queued.next_attempt_at = new Date(Date.parse(queued.copy_began_at!) + 15 * 60_000).toISOString();
+        else state.queue.delete(copy);
         return { data: { outcome: 'served' }, error: null };
       }
       tokens += 1;
@@ -253,7 +263,11 @@ describe('syncPostMediaPublicCopies', () => {
       { from: `post_media/${PREVIEW}`, to: PREVIEW_COPY, bucket: 'showcase_media' },
     ]);
     expect(state.rows[0].public_copy_paths).toEqual([ORIGINAL_COPY, PREVIEW_COPY]);
-    expect(state.queue.size).toBe(0);
+    // Their rows stay, stamped, until a copy begun now could no longer land.
+    expect([...state.queue.values()].map((row) => [row.public_path, row.copy_began_at])).toEqual([
+      [ORIGINAL_COPY, '2026-11-23T12:00:00.000Z'],
+      [PREVIEW_COPY, '2026-11-23T12:00:00.000Z'],
+    ]);
   });
 
   it('makes nothing for a post nobody signed out may read', async () => {
@@ -311,7 +325,10 @@ describe('syncPostMediaPublicCopies', () => {
     expect(state.removed).toEqual([]);
     expect(state.objects.has(`showcase_media/${ORIGINAL_COPY}`)).toBe(true);
     expect(state.rows[0].public_copy_paths).toEqual([ORIGINAL_COPY, PREVIEW_COPY]);
-    expect(state.queue.size).toBe(0);
+    // What stays queued is served: a removal pass takes nothing.
+    expect(await removeQueuedPostMediaPublicCopies(client, { postId: POST, now: new Date('2026-11-23T12:20:00.000Z') }))
+      .toMatchObject({ served: 2, removed: 0 });
+    expect(state.objects.has(`showcase_media/${ORIGINAL_COPY}`)).toBe(true);
   });
 
   it('refuses a pair outside the post\'s own folder before Storage sees it', async () => {
