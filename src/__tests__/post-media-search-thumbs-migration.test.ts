@@ -16,6 +16,8 @@ const migrationsDirectory = join(process.cwd(), 'supabase/migrations');
 const migrationNames = readdirSync(migrationsDirectory).filter((name) => name.endsWith('.sql')).sort();
 const MIGRATION = '20261123152813_post_media_search_thumbs.sql';
 const PICTURE_MIGRATION = '20261115105944_search_content_suggestions.sql';
+// A creation's public folder, as the revocation queue matches it.
+const CREATION_FOLDER = '^showcase/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[^/]';
 const withoutComments = (sql: string) => sql.replace(/--.*$/gm, '');
 const read = (file: string) => withoutComments(readFileSync(join(migrationsDirectory, file), 'utf8'));
 const statements = read(MIGRATION);
@@ -66,13 +68,19 @@ describe('post media search thumbs migration', () => {
     expect(statements).toContain('VALIDATE CONSTRAINT post_media_thumb_storage_path_safe_check;');
   });
 
-  it('keeps a thumb only beside a public preview, so no labelled post can carry one', () => {
+  it('keeps a thumb in a creation\u2019s public folder beside a public preview, so no labelled post can carry one', () => {
     const check = squash(statements.slice(
       statements.indexOf('ADD CONSTRAINT post_media_thumb_beside_public_preview_check'),
       statements.indexOf('VALIDATE CONSTRAINT post_media_thumb_beside_public_preview_check'),
     ));
-    expect(check).toContain("thumb_storage_path IS NULL OR ( NOT starts_with(thumb_storage_path, 'private-posts/') AND preview_storage_path IS NOT NULL AND NOT starts_with(preview_storage_path, 'private-posts/') )");
+    expect(check).toContain(`thumb_storage_path IS NULL OR ( thumb_storage_path ~ '${CREATION_FOLDER}' AND preview_storage_path IS NOT NULL AND NOT starts_with(preview_storage_path, 'private-posts/') )`);
     expect(statements).toContain('VALIDATE CONSTRAINT post_media_thumb_beside_public_preview_check;');
+    // The folder is the one the revocation queue takes, so every thumb a row
+    // stops naming can be queued (review of #906), and the code holds the same rule.
+    expect(read('20261101100659_sweeps_queue_unrecorded_showcase_media.sql')).toContain(`WHERE named.path ~ '${CREATION_FOLDER}'`);
+    expect(source('src/lib/post-media-preview.ts')).toContain(
+      'const CREATION_FOLDER_PATH = /^showcase\\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\/[^/]/;',
+    );
   });
 
   it('drops a thumb its preview leaves behind and queues every thumb a row stops naming', () => {
@@ -164,5 +172,19 @@ describe('post media search thumbs migration', () => {
     expect(backfill).toContain(".eq('preview_storage_path', row.preview_storage_path)");
     expect(backfill).toContain(".is('thumb_storage_path', null)");
     expect(backfill).toContain('parseBackfillExecutionMode');
+    // Only covers in a creation's folder, of posts search can show (review of #906).
+    expect(backfill).toContain('if (!canStorePostMediaThumb(naming)) {');
+    for (const filter of [
+      "posts!inner(id)",
+      ".like('preview_storage_path', 'showcase/%')",
+      ".eq('posts.visibility', 'public')",
+      ".eq('posts.review_status', 'visible')",
+      ".is('posts.archived_at', null)",
+      ".eq('posts.is_nsfw', false)",
+      ".is('posts.tombstoned_at', null)",
+    ]) {
+      // Both the count and the page read hold it.
+      expect(backfill.split(filter).length - 1, filter).toBe(2);
+    }
   });
 });

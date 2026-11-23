@@ -38,9 +38,9 @@ type PostMediaPreviewResult = {
   /**
    * The row thumb made from this preview (`storePostMediaThumb`). Null unless
    * the caller asked for one (`withThumb`: only a writer that records it in
-   * `post_media.thumb_storage_path`), for a source in the private bucket, and
-   * when it could not be made. A reader then draws the preview, as it did
-   * before thumbs existed.
+   * `post_media.thumb_storage_path`), for a source outside a creation's public
+   * folder (`canStorePostMediaThumb`), and when it could not be made. A reader
+   * then draws the preview, as it did before thumbs existed.
    */
   thumbStoragePath: string | null;
 };
@@ -88,11 +88,28 @@ export async function encodePostMediaThumb(preview: Buffer): Promise<Buffer> {
 }
 
 /**
+ * A creation's public folder, `showcase/<creation id>/`: the one place a thumb
+ * is made, because it is the one place every path that drops a post's files
+ * also reaches a thumb, through the revocation queue
+ * (`queue_unrecorded_showcase_media` takes this same pattern). A post's own
+ * folders (`posts/<post>/`, `private-posts/<post>/`) are not: account erasure
+ * and a post's media edit list their objects by column, and no queue takes
+ * them (review of #906). The database holds the same rule
+ * (`post_media_thumb_beside_public_preview_check`).
+ */
+const CREATION_FOLDER_PATH = /^showcase\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^/]/;
+
+/** Whether a row thumb may be made for media stored at `storagePath`: only in a creation's public folder. */
+export function canStorePostMediaThumb(storagePath: string): boolean {
+  return CREATION_FOLDER_PATH.test(storagePath);
+}
+
+/**
  * Encodes and stores the row thumb of the preview of `storagePath`, and
- * answers its path and size; null for a source in the private bucket, whose
- * pictures nothing public draws (a thumb lives only beside a public preview:
- * the database's `post_media_thumb_beside_public_preview_check`). Throws when
- * the upload fails or its read-back disagrees, as the preview's does.
+ * answers its path and size; null for a source outside a creation's public
+ * folder (`canStorePostMediaThumb`), which includes all of the private
+ * bucket, whose pictures nothing public draws. Throws when the upload fails
+ * or its read-back disagrees, as the preview's does.
  */
 export async function storePostMediaThumb({
   supabase,
@@ -105,6 +122,7 @@ export async function storePostMediaThumb({
   preview: Buffer;
   onUploaded?: OnUploaded;
 }): Promise<{ path: string; bytes: number } | null> {
+  if (!canStorePostMediaThumb(storagePath)) return null;
   const bucket = postMediaStorageBucket(storagePath);
   if (bucket === PRIVATE_POST_MEDIA_BUCKET) return null;
   const thumb = await encodePostMediaThumb(preview);

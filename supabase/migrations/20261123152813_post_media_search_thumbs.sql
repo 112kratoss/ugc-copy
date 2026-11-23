@@ -11,9 +11,12 @@
 -- Only the preview sweep makes one (`createPostMediaPreview` with `withThumb`,
 -- for a writer that records it here); `scripts/backfills/backfill-post-media-thumbs.ts`
 -- makes the rest, on the owner's word. Search draws only public, visible,
--- unlabelled posts' public previews (search_post_picture), so a thumb exists
--- only beside a public preview: today the covers of creation posts, in
--- showcase/<creation>/.
+-- unlabelled posts' public previews (search_post_picture), and a thumb exists
+-- only in a creation's public folder, showcase/<creation>/, beside a public
+-- preview: the covers of creation posts. That folder is the one every path
+-- that drops a post's files reaches a thumb in, through the revocation queue
+-- below; a post's own folders are listed by column in account erasure and a
+-- media edit, and no queue takes them (review of #906).
 --
 -- Its lifecycle is its preview's. The writers that move, replace or drop a
 -- preview predate it and name five path columns each; rather than teach every
@@ -26,8 +29,10 @@
 --     or by the row's delete (a post deleted, its account erased, a creation
 --     deleted), goes to the showcase-media-revocations queue, whose job keeps
 --     what a serving post still names and removes and verifies the rest
---     (queue_unrecorded_showcase_media: only an object in a creation's public
---     folder is queued, the only place a thumb is made today).
+--     (queue_unrecorded_showcase_media: an object in a creation's public
+--     folder, the only place a thumb may be).
+-- Account erasure's manifest (prepare_account_deletion) does not list thumbs:
+-- its cascade deletes the rows, and the queue removes their thumbs after it.
 -- The TypeScript paths that remove a post's objects at once (post delete,
 -- takedown, a creation's deletion or unexposure, labelling) remove the thumb
 -- with the rest; the queue is their durable fallback.
@@ -44,7 +49,7 @@ ALTER TABLE public.post_media
   ADD COLUMN IF NOT EXISTS thumb_storage_path text;
 
 COMMENT ON COLUMN public.post_media.thumb_storage_path IS
-  'The row thumb search draws: a WebP 144 px on its short side made from preview_storage_path''s bytes, in the same folder. Only beside a public preview (post_media_thumb_beside_public_preview_check); dropped when the preview changes without it and queued for revocation once no row names it (post_media_thumb_follows_its_preview).';
+  'The row thumb search draws: a WebP 144 px on its short side made from preview_storage_path''s bytes, in the same folder. Only in a creation''s public folder (showcase/<creation>/) beside a public preview (post_media_thumb_beside_public_preview_check); dropped when the preview changes without it and queued for revocation once no row names it (post_media_thumb_follows_its_preview).';
 
 -- The same traversal guard the other path columns carry.
 ALTER TABLE public.post_media
@@ -62,9 +67,10 @@ ALTER TABLE public.post_media
 ALTER TABLE public.post_media
   VALIDATE CONSTRAINT post_media_thumb_storage_path_safe_check;
 
--- A thumb is public and only ever drawn for a public preview. A labelled
--- post's media is all in the private bucket (assert_nsfw_private_media), so
--- with this no labelled post can carry a public thumb.
+-- A thumb lives in a creation's public folder, the pattern the revocation
+-- queue takes (queue_unrecorded_showcase_media), and is only ever drawn for a
+-- public preview. A labelled post's media is all in the private bucket
+-- (assert_nsfw_private_media), so with this no labelled post can carry one.
 ALTER TABLE public.post_media
   DROP CONSTRAINT IF EXISTS post_media_thumb_beside_public_preview_check;
 ALTER TABLE public.post_media
@@ -72,7 +78,7 @@ ALTER TABLE public.post_media
   CHECK (
     thumb_storage_path IS NULL
     OR (
-      NOT starts_with(thumb_storage_path, 'private-posts/')
+      thumb_storage_path ~ '^showcase/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/[^/]'
       AND preview_storage_path IS NOT NULL
       AND NOT starts_with(preview_storage_path, 'private-posts/')
     )

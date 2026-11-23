@@ -19,6 +19,7 @@ vi.mock('@/lib/video-poster', () => ({
 import {
   buildPostMediaPreviewPath,
   buildPostMediaThumbPath,
+  canStorePostMediaThumb,
   createPostMediaPreview,
   encodePostMediaThumb,
   POST_MEDIA_THUMB_SHORT_SIDE,
@@ -83,11 +84,11 @@ describe('a post media row thumb', () => {
   });
 
   it('is named beside its source and its preview, content-addressed', () => {
-    expect(buildPostMediaThumbPath('showcase/gen-1/output.abc123.png', '0123456789abcdef'))
-      .toBe('showcase/gen-1/output.abc123.thumb.0123456789abcdef.webp');
-    expect(buildPostMediaPreviewPath('showcase/gen-1/output.abc123.png', '0123456789abcdef'))
-      .toBe('showcase/gen-1/output.abc123.preview.0123456789abcdef.webp');
-    expect(buildPostMediaThumbPath('showcase/gen-1/no-extension', 'ff')).toBe('showcase/gen-1/no-extension.thumb.ff.webp');
+    expect(buildPostMediaThumbPath('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.png', '0123456789abcdef'))
+      .toBe('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.thumb.0123456789abcdef.webp');
+    expect(buildPostMediaPreviewPath('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.png', '0123456789abcdef'))
+      .toBe('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.preview.0123456789abcdef.webp');
+    expect(buildPostMediaThumbPath('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/no-extension', 'ff')).toBe('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/no-extension.thumb.ff.webp');
   });
 
   it('is stored in the public bucket as a WebP Blob, and told to the caller before its check', async () => {
@@ -97,12 +98,12 @@ describe('a post media row thumb', () => {
 
     const thumb = await storePostMediaThumb({
       supabase,
-      storagePath: 'showcase/gen-1/output.abc123.png',
+      storagePath: 'showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.png',
       preview,
       onUploaded: (path) => { reported.push(path); },
     });
 
-    expect(thumb?.path).toMatch(/^showcase\/gen-1\/output\.abc123\.thumb\.[a-f0-9]{16}\.webp$/);
+    expect(thumb?.path).toMatch(/^showcase\/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e\/output\.abc123\.thumb\.[a-f0-9]{16}\.webp$/);
     expect(uploads).toHaveLength(1);
     expect(uploads[0].bucket).toBe('showcase_media');
     // A Blob, never a Buffer: supabase-js stringifies a Buffer.
@@ -111,6 +112,23 @@ describe('a post media row thumb', () => {
     expect(uploads[0].options).toMatchObject({ contentType: 'image/webp', upsert: true });
     expect(thumb?.bytes).toBe(uploads[0].body.size);
     expect(reported).toEqual([thumb?.path]);
+  });
+
+  it('is made only in a creation\u2019s public folder, the one every cleanup reaches (review of #906)', async () => {
+    expect(canStorePostMediaThumb('showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.png')).toBe(true);
+    for (const outside of [
+      'posts/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/0/photo.jpg',
+      'private-posts/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/0/photo.jpg',
+      'showcase/seed-1.png',
+      'showcase/not-a-creation/output.png',
+      'showcase/7D3E2B1A-0C4F-4A5B-9E6D-1F2A3B4C5D6E/output.png',
+      'seed/1/source.png',
+    ]) {
+      expect(canStorePostMediaThumb(outside), outside).toBe(false);
+      const { supabase, uploads } = fakeStorage();
+      expect(await storePostMediaThumb({ supabase, storagePath: outside, preview: await webp(540, 720) }), outside).toBeNull();
+      expect(uploads, outside).toEqual([]);
+    }
   });
 
   it('is never made for a source in the private bucket', async () => {
@@ -129,7 +147,7 @@ describe('a post media row thumb', () => {
     const reported: string[] = [];
     await expect(storePostMediaThumb({
       supabase,
-      storagePath: 'showcase/gen-1/output.abc123.png',
+      storagePath: 'showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.png',
       preview: await webp(540, 720),
       onUploaded: (path) => { reported.push(path); },
     })).rejects.toMatchObject({ message: 'storage unavailable' });
@@ -150,13 +168,13 @@ describe('a preview with its row thumb', () => {
     const result = await createPostMediaPreview({
       body: await jpegBlob(1200, 1600),
       contentType: 'image/jpeg',
-      storagePath: 'showcase/gen-1/output.abc123.jpg',
+      storagePath: 'showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.jpg',
       supabase,
       onUploaded: (path) => { reported.push(path); },
       withThumb: true,
     });
 
-    expect(result?.thumbStoragePath).toMatch(/^showcase\/gen-1\/output\.abc123\.thumb\.[a-f0-9]{16}\.webp$/);
+    expect(result?.thumbStoragePath).toMatch(/^showcase\/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e\/output\.abc123\.thumb\.[a-f0-9]{16}\.webp$/);
     expect(reported).toContain(result?.thumbStoragePath);
     const preview = stored.get(`showcase_media/${result?.previewStoragePath}`);
     const thumb = stored.get(`showcase_media/${result?.thumbStoragePath}`);
@@ -169,7 +187,7 @@ describe('a preview with its row thumb', () => {
     const result = await createPostMediaPreview({
       body: await jpegBlob(1200, 1600),
       contentType: 'image/jpeg',
-      storagePath: 'showcase/gen-1/output.abc123.jpg',
+      storagePath: 'showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.jpg',
       supabase,
     });
     expect(result?.thumbStoragePath).toBeNull();
@@ -197,7 +215,7 @@ describe('a preview with its row thumb', () => {
     const result = await createPostMediaPreview({
       body: await jpegBlob(1200, 1600),
       contentType: 'image/jpeg',
-      storagePath: 'showcase/gen-1/output.abc123.jpg',
+      storagePath: 'showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.jpg',
       supabase,
       onUploaded: (path) => { reported.push(path); },
       withThumb: true,
@@ -208,7 +226,7 @@ describe('a preview with its row thumb', () => {
     // Told, so the caller queues it: a write whose reply was lost may have landed.
     expect(reported.some((path) => path.includes('.thumb.'))).toBe(true);
     expect(loggerState.logBackendWarning).toHaveBeenCalledWith('post_media_thumb_not_stored', expect.objectContaining({
-      storagePath: 'showcase/gen-1/output.abc123.jpg',
+      storagePath: 'showcase/7d3e2b1a-0c4f-4a5b-9e6d-1f2a3b4c5d6e/output.abc123.jpg',
     }));
   });
 
@@ -219,12 +237,12 @@ describe('a preview with its row thumb', () => {
     const result = await createPostMediaPreview({
       body: new Blob([Uint8Array.from([0, 0, 0, 24])], { type: 'video/mp4' }),
       contentType: 'video/mp4',
-      storagePath: 'showcase/gen-2/clip.def456.mp4',
+      storagePath: 'showcase/0b9c8d7e-6f5a-4b3c-8d2e-1f0a9b8c7d6e/clip.def456.mp4',
       supabase,
       withThumb: true,
     });
 
-    expect(result?.thumbStoragePath).toMatch(/^showcase\/gen-2\/clip\.def456\.thumb\.[a-f0-9]{16}\.webp$/);
+    expect(result?.thumbStoragePath).toMatch(/^showcase\/0b9c8d7e-6f5a-4b3c-8d2e-1f0a9b8c7d6e\/clip\.def456\.thumb\.[a-f0-9]{16}\.webp$/);
     const thumb = await sharp(Buffer.from(await stored.get(`showcase_media/${result?.thumbStoragePath}`)!.arrayBuffer())).metadata();
     expect([thumb.width, thumb.height]).toEqual([144, 256]);
   });
