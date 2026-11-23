@@ -15,6 +15,13 @@ const confirmDialog = vi.hoisted(() => ({ show: vi.fn(async () => true) }));
 const clipboard = vi.hoisted(() => ({ copy: vi.fn(async () => undefined) }));
 const picker = vi.hoisted(() => ({ launch: vi.fn() }));
 const upload = vi.hoisted(() => ({ picked: vi.fn() }));
+// The documents-folder copy a picked photo waits in (`lib/support-photo-file.ts`, tested on its own).
+const photoFiles = vi.hoisted(() => ({
+  keep: vi.fn(async (_uri: string, name: string) => `file:///documents/support-photos/${name}`),
+  letGo: vi.fn(async (_uri: string | null | undefined) => undefined),
+  isThere: vi.fn(async (_uri: string) => true),
+  sweep: vi.fn(async () => undefined),
+}));
 const authState = vi.hoisted(() => ({
   api: {
     getSupportConversation: vi.fn(),
@@ -61,6 +68,13 @@ vi.mock('expo-image-picker', () => ({
 }));
 vi.mock('@/components/media-lightbox', () => ({ MediaLightbox: (props: MockProps) => React.createElement('media-lightbox', props) }));
 vi.mock('@/lib/media', () => ({ uploadPickedMedia: upload.picked }));
+vi.mock('@/lib/support-photo-file', async () => ({
+  ...await vi.importActual<typeof import('@/lib/support-photo-file')>('@/lib/support-photo-file'),
+  keepSupportPhoto: photoFiles.keep,
+  letGoSupportPhoto: photoFiles.letGo,
+  supportPhotoIsThere: photoFiles.isThere,
+  sweepSupportPhotos: photoFiles.sweep,
+}));
 vi.mock('react-native', () => {
   class AnimatedValue {
     setValue() {}
@@ -594,7 +608,10 @@ describe('photos in Message support', () => {
     expect(sendButton(tree).props.disabled).toBe(false);
 
     await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
-    expect(upload.picked).toHaveBeenCalledWith(picked.uri, expect.objectContaining({
+    // Read from its own copy in the documents folder, never the picker's cache file.
+    const copy = await photoFiles.keep.mock.results[0].value;
+    expect(photoFiles.keep).toHaveBeenCalledWith(picked.uri, expect.stringMatching(/\.jpg$/));
+    expect(upload.picked).toHaveBeenCalledWith(copy, expect.objectContaining({
       api: authState.api,
       fileName: 'IMG_0001.jpg',
       mimeType: 'image/jpeg',
@@ -607,6 +624,56 @@ describe('photos in Message support', () => {
       replyToMessageId: null,
       photo: { storagePath: 'uploads/account-1/u1-IMG_0001.jpg' },
     });
+    // Sent: the copy goes.
+    expect(photoFiles.letGo).toHaveBeenCalledWith(copy);
+  });
+
+  it('keeps a picked photo in a copy of its own until it is sent, taken off or replaced', async () => {
+    const tree = render();
+    expect(photoFiles.sweep).toHaveBeenCalledTimes(1);
+
+    await pick(tree);
+    const first = await photoFiles.keep.mock.results[0].value;
+    expect(photoFiles.letGo).not.toHaveBeenCalledWith(first);
+
+    // Another photo in its place lets the first copy go.
+    await pick(tree, { ...picked, uri: 'file:///cache/ImagePicker/IMG_0003.png', fileName: 'IMG_0003.png', mimeType: 'image/png' });
+    const second = await photoFiles.keep.mock.results[1].value;
+    expect(second).toMatch(/\.png$/);
+    expect(photoFiles.letGo).toHaveBeenCalledWith(first);
+
+    // Taken off the composer, its copy goes with it.
+    const remove = tree.root.find((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Remove photo');
+    act(() => { (remove.props.onPress as () => void)(); });
+    expect(photoFiles.letGo).toHaveBeenCalledWith(second);
+    expect(drawnText(tree)).not.toContain('IMG_0003.png');
+  });
+
+  it('lets the draft\'s copy go when the screen closes with it still there', async () => {
+    const tree = render();
+    await pick(tree);
+    const copy = await photoFiles.keep.mock.results[0].value;
+    act(() => { tree.unmount(); });
+    expect(photoFiles.letGo).toHaveBeenCalledWith(copy);
+  });
+
+  it('says a photo no longer on the phone is gone, rather than to check the connection', async () => {
+    const tree = render();
+    await pick(tree);
+    const copy = await photoFiles.keep.mock.results[0].value;
+    photoFiles.isThere.mockResolvedValueOnce(false);
+    await act(async () => { (sendButton(tree).props.onPress as () => void)(); });
+
+    expect(photoFiles.isThere).toHaveBeenCalledWith(copy);
+    expect(upload.picked).not.toHaveBeenCalled();
+    expect(authState.api.sendSupportMessage).not.toHaveBeenCalled();
+    expect(drawnText(tree)).toContain('This photo is no longer on your phone. Delete the message and choose the photo again.');
+    expect(drawnText(tree)).not.toContain('Your message was not sent. Check your connection, then try again.');
+
+    // Let go, it takes its copy with it.
+    await chooseOnNotSent(tree, 'Delete');
+    expect(photoFiles.letGo).toHaveBeenCalledWith(copy);
+    expect(drawnText(tree)).not.toContain('Not sent. Tap to try again.');
   });
 
   it('tries a photo that was not sent again from where it was staged, without uploading it twice', async () => {

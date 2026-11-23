@@ -32,6 +32,7 @@ import {
   supportMessageSheetTitle,
   supportSendFailureWords,
 } from '../lib/support-conversation-view-model';
+import { SupportPhotoGoneError } from '../lib/support-photo-file';
 
 const endpoints = mobileApiContract.endpoints;
 
@@ -153,5 +154,10 @@ describe('what the screen says when something did not go through', () => {
     expect(supportSendFailureWords(new ApiError('Unauthorized', 401))).toBe(SUPPORT_WORDS.sendFailed);
     expect(supportSendFailureWords(new TypeError('Network request failed'))).toBe(SUPPORT_WORDS.sendFailed);
     expect(supportActionFailureWords(new TypeError('Network request failed'))).toBe(SUPPORT_WORDS.actionFailed);
+  });
+
+  it('says a photo the phone no longer has is gone, since no try can send it', () => {
+    expect(supportSendFailureWords(new SupportPhotoGoneError())).toBe(SUPPORT_WORDS.photoGone);
+    expect(SUPPORT_WORDS.photoGone).not.toBe(SUPPORT_WORDS.sendFailed);
   });
 });

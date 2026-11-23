@@ -12,6 +12,7 @@ import {
   type SupportMessageResponse,
   type SupportReadResponse,
 } from './support-conversation-policy/support-conversation-policy';
+import { SupportPhotoGoneError } from './support-photo-file';
 
 /**
  * The app's Message support screen (`app/support.tsx`), apart from React: the
@@ -42,10 +43,12 @@ function refusalWords(error: unknown): string | null {
 
 /**
  * What the screen says under a message that was not sent. A refusal the
- * person can act on (too long, too many at once) is the server's own words;
- * anything else, a lost connection or a fault of ours, is the general line.
+ * person can act on (too long, too many at once) is the server's own words; a
+ * photo no longer on the phone says so, since no try can send it; anything
+ * else, a lost connection or a fault of ours, is the general line.
  */
 export function supportSendFailureWords(error: unknown): string {
+  if (error instanceof SupportPhotoGoneError) return SUPPORT_WORDS.photoGone;
   return refusalWords(error) ?? SUPPORT_WORDS.sendFailed;
 }
 

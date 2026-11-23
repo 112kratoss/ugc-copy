@@ -312,6 +312,7 @@ export const SUPPORT_WORDS = {
   closePhoto: 'Close photo',
   photoLoadFailed: 'The photo could not be loaded.',
   photoTryAgain: 'Tap to try again',
+  photoGone: 'This photo is no longer on your phone. Delete the message and choose the photo again.',
   tryAgain: 'Try again',
   notSentActions: 'Your message was not sent',
 } as const;
