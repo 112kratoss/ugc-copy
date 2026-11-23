@@ -117,7 +117,8 @@ describe('moderation and the public copies of a post\'s uploaded media', () => {
 
     const result = await revokePostPublicMedia(post.client, POST);
 
-    expect(result).toMatchObject({ revokedMediaCount: 4, mediaRevocationVerified: true });
+    // The count is the post's own media; its public copies go with it, uncounted.
+    expect(result).toMatchObject({ revokedMediaCount: 2, mediaRevocationVerified: true });
     expect(post.removed).toEqual(expect.arrayContaining([
       `post_media/${ORIGINAL}`, `post_media/${PREVIEW}`,
       `showcase_media/${ORIGINAL_COPY}`, `showcase_media/${PREVIEW_COPY}`,

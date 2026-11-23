@@ -534,24 +534,24 @@ export async function revokePostPublicMedia(
   for (const row of mediaRows) {
     if (row.external_url?.trim()) hasExternalReference = true;
   }
-  // The public copy of each of the post's own private objects (post-media-public-copies.ts):
-  // the take-down cleared their records in its own transaction; the objects go here, verified,
-  // whether or not a copy was ever made.
-  for (const path of [...storagePaths]) {
-    const copy = publicCopyPathOf(postId, path);
-    if (copy) storagePaths.add(copy);
-  }
-
   const canonicalStoragePaths = [...storagePaths];
+  // The public copy of each of the post's own private objects (post-media-public-copies.ts):
+  // the take-down cleared their records in its own transaction; the objects go here with the
+  // rest, verified, whether or not a copy was ever made. Not counted: the count is the post's
+  // own media.
+  const publicCopyPaths = canonicalStoragePaths
+    .map((path) => publicCopyPathOf(postId, path))
+    .filter((path): path is string => path !== null);
+  const removedPaths = [...canonicalStoragePaths, ...publicCopyPaths];
 
-  if (canonicalStoragePaths.length > 0) {
-    const removal = await removePostMediaObjects(supabase, canonicalStoragePaths);
+  if (removedPaths.length > 0) {
+    const removal = await removePostMediaObjects(supabase, removedPaths);
     if (removal.error) {
       throw databaseError('Failed to revoke taken-down public media', removal.error);
     }
 
     const verification = await Promise.all(
-      canonicalStoragePaths.map((path) => supabase.storage.from(postMediaStorageBucket(path)).exists(path)),
+      removedPaths.map((path) => supabase.storage.from(postMediaStorageBucket(path)).exists(path)),
     );
     if (verification.some((result) => result.data === true)) {
       throw new Error('Taken-down public media still exists after Storage revocation.');

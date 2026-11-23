@@ -4,8 +4,13 @@
  * No production configuration is loaded: the stack's own `supabase status -o json`
  * is read from the path given, and anything but a local API is refused.
  *
- *   node --conditions=react-server --import tsx \
- *     scripts/audits/verify-local-post-media-public-copies.ts <status.json> [iterations]
+ *   npx --yes supabase@2.75.0 --workdir <stack> status -o json > status.json
+ *   NODE_PATH=<dir holding node_modules/server-only/index.js, empty> \
+ *     npx tsx scripts/audits/verify-local-post-media-public-copies.ts status.json [iterations]
+ *
+ * (`server-only` resolves inside Next alone; the integration configs alias it
+ * to src/__tests__/mocks/server-only.ts, and outside vitest an empty module on
+ * NODE_PATH does the same.)
  *
  * It seeds a public post made from uploads (a ~1 MB JPEG and its preview in
  * the private bucket), then measures one media view each way:

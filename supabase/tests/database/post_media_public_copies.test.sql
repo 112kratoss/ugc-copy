@@ -48,8 +48,9 @@ select ok(not has_table_privilege('authenticated', 'public.post_media_public_cop
 select ok(not has_table_privilege('service_role', 'public.post_media_public_copy_queue', 'insert'), 'the backend changes the queue only through the functions');
 
 -- Begin queues a copy before any object exists, for a post anyone may read only.
-insert into public.posts (id, user_id, visibility, category, source_kind, post_format)
-values ('bc100000-0000-4000-8000-000000000001', 'ac100000-0000-4000-8000-000000000001', 'private', 'image', 'manual', 'media');
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, showcase_asset_path)
+values ('bc100000-0000-4000-8000-000000000001', 'ac100000-0000-4000-8000-000000000001', 'private', 'image', 'manual', 'media',
+  'private-posts/bc100000-0000-4000-8000-000000000001/0/photo.jpg');
 insert into public.post_media (post_id, storage_path, media_kind, sort_order)
 values ('bc100000-0000-4000-8000-000000000001', 'private-posts/bc100000-0000-4000-8000-000000000001/0/photo.jpg', 'image', 0);
 select is((select count(*)::integer from public.begin_post_media_public_copies('bc100000-0000-4000-8000-000000000001')), 0,
@@ -187,8 +188,9 @@ select ok((select claim_token is null from public.post_media_public_copy_queue
   'the refused commit lets the claim go, so the removal''s finish cannot drop the row');
 
 -- The job copies only what posts already served are missing; the backfill copies the rest.
-insert into public.posts (id, user_id, visibility, category, source_kind, post_format)
-values ('bcf00000-0000-4000-8000-000000000001', 'ac100000-0000-4000-8000-000000000001', 'private', 'image', 'manual', 'media');
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, showcase_asset_path)
+values ('bcf00000-0000-4000-8000-000000000001', 'ac100000-0000-4000-8000-000000000001', 'private', 'image', 'manual', 'media',
+  'private-posts/bcf00000-0000-4000-8000-000000000001/0/photo.jpg');
 insert into public.post_media (post_id, storage_path, media_kind, sort_order)
 values ('bcf00000-0000-4000-8000-000000000001', 'private-posts/bcf00000-0000-4000-8000-000000000001/0/photo.jpg', 'image', 0);
 update public.posts set visibility = 'public' where id = 'bcf00000-0000-4000-8000-000000000001';
