@@ -429,7 +429,9 @@ export const BACKEND_JOB_REGISTRY = [
     // derivative inline the moment its post stops needing it, and this only
     // retries what they miss. The posts triggers queue every such object in
     // the post write's own transaction, and the media sweeps queue what they
-    // uploaded that no update recorded, so none is missed silently.
+    // uploaded that no update recorded, so none is missed silently. The same
+    // holds for the public copies of uploaded post media
+    // (post-media-public-copies.ts), whose queue it also drains.
     name: 'showcase-media-revocations',
     route: '/api/cron/showcase-media-revocations',
     schedule: '30 * * * *',

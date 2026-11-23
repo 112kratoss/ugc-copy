@@ -26,6 +26,7 @@ function queryResult(data: unknown, error: unknown = null) {
     eq: vi.fn(() => query),
     in: vi.fn(() => query),
     order: vi.fn(() => query),
+    lte: vi.fn(() => query),
     limit: vi.fn(() => query),
     update: vi.fn(() => query),
     maybeSingle: vi.fn(() => query),
@@ -107,6 +108,7 @@ describe('moderation operations', () => {
       if (table === 'post_reports') return postReports;
       if (table === 'moderation_reports') return subjectReports;
       if (table === 'posts') return posts;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -167,6 +169,7 @@ describe('moderation operations', () => {
         id: '80000000-0000-4000-8000-000000000008',
         user_id: '70000000-0000-4000-8000-000000000007',
       });
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
     const remove = vi.fn(async () => ({ data: [], error: null }));
@@ -242,6 +245,7 @@ describe('moderation operations', () => {
       if (table === 'post_reports') return postReports;
       if (table === 'moderation_reports') return subjectReports;
       if (table === 'post_comments') return comments;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -300,6 +304,7 @@ describe('moderation operations', () => {
       if (table === 'moderation_reports') return subjectReports;
       if (table === 'post_comments') return comments;
       if (table === 'post_comment_edits') return edits;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -345,6 +350,7 @@ describe('moderation operations', () => {
       if (table === 'post_reports') return postReports;
       if (table === 'moderation_reports') return subjectReports;
       if (table === 'templates') return templates;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -420,6 +426,7 @@ describe('moderation operations', () => {
         user_id: '70000000-0000-4000-8000-000000000009',
       });
       if (table === 'profiles') return queryResult(null);
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
     const remove = vi.fn();
@@ -467,6 +474,7 @@ describe('moderation operations', () => {
         post_media: [],
         generations: [{ id: GENERATION_ID, user_id: generationOwnerId }],
         profiles,
+        post_media_public_copy_queue: [],
       });
       const remove = vi.fn(async () => ({ data: [], error: null }));
       const exists = vi.fn(async () => ({ data: false, error: { status: 404 } }));
@@ -587,6 +595,7 @@ describe('moderation operations', () => {
           }],
           post_media: postMedia,
           profiles,
+          post_media_public_copy_queue: [],
         });
         const remove = vi.fn(async () => ({ data: [], error: null }));
         const exists = vi.fn(async () => ({ data: false, error: { status: 404 } }));
@@ -607,8 +616,9 @@ describe('moderation operations', () => {
           mediaRevocationVerified: true,
         });
         expect(remove).toHaveBeenCalledWith([SHOWCASE_PATH, PREVIEW_PATH]);
-        // The record is the proof: nothing else is asked.
-        expect(reads.map((read) => read.table)).toEqual(['posts', 'post_media']);
+        // The record is the proof: no creation or account is asked (the queue
+        // read settles the post's public media copies, post-media-public-copies.ts).
+        expect(reads.map((read) => read.table)).toEqual(['posts', 'post_media', 'post_media_public_copy_queue']);
       });
 
       it('revokes the copy of one made as a guest', async () => {
@@ -888,6 +898,7 @@ describe('the agent view of the moderation queue', () => {
       if (table === 'post_reports') return postReports;
       if (table === 'moderation_reports') return subjectReports;
       if (table === 'posts') return posts;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -904,6 +915,7 @@ describe('the agent view of the moderation queue', () => {
   it('answers an empty agent view without reading a report when agents published nothing, and passes the ledger\'s error on', async () => {
     const from = vi.fn((table: string) => {
       if (table === 'agent_tool_calls') return ledger([]);
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
     expect(await listOpenModerationReports({ from } as unknown as SupabaseClient, { source: 'agent' })).toEqual({ postReports: [], subjectReports: [] });
@@ -928,6 +940,7 @@ describe('the agent view of the moderation queue', () => {
       if (table === 'agent_tool_calls') return calls;
       if (table === 'posts') return posts;
       if (table === 'post_resource_bundles') return bundles;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -974,6 +987,7 @@ describe('the agent view of the moderation queue', () => {
       if (table === 'agent_tool_calls') return calls;
       if (table === 'posts') return posts;
       if (table === 'post_resource_bundles') return bundles;
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
 
@@ -997,6 +1011,7 @@ describe('the agent view of the moderation queue', () => {
     const emptyFrom = vi.fn((table: string) => {
       if (table === 'agent_tool_calls') return ledger([call(gonePostId, null, '2026-11-10T01:00:00.000Z')]);
       if (table === 'posts') return queryResult([]);
+      if (table === 'post_media_public_copy_queue') return queryResult([]);
       throw new Error(`Unexpected table ${table}`);
     });
     expect(await listAgentPublishedPostsForModeration({ from: emptyFrom } as unknown as SupabaseClient, { limit: 10 }))

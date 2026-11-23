@@ -70,11 +70,20 @@ import {
   hasStalledGenerationWork,
   reapStalledGenerations,
 } from '@/lib/stalled-generation-reaper';
-import { invalidateShowcaseFeedCache } from '@/lib/showcase-feed-cache';
+import {
+  invalidateShowcaseFeedAndRefreshPostPages,
+  invalidateShowcaseFeedCache,
+} from '@/lib/showcase-feed-cache';
 import {
   hasPendingShowcaseMediaRevocations,
   processShowcaseMediaRevocations,
+  ShowcaseMediaRevocationsStuckError,
+  type ShowcaseMediaRevocationSummary,
 } from '@/lib/showcase-media-revocations';
+import {
+  hasPendingPostMediaPublicCopyWork,
+  maintainPostMediaPublicCopies,
+} from '@/lib/post-media-public-copies';
 import {
   findStrandedTemplateRuns,
   hasDueTemplateRunJobs,
@@ -792,13 +801,43 @@ export function runShowcaseMediaRevocationsBackendJob(options: {
       failed: 'showcase_media_revocations_failed',
     },
     hasWork: async (client) => {
-      const pending = await Promise.all([hasPendingShowcaseMediaRevocations(client), hasPendingUploadedMediaMaintenance(client)]);
+      const pending = await Promise.all([
+        hasPendingShowcaseMediaRevocations(client),
+        hasPendingUploadedMediaMaintenance(client),
+        hasPendingPostMediaPublicCopyWork(client),
+      ]);
       return pending.some(Boolean);
     },
-    run: async (client, context) => ({
-      ...await processShowcaseMediaRevocations(client, { now: new Date(context.startedAtMs) }),
-      uploadedMedia: await processUploadedMediaMaintenance(client),
-    }),
+    run: async (client, context) => {
+      // A creation's copy stuck for a day fails the run, but only after the
+      // passes below: a stuck row must never hold back another removal.
+      let stuck: ShowcaseMediaRevocationsStuckError | null = null;
+      let revocations: ShowcaseMediaRevocationSummary;
+      try {
+        revocations = await processShowcaseMediaRevocations(client, { now: new Date(context.startedAtMs) });
+      } catch (error) {
+        if (!(error instanceof ShowcaseMediaRevocationsStuckError)) throw error;
+        stuck = error;
+        revocations = error.summary;
+      }
+      const uploadedMedia = await processUploadedMediaMaintenance(client);
+      // The public copies of posts' uploaded media: what the routes did not
+      // remove, then the derivatives sweeps built for posts already copied.
+      const publicCopies = await maintainPostMediaPublicCopies(client, { now: new Date(context.startedAtMs) });
+      for (const post of publicCopies.copiedPosts) {
+        await invalidateShowcaseFeedAndRefreshPostPages(client, {
+          postId: post.postId,
+          creatorId: post.ownerUserId,
+          arrived: false,
+        });
+      }
+      if (stuck) throw stuck;
+      return {
+        ...revocations,
+        uploadedMedia,
+        postMediaPublicCopies: { removal: publicCopies.removal, synced: publicCopies.synced },
+      };
+    },
   });
 }
 

@@ -103,8 +103,8 @@ const CLASSIFIED: Record<string, Classified> = {
     why: 'removal: an account deletion, when it starts (the creator page reads the account as gone), when its sweep ends, and when it was already deleted (the dependency, its default and those three calls)',
   },
   'src/lib/backend-job-executions.ts': {
-    uses: { invalidateShowcaseFeedCache: 1 },
-    why: 'removal: the account-deletion resweep, which can cascade posts after the request that started it',
+    uses: { invalidateShowcaseFeedCache: 1, invalidateShowcaseFeedAndRefreshPostPages: 1 },
+    why: 'removal: the account-deletion resweep, which can cascade posts after the request that started it; change: a post whose uploaded media gained public copies (the revocations job), its pages in the background so they name the copies',
   },
   'src/lib/generation-delete-service.ts': {
     uses: { invalidateShowcaseFeedCache: 3 },

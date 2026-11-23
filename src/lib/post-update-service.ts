@@ -114,6 +114,7 @@ import { storedMediaOwnerId } from '@/lib/generation-input-origin';
 import { getRemixRecipeTermsRefusalBody } from '@/lib/remix-recipe-terms';
 import { notifyPostedRemix } from '@/lib/completed-remix-notification';
 import { sendDeferrableNotification, type RunAfterResponse } from '@/lib/deferrable-notification';
+import { removeQueuedPostMediaPublicCopies, syncPostMediaPublicCopies } from '@/lib/post-media-public-copies';
 import { isCreationReferenceCopyPath, isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 
 const POST_RESOURCE_FILES_BUCKET = 'post_resource_files';
@@ -295,6 +296,8 @@ export type PostUpdateDependencies = {
   isTemplateLinkedGeneration?: typeof isTemplateLinkedGeneration;
   /** Tells the creator of the post a remix credits, once the remix goes public (owner, 2026-11-05). */
   notifyPostedRemix?: typeof notifyPostedRemix;
+  syncPostMediaPublicCopies?: typeof syncPostMediaPublicCopies;
+  removeQueuedPostMediaPublicCopies?: typeof removeQueuedPostMediaPublicCopies;
 };
 
 type ResolvedPostUpdateDependencies = Required<PostUpdateDependencies>;
@@ -374,6 +377,9 @@ function resolveDependencies(dependencies: PostUpdateDependencies | undefined): 
     loadGenerationTitleSource: dependencies?.loadGenerationTitleSource ?? loadGenerationTitleSource,
     isTemplateLinkedGeneration: dependencies?.isTemplateLinkedGeneration ?? isTemplateLinkedGeneration,
     notifyPostedRemix: dependencies?.notifyPostedRemix ?? notifyPostedRemix,
+    syncPostMediaPublicCopies: dependencies?.syncPostMediaPublicCopies ?? syncPostMediaPublicCopies,
+    removeQueuedPostMediaPublicCopies:
+      dependencies?.removeQueuedPostMediaPublicCopies ?? removeQueuedPostMediaPublicCopies,
   };
 }
 
@@ -2198,6 +2204,25 @@ export async function updateOwnerPostForRoute({
       if (removal.error) {
         logBackendError('failed_to_delete_showcase_derivative_after_post_update', { error: removal.error });
       }
+    }
+
+    // The public copies of the post's uploaded media (post-media-public-copies.ts).
+    // A post still public first gets the copies its media is missing, which
+    // also takes back the copies of what a gallery save kept; then whatever
+    // the save queued (its public reading ended, or media it replaced) is
+    // removed before the answer. Both were decided in the save's own
+    // transaction, so a failure here leaves the job to finish the removal.
+    if (updatedPost.visibility === 'public') {
+      try {
+        await resolvedDependencies.syncPostMediaPublicCopies(adminSupabase, postId);
+      } catch (copyError) {
+        logBackendWarning('failed_to_copy_public_post_media', { error: copyError });
+      }
+    }
+    try {
+      await resolvedDependencies.removeQueuedPostMediaPublicCopies(adminSupabase, { postId });
+    } catch (copyRemovalError) {
+      logBackendError('failed_to_remove_public_post_media_after_update', { error: copyRemovalError });
     }
 
     const completedClaims = await completeUploadByteConsumptions(adminSupabase, [

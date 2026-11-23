@@ -43,6 +43,17 @@ export function isGeneratedPreviewImage(src: string): boolean {
   }
 }
 
+/**
+ * A public copy of a post's uploaded media (`public-posts/`,
+ * `post-media-public-copies.ts`). It is removed the moment its post stops
+ * being public, which an optimized copy in `/_next/image` would outlive by
+ * `images.minimumCacheTTL`; read from the storage CDN only, as the
+ * authorized route it replaces was.
+ */
+function isPublicPostMediaCopyUrl(url: URL): boolean {
+  return url.pathname.startsWith('/storage/v1/object/public/showcase_media/public-posts/');
+}
+
 export function canOptimizePreviewImage(src: string): boolean {
   if (/^\/(?!\/)/.test(src) && !src.includes('\\')) {
     // The optimizer fetches without the browser's cookies. Private-media
@@ -61,7 +72,9 @@ export function canOptimizePreviewImage(src: string): boolean {
       && !url.username
       && !url.password
       && url.origin === supabaseStorageOrigin
-      && url.pathname.startsWith('/storage/v1/object/');
+      && url.pathname.startsWith('/storage/v1/object/')
+      // A bounded generated preview skips the optimizer anyway (`unoptimized`).
+      && (!isPublicPostMediaCopyUrl(url) || isGeneratedPreviewImage(src));
   } catch {
     return false;
   }

@@ -351,6 +351,16 @@ function privatePostPrefixes(manifest: AccountDeletionStorageManifest): string[]
   }))];
 }
 
+/**
+ * The public copies of each of those posts' uploaded media, in the public
+ * bucket (`post-media-public-copies.ts`). The deletion's `deleting` state
+ * cleared their records and queued them; the sweep removes the whole folder
+ * and the delayed pass checks it again, like the private one.
+ */
+function publicPostCopyPrefixes(manifest: AccountDeletionStorageManifest): string[] {
+  return privatePostPrefixes(manifest).map((prefix) => `public-posts/${prefix.split('/')[1]}`);
+}
+
 async function assertAccountStorageEmpty(
   admin: SupabaseClient,
   manifest: AccountDeletionStorageManifest,
@@ -371,6 +381,12 @@ async function assertAccountStorageEmpty(
   for (const prefix of privatePostPrefixes(manifest)) {
     if ((await listUserFiles(admin, 'post_media', prefix, 'private-posts')).length > 0) {
       throw new Error('Could not verify post_media account files were removed.');
+    }
+  }
+
+  for (const prefix of publicPostCopyPrefixes(manifest)) {
+    if ((await listUserFiles(admin, 'showcase_media', prefix, 'public-posts')).length > 0) {
+      throw new Error('Could not verify showcase_media account files were removed.');
     }
   }
 
@@ -445,6 +461,12 @@ export async function removeAccountStorage(
     bucketsScanned += 1;
     const paths = await listUserFiles(admin, 'post_media', prefix, 'private-posts');
     await removePaths('post_media', paths, 'private-posts');
+  }
+
+  for (const prefix of publicPostCopyPrefixes(manifest)) {
+    bucketsScanned += 1;
+    const paths = await listUserFiles(admin, 'showcase_media', prefix, 'public-posts');
+    await removePaths('showcase_media', paths, 'public-posts');
   }
 
   for (const templatePrefix of manifest.templateAssetPrefixes) {

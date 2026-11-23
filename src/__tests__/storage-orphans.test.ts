@@ -80,6 +80,10 @@ function createClient({
         filters.push((row) => values.includes(row[column]));
         return builder;
       },
+      overlaps: (column: string, values: unknown[]) => {
+        filters.push((row) => Array.isArray(row[column]) && (row[column] as unknown[]).some((value) => values.includes(value)));
+        return builder;
+      },
       limit: (count: number) => {
         limit = count;
         return builder;
@@ -527,6 +531,27 @@ describe('confirmOrphanRemovals', () => {
     const corpus = await readNameCorpus(client, { clock: () => now, onTable: () => { now += 1_000; } });
 
     expect(corpus.readAt).toBe(ORPHAN_SCANNED_TABLES.length * 1_000);
+  });
+
+  it('leaves a public media copy a post_media row records, whatever an earlier read of the rows said', async () => {
+    const post = 'b9600000-0000-4000-8000-000000000001';
+    const copy = `public-posts/${post}/0/photo.jpg`;
+    const mock = createClient({
+      buckets: { showcase_media: [{ path: copy, id: 'copy-1' }] },
+      // Recorded by a sync after the corpus below was read.
+      tables: { post_media: [{ id: 'media-1', post_id: post, public_copy_paths: [copy] }] },
+    });
+
+    const counts = await confirmOrphanRemovals(mock.client, listOf(
+      { bucket: 'showcase_media', path: copy, id: 'copy-1' },
+    ), {
+      projectHost: 'abc.supabase.co',
+      clock: () => NOW,
+      readCorpus: async () => new NameCorpus(NOW),
+    });
+
+    expect(counts).toMatchObject({ named: 1, removed: 0 });
+    expect(mock.removals).toEqual([]);
   });
 
   it('reads the rows again once its read is a minute old', async () => {
