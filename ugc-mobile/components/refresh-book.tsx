@@ -23,6 +23,7 @@ import Animated, {
   withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
+import Svg, { Path } from 'react-native-svg';
 
 import { useReducedMotion } from '@/lib/motion';
 import {
@@ -453,8 +454,10 @@ export function RefreshBookChip({
   );
 }
 
-// The book's drawing, in points inside its `REFRESH_BOOK` box: a dark cover
-// with a page block on each side of the spine.
+// The book's drawing, in points inside its `REFRESH_BOOK` box: a coral cover a
+// shade deeper than the circle, its edges bowed like a book lying open, with a
+// page block on each side of the spine.
+const COVER_PATH = 'M0 1.5 Q7.5 0 15 2 Q22.5 0 30 1.5 L30 21 Q22.5 19.5 15 21 Q7.5 19.5 0 21 Z';
 const PAGE_INSET_Y = 2;
 const PAGE_INSET_X = 1.5;
 const SPINE_X = REFRESH_BOOK.width / 2;
@@ -473,17 +476,14 @@ export function PageFlipBook({ phase }: { phase: SharedValue<number> }) {
 
   return (
     <View style={{ width: REFRESH_BOOK.width, height: REFRESH_BOOK.height }}>
-      <View
-        style={{
-          position: 'absolute',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          left: 0,
-          // The ink on coral: a dark cover holding light pages on the coral circle.
-          backgroundColor: theme.colors.onPrimary,
-        }}
-      />
+      <Svg
+        width={REFRESH_BOOK.width}
+        height={REFRESH_BOOK.height}
+        viewBox={`0 0 ${REFRESH_BOOK.width} ${REFRESH_BOOK.height}`}
+        style={{ position: 'absolute', top: 0, left: 0 }}
+      >
+        <Path d={COVER_PATH} fill={theme.colors.bookCover} />
+      </Svg>
       <Page side="left" colors={pageColors} />
       <Page side="right" colors={pageColors} />
       {/*

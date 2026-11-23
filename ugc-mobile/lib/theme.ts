@@ -37,6 +37,9 @@ const darkColors = {
   // the ruled lines written on it. Ivory here, so the book reads on a dark chip.
   paper: '#fff8ed',
   paperLine: 'rgba(28,20,15,0.22)',
+  // Its cover: a deeper coral than the circle, so the book has an edge without
+  // a dark frame (owner, 2026-11-23: the near-black cover read as a dark boundary).
+  bookCover: '#c4401d',
   // A switch at rest: its track and thumb. On, it takes `primaryFill` and `onPrimary`.
   switchTrackOff: '#343838',
   switchThumbOff: '#cac6bd',
@@ -138,6 +141,7 @@ const lightColors: ThemeColors = {
   boneStrong: 'rgba(28,20,15,0.09)',
   paper: '#ffffff',
   paperLine: 'rgba(28,20,15,0.18)',
+  bookCover: '#c4401d',
   switchTrackOff: '#ddd6cc',
   switchThumbOff: '#ffffff',
   mediaPlaceholder: '#ece6de',
