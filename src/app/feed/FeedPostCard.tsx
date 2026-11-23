@@ -413,36 +413,41 @@ function FeedPostCardView({
                     iconOnly
                     className="ui-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-full text-[var(--ui-text-muted)] transition hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]"
                 />
-                {/* The post's views in the row, as X shows them: a count, not a
-                    control, so a click on it is the card's (it opens the post).
-                    At the row's far end, so where a phone has no room for it the
-                    count goes under the actions, never one of them. */}
-                <PostViewCount
-                    labels={viewLabels}
-                    className="ml-auto inline-flex items-center px-2 py-1 text-xs font-bold text-[var(--ui-text-muted)]"
-                />
-                {recipeChip ? (
-                    // The recipe behind the post, at the row's far end and only
-                    // where it adds something: a price, a free recipe on a card
-                    // with no Remix, one the viewer has ("Unlocked", with a
-                    // check) or their own (`getPostFeedRecipeChip`). It opens the
-                    // post at its recipe, as the bar it replaced did.
-                    <Link
-                        href={recipeHref}
-                        prefetch={false}
-                        aria-label={`${recipeChip.label}: ${card.title}`}
-                        onClick={() => onOpenResources?.(item.id)}
-                        className={`ui-focus-ring ${viewLabels ? '' : 'ml-auto '}inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition ${
-                            recipeChip.tone === 'paid'
-                                ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
-                                : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
-                        }`}
-                    >
-                        {recipeChip.kind === 'unlocked'
-                            ? <CircleCheck className="h-4 w-4" aria-hidden="true" data-recipe-chip-icon="check" />
-                            : <ShoppingBag className="h-4 w-4" aria-hidden="true" />}
-                        {recipeChip.label}
-                    </Link>
+                {/* The post's views and its recipe chip, together at the row's far
+                    end: where a phone has no room for them they go under the
+                    actions as one, still at the end, never one of the actions. */}
+                {viewLabels || recipeChip ? (
+                    <div data-feed-card-row-end className="ml-auto flex items-center gap-1">
+                        {/* The post's views in the row, as X shows them: a count, not a
+                            control, so a click on it is the card's (it opens the post). */}
+                        <PostViewCount
+                            labels={viewLabels}
+                            className="inline-flex items-center px-2 py-1 text-xs font-bold text-[var(--ui-text-muted)]"
+                        />
+                        {recipeChip ? (
+                            // The recipe behind the post, at the row's far end and only
+                            // where it adds something: a price, a free recipe on a card
+                            // with no Remix, one the viewer has ("Unlocked", with a
+                            // check) or their own (`getPostFeedRecipeChip`). It opens the
+                            // post at its recipe, as the bar it replaced did.
+                            <Link
+                                href={recipeHref}
+                                prefetch={false}
+                                aria-label={`${recipeChip.label}: ${card.title}`}
+                                onClick={() => onOpenResources?.(item.id)}
+                                className={`ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-3 text-xs font-bold transition ${
+                                    recipeChip.tone === 'paid'
+                                        ? 'border border-amber-300/20 bg-amber-400/[0.08] text-amber-100 hover:border-amber-300/35'
+                                        : 'text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]'
+                                }`}
+                            >
+                                {recipeChip.kind === 'unlocked'
+                                    ? <CircleCheck className="h-4 w-4" aria-hidden="true" data-recipe-chip-icon="check" />
+                                    : <ShoppingBag className="h-4 w-4" aria-hidden="true" />}
+                                {recipeChip.label}
+                            </Link>
+                        ) : null}
+                    </div>
                 ) : null}
             </div>
 

@@ -680,18 +680,42 @@ export default function ShowcaseReelViewer({
       void sendShowcaseFeedEvent({ ...eventContext(), eventType: 'open' }).catch(() => undefined);
     }, 0);
     const deliveryId = getShowcaseRecommendation(trackedItem)?.deliveryId ?? null;
-    const sendImpressionTimer = window.setTimeout(() => {
-      // A second on screen: the post was seen, whatever the reel was opened from.
-      seenReelPostsRef.current.push(trackedItem);
-      reportSeenReelPosts();
-      if (!deliveryId || impressionDeliveryIdsRef.current.has(deliveryId)) return;
-      impressionDeliveryIdsRef.current.add(deliveryId);
-      void sendShowcaseFeedEvent({ ...eventContext(), eventType: 'impression' }).catch(() => undefined);
-    }, QUALIFIED_REEL_VIEW_DURATION_MS);
+    // A look: the post on screen while the page is in front. A second of it and
+    // the post was seen, whatever the reel was opened from: its view goes each
+    // look (the reporter keeps one a reader, post and UTC day, so a look sends
+    // one whose send failed, and a look on a new day counts for that day), its
+    // impression once a delivery. A hidden page ends the look; coming back is
+    // the next one.
+    let lookTimer: number | null = null;
+    let lookCounted = false;
+    const startLook = () => {
+      if (lookCounted || lookTimer !== null || document.visibilityState === 'hidden') return;
+      lookTimer = window.setTimeout(() => {
+        lookTimer = null;
+        lookCounted = true;
+        seenReelPostsRef.current.push(trackedItem);
+        reportSeenReelPosts();
+        if (!deliveryId || impressionDeliveryIdsRef.current.has(deliveryId)) return;
+        impressionDeliveryIdsRef.current.add(deliveryId);
+        void sendShowcaseFeedEvent({ ...eventContext(), eventType: 'impression' }).catch(() => undefined);
+      }, QUALIFIED_REEL_VIEW_DURATION_MS);
+    };
+    const followPageVisibility = () => {
+      if (document.visibilityState !== 'hidden') {
+        startLook();
+        return;
+      }
+      if (lookTimer !== null) window.clearTimeout(lookTimer);
+      lookTimer = null;
+      lookCounted = false;
+    };
+    startLook();
+    document.addEventListener('visibilitychange', followPageVisibility);
 
     return () => {
       window.clearTimeout(sendOpenTimer);
-      window.clearTimeout(sendImpressionTimer);
+      if (lookTimer !== null) window.clearTimeout(lookTimer);
+      document.removeEventListener('visibilitychange', followPageVisibility);
       flushMediaProgressRef.current();
       // Under 250 ms the post was flicked past, not seen: neither a skip nor a dwell.
       const durationMs = Date.now() - startedAt;
@@ -1889,201 +1913,214 @@ export default function ShowcaseReelViewer({
 
         </section>
 
-        <aside className="flex min-w-0 items-center justify-center gap-2 overflow-x-auto rounded-3xl border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:overflow-visible lg:border-0 lg:bg-transparent lg:p-0">
-          <div
-            role="group"
-            aria-label="Browse posts"
-            data-showcase-post-navigation
-            className="hidden shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
-          >
-            <button
-              type="button"
-              onClick={goPrevious}
-              disabled={!previousItem}
-              aria-label="Previous post"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+        {/*
+          * The rail scrolls where its tiles do not fit (a phone's row with Recipe and Remix, a
+          * laptop's column under about 650px tall). A scroll container at every width, it has no
+          * minimum height of its own, so its row of the grid stays the window's and the media and
+          * details keep their room (`lg:overflow-visible` let the column's tiles stretch that row
+          * past the window). The tiles sit in a box centred with auto margins, which give way to
+          * nothing once they overflow: they then start at the edge the rail scrolls from, where
+          * `justify-content: center` put the first ones out of reach.
+          */}
+        <aside className="hide-scrollbar flex min-w-0 overflow-x-auto rounded-3xl border border-white/10 bg-white/[0.035] p-2 backdrop-blur-xl lg:flex-col lg:border-0 lg:bg-transparent lg:p-0">
+          <div data-reel-rail className="m-auto flex shrink-0 items-center gap-2 lg:flex-col">
+            <div
+              role="group"
+              aria-label="Browse posts"
+              data-showcase-post-navigation
+              className="hidden shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] p-1 sm:flex lg:flex-col"
             >
-              <ArrowUp size={16} className="h-4 w-4 shrink-0" />
-            </button>
-            <button
-              type="button"
-              onClick={goNext}
-              disabled={!nextItem && !hasMoreItems}
-              aria-busy={!nextItem && hasMoreItems && isLoadingMoreItems}
-              aria-label="Next post"
-              className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
-            >
-              {!nextItem && hasMoreItems && isLoadingMoreItems ? (
-                <Loader2 size={16} className="h-4 w-4 shrink-0 animate-spin" />
-              ) : (
-                <ArrowDown size={16} className="h-4 w-4 shrink-0" />
-              )}
-            </button>
-          </div>
-
-          <div aria-hidden="true" className="hidden h-8 w-px shrink-0 bg-white/10 sm:block lg:h-px lg:w-10" />
-
-          <button
-            type="button"
-            onClick={() => void onToggleSave(item.id)}
-            aria-pressed={isSaved}
-            aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}`}
-            className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
-              isSaved
-                ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
-                : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
-            }`}
-          >
-            <Heart size={20} className={`h-5 w-5 shrink-0 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
-            <AnimatePresence mode="popLayout" initial={false}>
-              <motion.span
-                key={`${item.id}:${item.saveCount}`}
-                initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: prefersReducedMotion ? 0 : -4 }}
-                transition={{ duration: 0.16 }}
+              <button
+                type="button"
+                onClick={goPrevious}
+                disabled={!previousItem}
+                aria-label="Previous post"
+                className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
               >
-                {item.saveCount}
-              </motion.span>
-            </AnimatePresence>
-          </button>
+                <ArrowUp size={16} className="h-4 w-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                onClick={goNext}
+                disabled={!nextItem && !hasMoreItems}
+                aria-busy={!nextItem && hasMoreItems && isLoadingMoreItems}
+                aria-label="Next post"
+                className="ui-focus-ring inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-black/45 text-zinc-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                {!nextItem && hasMoreItems && isLoadingMoreItems ? (
+                  <Loader2 size={16} className="h-4 w-4 shrink-0 animate-spin" />
+                ) : (
+                  <ArrowDown size={16} className="h-4 w-4 shrink-0" />
+                )}
+              </button>
+            </div>
 
-          {canComment ? (
+            <div aria-hidden="true" className="hidden h-8 w-px shrink-0 bg-white/10 sm:block lg:h-px lg:w-10" />
+
             <button
               type="button"
-              onClick={toggleComments}
-              aria-expanded={commentsAreOpen}
-              aria-controls={commentsAreOpen ? 'showcase-reel-comments' : undefined}
-              aria-label={`${commentsAreOpen ? 'Hide' : 'Show'} comments on ${item.title} (${commentCount})`}
+              onClick={() => void onToggleSave(item.id)}
+              aria-pressed={isSaved}
+              aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}`}
               className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
-                commentsAreOpen
-                  ? 'border-white/25 bg-white/[0.12] text-white'
+                isSaved
+                  ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
                   : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
               }`}
             >
-              <MessageCircle size={20} className="h-5 w-5 shrink-0" />
-              <span>{formatCompactCount(commentCount)}</span>
+              <Heart size={20} className={`h-5 w-5 shrink-0 ${isSaved ? 'fill-[var(--ui-primary)] text-[var(--ui-primary)]' : ''}`} />
+              <AnimatePresence mode="popLayout" initial={false}>
+                <motion.span
+                  key={`${item.id}:${item.saveCount}`}
+                  initial={{ opacity: 0, y: prefersReducedMotion ? 0 : 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: prefersReducedMotion ? 0 : -4 }}
+                  transition={{ duration: 0.16 }}
+                >
+                  {item.saveCount}
+                </motion.span>
+              </AnimatePresence>
             </button>
-          ) : null}
 
-          {/* The post's views beside its saves and comments: a count, so no tile's border, press or hover. */}
-          <PostViewCount
-            labels={postViewCountLabels(item)}
-            className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none items-center justify-center text-xs font-semibold text-zinc-300 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
-            figureClassName="flex flex-col items-center justify-center gap-1"
-            iconClassName="h-5 w-5 shrink-0"
-          />
+            {canComment ? (
+              <button
+                type="button"
+                onClick={toggleComments}
+                aria-expanded={commentsAreOpen}
+                aria-controls={commentsAreOpen ? 'showcase-reel-comments' : undefined}
+                aria-label={`${commentsAreOpen ? 'Hide' : 'Show'} comments on ${item.title} (${commentCount})`}
+                className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
+                  commentsAreOpen
+                    ? 'border-white/25 bg-white/[0.12] text-white'
+                    : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
+                }`}
+              >
+                <MessageCircle size={20} className="h-5 w-5 shrink-0" />
+                <span>{formatCompactCount(commentCount)}</span>
+              </button>
+            ) : null}
 
-          <PublicShareButton
-            generationId={item.id}
-            title={item.title}
-            description={item.body || item.prompt}
-            sourceSurface="showcase-reel"
-            accessToken={accessToken ?? null}
-            viewerIsOwner={Boolean(item.creator.id && item.creator.id === user?.id)}
-            onShared={() => {
-              void sendShowcaseFeedEvent({
-                item,
-                eventType: 'share',
-                sourceSurface: 'showcase-reel',
-                accessToken,
-                feedSessionId,
-                fallbackPosition: selectedIndex,
-              }).catch(() => undefined);
-            }}
-            label="Share"
-            className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
-          />
+            {/* The post's views beside its saves and comments: a count, so no tile's border, press or
+                hover. Not in a phone's row, which has no room for another tile (Details' header
+                says it there). */}
+            <PostViewCount
+              labels={postViewCountLabels(item)}
+              className="hidden h-14 w-16 max-w-16 shrink-0 flex-none items-center justify-center text-xs font-semibold text-zinc-300 sm:inline-flex lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              figureClassName="flex flex-col items-center justify-center gap-1"
+              iconClassName="h-5 w-5 shrink-0"
+            />
 
-          {item.asset ? (
-            <button
-              type="button"
-              onClick={() => {
-                if (hasReelUnlockAccess || holdsRecipe) {
+            <PublicShareButton
+              generationId={item.id}
+              title={item.title}
+              description={item.body || item.prompt}
+              sourceSurface="showcase-reel"
+              accessToken={accessToken ?? null}
+              viewerIsOwner={Boolean(item.creator.id && item.creator.id === user?.id)}
+              onShared={() => {
+                void sendShowcaseFeedEvent({
+                  item,
+                  eventType: 'share',
+                  sourceSurface: 'showcase-reel',
+                  accessToken,
+                  feedSessionId,
+                  fallbackPosition: selectedIndex,
+                }).catch(() => undefined);
+              }}
+              label="Share"
+              className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+            />
+
+            {item.asset ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (hasReelUnlockAccess || holdsRecipe) {
+                    reportResourceOpen();
+                    recipePanelRef.current?.scrollIntoView({
+                      block: 'start',
+                      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+                    });
+                  } else {
+                    openRecipe();
+                  }
+                }}
+                disabled={unlockWorkingAction !== null}
+                aria-label={reelRecipeActionLabel ?? 'Open recipe'}
+                className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              >
+                {unlockWorkingAction === 'free'
+                  ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
+                  : <ShoppingBag size={20} className="h-5 w-5 shrink-0" />}
+                <span>{unlockWorkingAction === 'free' ? 'Adding…' : 'Recipe'}</span>
+              </button>
+            ) : null}
+
+            {offersRemix ? (
+              <button
+                type="button"
+                // Until the reader has the recipe: a paid one opens its checkout
+                // and the tap ends there, since no tap in a reel spends credits;
+                // a free one is taken on the way and the remix starts, in the one
+                // tap, as the feed card's and the app's Remix do (owner, 2026-11-12).
+                aria-label={remixIsLocked
+                  ? remixTakesFreeRecipe
+                    ? `Remix: get the free recipe for ${item.title} and remix it`
+                    : `Remix: unlock the recipe for ${item.title} first`
+                  : undefined}
+                onClick={() => {
+                  if (remixIsLocked && !remixTakesFreeRecipe) {
+                    openRecipe();
+                    return;
+                  }
+                  if (remixWorkingItemId || freeRemixClaimInFlightRef.current) return;
+                  setRemixError(null);
+                  const startRemix = () => {
+                    setRemixWorkingItemId(item.id);
+                    void Promise.resolve(onRemix(item.id))
+                      .catch((error: unknown) => {
+                        setRemixError(
+                          error instanceof Error && error.message
+                            ? error.message
+                            : 'Could not start the remix. Please try again.',
+                        );
+                      })
+                      .finally(() => setRemixWorkingItemId(null));
+                  };
+                  if (!remixTakesFreeRecipe) {
+                    startRemix();
+                    return;
+                  }
                   reportResourceOpen();
-                  recipePanelRef.current?.scrollIntoView({
-                    block: 'start',
-                    behavior: prefersReducedMotion ? 'auto' : 'smooth',
+                  freeRemixClaimInFlightRef.current = true;
+                  void openFreeUnlock().then((claim) => {
+                    freeRemixClaimInFlightRef.current = false;
+                    // The reader moved to another post or closed the reel while
+                    // the recipe was on its way: it is theirs, and no remix they
+                    // are no longer looking at opens under them (nor its error
+                    // under another post's Remix), as a paid recipe opens only
+                    // on the post it was bought for (`showPaidRecipe`).
+                    if (unmountedRef.current || feedEventItemRef.current?.id !== item.id) return;
+                    if (claim.taken) startRemix();
+                    // The unlock panel, where the claim's own error is drawn, is
+                    // closed on this path: Remix says why beside its own errors.
+                    else if (claim.message) setRemixError(claim.message);
                   });
-                } else {
-                  openRecipe();
-                }
-              }}
-              disabled={unlockWorkingAction !== null}
-              aria-label={reelRecipeActionLabel ?? 'Open recipe'}
-              className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
-            >
-              {unlockWorkingAction === 'free'
-                ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
-                : <ShoppingBag size={20} className="h-5 w-5 shrink-0" />}
-              <span>{unlockWorkingAction === 'free' ? 'Adding…' : 'Recipe'}</span>
-            </button>
-          ) : null}
-
-          {offersRemix ? (
-            <button
-              type="button"
-              // Until the reader has the recipe: a paid one opens its checkout
-              // and the tap ends there, since no tap in a reel spends credits;
-              // a free one is taken on the way and the remix starts, in the one
-              // tap, as the feed card's and the app's Remix do (owner, 2026-11-12).
-              aria-label={remixIsLocked
-                ? remixTakesFreeRecipe
-                  ? `Remix: get the free recipe for ${item.title} and remix it`
-                  : `Remix: unlock the recipe for ${item.title} first`
-                : undefined}
-              onClick={() => {
-                if (remixIsLocked && !remixTakesFreeRecipe) {
-                  openRecipe();
-                  return;
-                }
-                if (remixWorkingItemId || freeRemixClaimInFlightRef.current) return;
-                setRemixError(null);
-                const startRemix = () => {
-                  setRemixWorkingItemId(item.id);
-                  void Promise.resolve(onRemix(item.id))
-                    .catch((error: unknown) => {
-                      setRemixError(
-                        error instanceof Error && error.message
-                          ? error.message
-                          : 'Could not start the remix. Please try again.',
-                      );
-                    })
-                    .finally(() => setRemixWorkingItemId(null));
-                };
-                if (!remixTakesFreeRecipe) {
-                  startRemix();
-                  return;
-                }
-                reportResourceOpen();
-                freeRemixClaimInFlightRef.current = true;
-                void openFreeUnlock().then((claim) => {
-                  freeRemixClaimInFlightRef.current = false;
-                  // The reader moved to another post or closed the reel while
-                  // the recipe was on its way: it is theirs, and no remix they
-                  // are no longer looking at opens under them (nor its error
-                  // under another post's Remix), as a paid recipe opens only
-                  // on the post it was bought for (`showPaidRecipe`).
-                  if (unmountedRef.current || feedEventItemRef.current?.id !== item.id) return;
-                  if (claim.taken) startRemix();
-                  // The unlock panel, where the claim's own error is drawn, is
-                  // closed on this path: Remix says why beside its own errors.
-                  else if (claim.message) setRemixError(claim.message);
-                });
-              }}
-              // The creator's own Remix waits for their session: a press while it is read would be
-              // taken as a visitor's (the creator page sends one to sign in).
-              disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null) || ownerChecking}
-              className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
-            >
-              {remixWorkingItemId === item.id
-                ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
-                : remixIsLocked && !remixTakesFreeRecipe
-                  ? <LockKeyhole size={20} className="h-5 w-5 shrink-0" />
-                  : <Wand2 size={20} className="h-5 w-5 shrink-0" />}
-              <span>{remixWorkingItemId === item.id ? 'Starting…' : 'Remix'}</span>
-            </button>
-          ) : null}
+                }}
+                // The creator's own Remix waits for their session: a press while it is read would be
+                // taken as a visitor's (the creator page sends one to sign in).
+                disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null) || ownerChecking}
+                className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              >
+                {remixWorkingItemId === item.id
+                  ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
+                  : remixIsLocked && !remixTakesFreeRecipe
+                    ? <LockKeyhole size={20} className="h-5 w-5 shrink-0" />
+                    : <Wand2 size={20} className="h-5 w-5 shrink-0" />}
+                <span>{remixWorkingItemId === item.id ? 'Starting…' : 'Remix'}</span>
+              </button>
+            ) : null}
+          </div>
         </aside>
 
         <section
@@ -2095,9 +2132,16 @@ export default function ShowcaseReelViewer({
               <MessageSquareText className="h-4 w-4" />
               Details
             </div>
-            <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-zinc-300">
-              {mediaTypeLabel}
-            </span>
+            <div className="flex items-center gap-3">
+              {/* A phone's place for the post's views, which its rail has no room for. */}
+              <PostViewCount
+                labels={postViewCountLabels(item)}
+                className="inline-flex items-center text-xs font-semibold text-zinc-300 sm:hidden"
+              />
+              <span className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-xs font-medium text-zinc-300">
+                {mediaTypeLabel}
+              </span>
+            </div>
           </div>
 
           <div

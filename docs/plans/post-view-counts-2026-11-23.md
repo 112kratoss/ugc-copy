@@ -1,8 +1,9 @@
 # Post view counts: counted where a post is shown large, shown to everyone
 
 Status: step 1 (counting, server only) shipped as #902 (`5d9366d98`), live
-2026-11-23; step 2 (web display and the web's views) built on 2026-11-23 on
-the branch `feat/post-view-counts-web`; step 3 (app display) is open.
+2026-11-23; step 2 (web display and the web's views) is #905, built on
+2026-11-23 and reworked after its `max` review on 2026-11-24 on the branch
+`feat/post-view-counts-web`; step 3 (app display) is open.
 The owner made the decisions in the first section in the planning session on
 2026-11-23. The defaults after them were chosen in planning and are open to
 change. Paths are relative to `ugc-app/`; app paths are under `ugc-mobile/`.
@@ -281,15 +282,22 @@ at the level AGENTS.md sets.
    - **Built:** `ugc-mobile/lib/view-count/` (null at 0 and off public, the
      compact, visible and spoken labels, `VIEW_COUNT_TOTAL_LABEL`);
      `src/components/PostViewCount.tsx`; the counts on the post page and the
-     reel (after Comment), a Home card's action row (at its far end, so a
-     narrow phone wraps the count, never an action), the creator page's tiles (through the carousel's `footerStart`,
-     in one row with a clip's Play badge) and your profile's tiles (a line
-     under the title), and Views in the creator header; the reporter
-     `src/app/showcase/post-view-reporter.ts` (batched, `keepalive` on
-     `pagehide`, held until the session is known, once a reader, post and UTC
-     day) with `usePostViewOnScreen` for the post page, the boundary's
-     `viewSurface` for Home cards and the reel's second on a post. The post
-     page's link visits draw `Link2`, so the eye is the views' alone.
+     reel (after Comment; on a phone the reel's Details header, its row having
+     no room for another tile), a Home card's action row (at its far end, in
+     one box with a recipe chip, so a narrow phone wraps the two, never an
+     action), the creator page's tiles (through the carousel's `footerStart`,
+     in one row with a clip's Play badge; a text tile's under its writing) and
+     your profile's tiles (a line under the title; none for a post hidden by
+     review or deleted for its recipe's holders), and Views in the creator
+     header; the reporter `src/app/showcase/post-view-reporter.ts` (batched,
+     `keepalive` on `pagehide`, held until the session is known, a view each
+     look while the page is in front and one a reader, post and UTC day, a
+     failed send let go for the next look) with `usePostViewOnScreen` for the
+     post page (half of it on screen, or across the screen's middle), the
+     boundary's `viewSurface` for Home cards and the reel's second on a post.
+     The post page's link visits draw `Link2`, so the eye is the views' alone.
+     The reel's rail scrolls where its tiles do not fit and never grows its
+     grid row (the `max` review of #905).
    - **Tests:** the module; the components (nothing at 0, compact and spoken
      figures); an E2E spec (the post page sends one view after a second on
      screen, none before).

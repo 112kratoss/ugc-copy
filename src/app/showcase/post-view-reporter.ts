@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { POST_VIEWS_MAX_BATCH, type PostViewSurface } from '@/lib/post-views-service';
 
@@ -6,13 +6,14 @@ import { feedEventIdentity } from './feed-event-outbox';
 
 /**
  * The web's views (post view counts, step 2): a post shown large, half on
- * screen for a second, is reported to `POST /api/showcase/views` from a Home
- * card (`feed`), the post page (`post-page`) and the reel (`reel`), for every
- * reader. A web guest's views count only this way: the server ignores a guest's
- * feed impressions, since a feed cookie can be minted for every request, and
- * holds a guest here to 20 of one network per post per day. A signed-in
- * reader's Home card is counted by its impression too; the server keeps one
- * mark per person, post and UTC day, so a view reported twice counts once.
+ * screen for a second while the page is in front, is reported to
+ * `POST /api/showcase/views` from a Home card (`feed`), the post page
+ * (`post-page`) and the reel (`reel`), for every reader. A web guest's views
+ * count only this way: the server ignores a guest's feed impressions, since a
+ * feed cookie can be minted for every request, and holds a guest here to 20 of
+ * one network per post per day. A signed-in reader's Home card is counted by
+ * its impression too; the server keeps one mark per person, post and UTC day,
+ * so a view reported twice counts once.
  *
  * Views are sent in batches, as the feed's events are: a batch goes when it
  * holds 25 (the route's limit), 5 s after the last view queued, 30 s after its
@@ -22,10 +23,13 @@ import { feedEventIdentity } from './feed-event-outbox';
  * JSON: the route refuses anything else, so another site's page cannot send
  * views from its visitors' browsers.
  *
- * Each reader reports a post once a UTC day from this page: the server would
- * do nothing with a second report, so it is not sent. A send that is not
- * answered for good (the network failed, a 5xx, 401, 408 or 429) lets its
- * views go, for a later look at the same post to report again.
+ * Every look at a post reports it, and the reporter keeps one a reader, post
+ * and UTC day from this page: the server would do nothing with a second, so it
+ * is not sent. A send that is not answered for good (the network failed, a
+ * 5xx, 401, 408 or 429) lets its views go, the page's last batch's included
+ * (a page the back/forward cache brings back hears its answer then), so the
+ * next look at the post reports it again; and a look on a new UTC day is that
+ * day's view.
  */
 
 /** The quiet a batch waits for before it goes. */
@@ -86,18 +90,19 @@ function bindUnloadFlush() {
   if (unloadFlushBound || typeof window === 'undefined') return;
   unloadFlushBound = true;
   // pagehide rather than unload: it fires for the back/forward cache too.
-  window.addEventListener('pagehide', () => { void flushPostViews({ unloading: true }); });
+  window.addEventListener('pagehide', () => { void flushPostViews(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') void flushPostViews();
   });
 }
 
 /**
- * Sends every view queued now, one request per token and 25 views. With
- * `unloading` the page is going away: the requests still leave, with
- * `keepalive`, but their answers are never heard. Never rejects.
+ * Sends every view queued now, one request per token and 25 views, each with
+ * `keepalive`, so one sent as the page goes still leaves. A view whose send is
+ * not answered for good is let go, for a later look to report again. Never
+ * rejects.
  */
-export function flushPostViews({ unloading = false }: { unloading?: boolean } = {}): Promise<void> {
+export function flushPostViews(): Promise<void> {
   if (flushTimer !== null) {
     clearTimeout(flushTimer);
     flushTimer = null;
@@ -120,7 +125,7 @@ export function flushPostViews({ unloading = false }: { unloading?: boolean } = 
     for (let index = 0; index < bucket.length; index += POST_VIEWS_MAX_BATCH) {
       const chunk = bucket.slice(index, index + POST_VIEWS_MAX_BATCH);
       const letGo = () => {
-        if (!unloading) chunk.forEach((view) => reportedViewKeys.delete(view.key));
+        chunk.forEach((view) => reportedViewKeys.delete(view.key));
       };
       requests.push(
         postViews(chunk[0].accessToken, chunk)
@@ -178,90 +183,125 @@ export function resetPostViewReporterForTests() {
   reportedViewKeys.clear();
 }
 
-type OnScreenEntry = Pick<IntersectionObserverEntry, 'isIntersecting' | 'intersectionRatio' | 'intersectionRect' | 'rootBounds'>;
-
 /**
- * Half the post on screen, as the feed's qualified impression asks of a card:
- * half of the element. A post taller than two screens (a long text post on a
- * phone) can never show half of itself, so for it half the screen is enough.
+ * The newest of an observer callback's entries for one element. A callback
+ * carries every change since the last, oldest first: a post scrolled in and
+ * out between two of them comes with both, and only the last is where it is.
  */
-export function isPostHalfOnScreen(entry: OnScreenEntry): boolean {
-  if (!entry.isIntersecting) return false;
-  if (entry.intersectionRatio >= 0.5) return true;
-  const screenHeight = entry.rootBounds?.height ?? (typeof window === 'undefined' ? 0 : window.innerHeight);
-  return screenHeight > 0 && entry.intersectionRect.height >= screenHeight / 2;
+export function newestEntryFor<Entry extends { target: Element }>(entries: readonly Entry[], target: Element): Entry | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index].target === target) return entries[index];
+  }
+  return undefined;
 }
 
 /**
- * Every 5% of the element: the half-the-screen rule of a tall post is met
- * between two of them, and the callback has to run near it.
+ * The band across the middle of the screen, 1% of it tall: an observer with
+ * this root margin says whether a post crosses the screen's middle.
  */
-const ON_SCREEN_THRESHOLDS = Array.from({ length: 21 }, (_, step) => step / 20);
+export const SCREEN_MIDDLE_ROOT_MARGIN = '-50% 0px -49% 0px';
 
 /**
- * Reports a post's view once it has been half on screen for a second, while
- * the page is in front, for a page that shows one post large (the post page).
+ * Reports a post's view each time it is looked at for a second, while the
+ * page is in front, for a page that shows one post large (the post page). A
+ * look is the post on screen, half of it, or across the middle of the screen,
+ * which is what a post taller than the screen can show: across the middle, at
+ * least half the screen is the post (for a shorter post it says nothing more,
+ * since more than half of it is on screen then). Each is watched by an
+ * observer of its own, so a post of any height is heard while it is scrolled:
+ * an observer speaks only as its thresholds are crossed, and a very tall
+ * post's share of itself on screen crosses none.
+ *
+ * A look ends when the post leaves the screen or the page is hidden; the next
+ * one reports again, and the reporter keeps one a reader, post and UTC day. So
+ * a view whose send failed is sent by the next look, and a page left open
+ * past midnight reports the next day's.
+ *
  * `enabled` is false where no view is reported (a post that is not public, the
- * creator's own) and while the session is still being read: a view that
+ * creator's own) and while the session is still being read: a look that
  * qualified meanwhile waits for it, so a signed-in reader's view never goes as
- * a guest's. One report per post a mount.
+ * a guest's. Returns the ref for the element that is the post: an element
+ * drawn afresh (the page's notice for a blocked post and back) is watched
+ * afresh.
  */
-export function usePostViewOnScreen(
-  targetRef: RefObject<Element | null>,
-  {
-    postId,
-    surface,
-    accessToken,
-    enabled,
-  }: {
-    postId: string;
-    surface: PostViewSurface;
-    accessToken: string | null;
-    enabled: boolean;
-  },
-) {
-  const [seenPostId, setSeenPostId] = useState<string | null>(null);
-  const reportedPostIdRef = useRef<string | null>(null);
+export function usePostViewOnScreen({
+  postId,
+  surface,
+  accessToken,
+  enabled,
+}: {
+  postId: string;
+  surface: PostViewSurface;
+  accessToken: string | null;
+  enabled: boolean;
+}): (element: Element | null) => void {
+  const [target, setTarget] = useState<Element | null>(null);
+  // What a view is sent with, kept current for the timer below without
+  // watching the post again. Written after render, read only by it.
+  const contextRef = useRef({ postId, surface, accessToken, enabled });
+  useEffect(() => {
+    contextRef.current = { postId, surface, accessToken, enabled };
+  });
+  // The post whose look qualified while views could not be sent yet.
+  const heldPostIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    const target = targetRef.current;
-    if (!target || seenPostId === postId || typeof IntersectionObserver === 'undefined') return;
+    if (!enabled || heldPostIdRef.current !== postId) return;
+    heldPostIdRef.current = null;
+    reportPostView({ postId, surface, accessToken });
+  }, [accessToken, enabled, postId, surface]);
+
+  useEffect(() => {
+    if (!target || typeof IntersectionObserver === 'undefined') return;
 
     let halfOnScreen = false;
+    let acrossMiddle = false;
+    let lookReported = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const stop = () => {
       if (timer !== null) clearTimeout(timer);
       timer = null;
     };
     const update = () => {
-      if (!halfOnScreen || document.visibilityState === 'hidden') {
+      if (!(halfOnScreen || acrossMiddle) || document.visibilityState === 'hidden') {
         stop();
+        lookReported = false;
         return;
       }
-      if (timer !== null) return;
+      if (lookReported || timer !== null) return;
       timer = setTimeout(() => {
         timer = null;
-        setSeenPostId(postId);
+        lookReported = true;
+        const context = contextRef.current;
+        if (context.enabled) {
+          reportPostView({ postId: context.postId, surface: context.surface, accessToken: context.accessToken });
+        } else {
+          heldPostIdRef.current = context.postId;
+        }
       }, POST_VIEW_QUALIFY_MS);
     };
-    const observer = new IntersectionObserver((entries) => {
-      const entry = entries.find((candidate) => candidate.target === target) ?? entries.at(-1);
+    const halfObserver = new IntersectionObserver((entries) => {
+      const entry = newestEntryFor(entries, target);
       if (!entry) return;
-      halfOnScreen = isPostHalfOnScreen(entry);
+      halfOnScreen = entry.isIntersecting && entry.intersectionRatio >= 0.5;
       update();
-    }, { threshold: ON_SCREEN_THRESHOLDS });
-    observer.observe(target);
+    }, { threshold: [0, 0.5] });
+    const middleObserver = new IntersectionObserver((entries) => {
+      const entry = newestEntryFor(entries, target);
+      if (!entry) return;
+      acrossMiddle = entry.isIntersecting;
+      update();
+    }, { rootMargin: SCREEN_MIDDLE_ROOT_MARGIN, threshold: 0 });
+    halfObserver.observe(target);
+    middleObserver.observe(target);
     document.addEventListener('visibilitychange', update);
     return () => {
       stop();
-      observer.disconnect();
+      halfObserver.disconnect();
+      middleObserver.disconnect();
       document.removeEventListener('visibilitychange', update);
     };
-  }, [postId, seenPostId, targetRef]);
+  }, [postId, target]);
 
-  useEffect(() => {
-    if (!enabled || seenPostId !== postId || reportedPostIdRef.current === postId) return;
-    reportedPostIdRef.current = postId;
-    reportPostView({ postId, surface, accessToken });
-  }, [accessToken, enabled, postId, seenPostId, surface]);
+  return setTarget;
 }

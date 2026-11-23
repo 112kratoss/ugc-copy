@@ -255,12 +255,17 @@ describe('CreatorContentTabs', () => {
       expect(pictureViews.querySelector('span[aria-hidden="true"]')).toHaveTextContent('1.2K');
       expect(within(pictureViews).getByText('1,234 views')).toHaveClass('sr-only');
 
-      // A text tile's sits over a scrim of its own, outside the tile's button, taking no press.
+      // A text tile's sits under its writing, in line with it, outside the tile's button and taking no
+      // press: the writing ends above it rather than under a scrim, which hid its last line.
       const textViews = text.querySelector<HTMLElement>('[data-post-view-count]')!;
       expect(textViews.querySelector('span[aria-hidden="true"]')).toHaveTextContent('7');
       expect(textViews.closest('button, a')).toBeNull();
-      expect(textViews.parentElement).toHaveClass('pointer-events-none', 'bottom-3', 'left-3');
-      expect(textViews.parentElement?.previousElementSibling).toHaveClass('bg-gradient-to-t');
+      // Its row is padded as the writing is, so the two line up at every width.
+      expect(textViews.parentElement).toHaveClass('pointer-events-none', 'bottom-0', 'p-4', 'sm:p-5');
+      expect(text.querySelector('.bg-gradient-to-t')).toBeNull();
+      const tileButton = within(text).getAllByRole('button', { name: `Open ${items[1].title}` })[0];
+      expect(tileButton).toHaveClass('p-4', 'sm:p-5');
+      expect(tileButton.querySelector('.line-clamp-7')).toHaveClass('mb-6');
     });
 
     it('draws none at 0 or for a read with no total, and no scrim for nothing', () => {
@@ -268,6 +273,8 @@ describe('CreatorContentTabs', () => {
       expect(container.querySelector('[data-post-view-count]')).toBeNull();
       expect(container.querySelector('[data-media-footer-start]')).toBeNull();
       expect(container.querySelector('[data-creator-card] .bg-gradient-to-t')).toBeNull();
+      const text = container.querySelectorAll<HTMLElement>('[data-creator-card]')[1];
+      expect(within(text).getAllByRole('button', { name: `Open ${items[1].title}` })[0].querySelector('.line-clamp-7')).not.toHaveClass('mb-6');
     });
   });
 

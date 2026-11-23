@@ -3225,6 +3225,37 @@ describe('ShowcaseReelViewer pagination', () => {
       expect(comments.nextElementSibling).toBe(views);
     });
 
+    // A phone's row has no room for another tile beside Save, Comment, Share, Recipe and Remix: there
+    // the count is in Details' header, and the rail's from 640px up.
+    it('draws the count in the rail from 640px up, and in Details’ header on a phone', () => {
+      stubRequests();
+      const { container } = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ viewCount: 1_500 })] })} />);
+      const [railViews, headerViews] = Array.from(container.querySelectorAll<HTMLElement>('[data-post-view-count]'));
+      expect(railViews.closest('[data-reel-rail]')).not.toBeNull();
+      expect(railViews).toHaveClass('hidden', 'sm:inline-flex');
+      const detailsHeader = container.querySelector('[data-reel-scroll-region="details"]')!.firstElementChild!;
+      expect(detailsHeader).toContainElement(headerViews);
+      expect(headerViews).toHaveClass('sm:hidden');
+      expect(within(headerViews).getByText('1,500 views')).toHaveClass('sr-only');
+    });
+
+    // The tiles sit in a box centred by auto margins, which give way once the tiles overflow, so they
+    // start at the edge the rail scrolls from: centred with justify-content, the first were out of
+    // reach on a phone. And the rail stays a scroll container on a laptop too: `lg:overflow-visible`
+    // gave its column a minimum height, which made the grid's row taller than a short window.
+    it('lays the rail out to scroll from its start where its tiles do not fit, never growing the grid', () => {
+      stubRequests();
+      const { container } = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ viewCount: 1_500, asset: paidAsset })] })} />);
+      const tiles = container.querySelector<HTMLElement>('[data-reel-rail]')!;
+      expect(tiles).toHaveClass('m-auto', 'shrink-0');
+      const rail = tiles.parentElement!;
+      expect(rail.tagName).toBe('ASIDE');
+      expect(rail).not.toHaveClass('justify-center');
+      expect(rail).toHaveClass('overflow-x-auto', 'hide-scrollbar');
+      expect(rail.className).not.toMatch(/lg:overflow-visible/);
+      expect(within(tiles).getByRole('button', { name: /^Save / })).toBeInTheDocument();
+    });
+
     it('draws none at 0, and none on a post that is not public', () => {
       stubRequests();
       const { container, rerender } = render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ viewCount: 0 })] })} />);
@@ -3279,6 +3310,66 @@ describe('ShowcaseReelViewer pagination', () => {
         unmount();
         expect(await sentViews(fetchMock)).toEqual([]);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('counts no second while the page is hidden, and a whole one once it is back', async () => {
+      vi.useFakeTimers();
+      authState.session = { access_token: 'reader-token' };
+      authState.user = { id: 'reader-1' };
+      const fetchMock = stubRequests();
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+      try {
+        render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: POST_ONE })], selectedItemId: POST_ONE })} />);
+        await advance(500);
+        visibility.mockReturnValue('hidden');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        await advance(5_000);
+        expect(await sentViews(fetchMock)).toEqual([]);
+
+        visibility.mockReturnValue('visible');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        await advance(999);
+        expect(await sentViews(fetchMock)).toEqual([]);
+        await advance(1);
+        expect((await sentViews(fetchMock)).flatMap((request) => request.views)).toEqual([{ postId: POST_ONE, surface: 'reel' }]);
+      } finally {
+        visibility.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+
+    it('sends a view again on the next look when its send failed, as the page comes back', async () => {
+      vi.useFakeTimers();
+      let viewStatus = 503;
+      const fetchMock = stubRequests({ '/api/showcase/views': () => new Response(null, { status: viewStatus }) });
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+      try {
+        render(<ShowcaseReelViewer {...reelProps({ items: [createShowcaseItem({ id: POST_ONE })], selectedItemId: POST_ONE })} />);
+        await advance(1_000);
+        expect(await sentViews(fetchMock)).toHaveLength(1);
+
+        viewStatus = 204;
+        visibility.mockReturnValue('hidden');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        visibility.mockReturnValue('visible');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        await advance(1_000);
+        expect((await sentViews(fetchMock)).flatMap((request) => request.views)).toEqual([
+          { postId: POST_ONE, surface: 'reel' },
+          { postId: POST_ONE, surface: 'reel' },
+        ]);
+
+        // Answered: the next look sends nothing more today.
+        visibility.mockReturnValue('hidden');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        visibility.mockReturnValue('visible');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        await advance(1_000);
+        expect(await sentViews(fetchMock)).toHaveLength(2);
+      } finally {
+        visibility.mockRestore();
         vi.useRealTimers();
       }
     });

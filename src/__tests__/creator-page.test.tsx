@@ -382,8 +382,11 @@ describe('creator page', () => {
       expect(views.querySelector('div[aria-hidden="true"]')).toHaveTextContent('12KViews');
       expect(views.querySelector('div[aria-hidden="true"]')).toHaveAttribute('title', '12,345 views');
       expect(within(views).getByText('12,345 views')).toHaveClass('sr-only');
-      // The other totals keep their whole numbers.
+      // The other totals keep their whole numbers, a size down below 640px, where five columns leave
+      // a five-figure total no room at the larger one.
       expect(stats[2]).toHaveTextContent('1,234Saves');
+      expect(within(stats[2]).getByText('1,234')).toHaveClass('text-base', 'sm:text-xl');
+      expect(within(stats[2]).getByText('1,234')).not.toHaveClass('text-lg');
       expect(views.querySelector('button, a, [tabindex]')).toBeNull();
     });
 
@@ -394,6 +397,8 @@ describe('creator page', () => {
       let stats = [...container.querySelectorAll<HTMLElement>('[data-creator-stat]')];
       expect(stats.map((stat) => stat.dataset.creatorStat)).toEqual(['Posts', 'Saves', 'Remixes', 'Recipes']);
       expect(stats[0].parentElement).toHaveClass('grid-cols-4');
+      expect(within(stats[1]).getByText('1,234')).toHaveClass('text-lg', 'sm:text-xl');
+      expect(within(stats[1]).getByText('1,234')).not.toHaveClass('text-base');
       unmount();
 
       mocks.getCreatorProfilePageData.mockResolvedValue(pageData());

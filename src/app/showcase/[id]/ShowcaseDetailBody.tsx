@@ -286,11 +286,10 @@ export default function ShowcaseDetailBody({
     : null;
   // The rail ends inside the window: it is told where its top is.
   usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
-  // The post's view (post view counts): its content half on screen for a second, reported once the
+  // The post's view (post view counts): its content looked at for a second, reported once the
   // session is known, for a public post and anyone but its creator, whom the server never counts.
   const { session, isLoading: authLoading } = useAuth();
-  const postContentRef = useRef<HTMLElement | null>(null);
-  usePostViewOnScreen(postContentRef, {
+  const postContentRef = usePostViewOnScreen({
     postId: detail.id,
     surface: 'post-page',
     accessToken: session?.access_token ?? null,

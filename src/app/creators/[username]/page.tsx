@@ -212,7 +212,9 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
                       <Icon className="hidden h-4 w-4 text-zinc-500 sm:block" aria-hidden="true" />
                       {/* A compact figure is read whole, once: the drawn pair is hidden from a screen reader. */}
                       <div className="min-w-0" aria-hidden={spoken ? true : undefined} title={spoken}>
-                        <div className="text-lg font-black tabular-nums text-white sm:text-xl">{value}</div>
+                        {/* Five columns leave a 360px phone about 57px each: a five-figure total ("12,345")
+                            fits only a size down. */}
+                        <div className={`${stats.length === 5 ? 'text-base' : 'text-lg'} font-black tabular-nums text-white sm:text-xl`}>{value}</div>
                         <div className="truncate text-[11px] font-semibold text-zinc-500 sm:text-xs">{label}</div>
                       </div>
                       {spoken ? <span className="sr-only">{spoken}</span> : null}

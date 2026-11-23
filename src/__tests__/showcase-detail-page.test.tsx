@@ -305,7 +305,7 @@ describe('Showcase detail page', () => {
   });
 
   describe('its views', () => {
-    type Registration = { callback: IntersectionObserverCallback; targets: Element[] };
+    type Registration = { callback: IntersectionObserverCallback; options?: IntersectionObserverInit; targets: Element[] };
     let registrations: Registration[] = [];
 
     beforeEach(() => {
@@ -316,8 +316,8 @@ describe('Showcase detail page', () => {
         readonly rootMargin = '0px';
         readonly thresholds = [];
         private readonly registration: Registration;
-        constructor(callback: IntersectionObserverCallback) {
-          this.registration = { callback, targets: [] };
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          this.registration = { callback, options, targets: [] };
           registrations.push(this.registration);
         }
         observe(target: Element) { this.registration.targets.push(target); }
@@ -332,18 +332,16 @@ describe('Showcase detail page', () => {
       vi.useRealTimers();
     });
 
-    /** The post's content as the page's observer is told it is on screen. */
+    /** The post's content as the page's observer of its share on screen is told it is on screen. */
     function showPostContent(ratio = 1) {
       const content = screen.getByTestId('canonical-post-media');
-      const registration = registrations.find((candidate) => candidate.targets.includes(content));
+      const registration = registrations.find((candidate) => candidate.targets.includes(content) && !candidate.options?.rootMargin);
       expect(registration, 'the page watches its post content').toBeDefined();
       act(() => {
         registration!.callback([{
           target: content,
           isIntersecting: ratio > 0,
           intersectionRatio: ratio,
-          intersectionRect: { height: ratio * 600 } as DOMRectReadOnly,
-          rootBounds: { height: 800 } as DOMRectReadOnly,
         } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
       });
     }
@@ -380,6 +378,27 @@ describe('Showcase detail page', () => {
         body: { views: [{ postId: POST_ID, surface: 'post-page' }] },
         authorization: 'Bearer reader-token',
       }]);
+    });
+
+    // The session is still being read: a view qualified then waits for it, so a signed-in reader's
+    // view never goes as a guest's, and goes once, as theirs, when it is known.
+    it('holds a view while the session is read, and sends it once as the reader’s when it is known', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      clientAuth.current = { session: null, user: null, isLoading: true };
+      const { rerender } = render(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      showPostContent(1);
+      act(() => { vi.advanceTimersByTime(2_000); });
+      expect(await viewsSent()).toEqual([]);
+
+      clientAuth.current = { session: { access_token: 'reader-token' }, user: { id: 'reader-1' }, isLoading: false };
+      rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      expect(await viewsSent()).toEqual([{
+        body: { views: [{ postId: POST_ID, surface: 'post-page' }] },
+        authorization: 'Bearer reader-token',
+      }]);
+
+      rerender(await ShowcaseDetailPage({ params: Promise.resolve({ id: POST_ID }) }));
+      expect(await viewsSent()).toHaveLength(1);
     });
 
     it('reports a visitor’s view too, with no token', async () => {

@@ -30,7 +30,7 @@ import {
   type FeedEventOutboxEntry,
   type FeedEventOutboxStorage,
 } from './feed-event-outbox';
-import { reportPostView } from './post-view-reporter';
+import { newestEntryFor, reportPostView } from './post-view-reporter';
 
 export type ShowcaseFeedbackAction = 'not_interested' | 'hide_creator';
 export type ShowcaseFeedEventType =
@@ -706,9 +706,9 @@ interface QualifiedImpressionBoundaryProps {
   trackAttention?: boolean;
   /**
    * Report the card's view (`POST /api/showcase/views`, post view counts) on
-   * this surface once it qualifies, as its impression does: the Home feed's
-   * cards (`feed`), for every reader, a guest's included. Explore's grid shows
-   * thumbnails, which are not views, and sends none.
+   * this surface each time it qualifies, as its impression does once: the Home
+   * feed's cards (`feed`), for every reader, a guest's included. Explore's grid
+   * shows thumbnails, which are not views, and sends none.
    */
   viewSurface?: PostViewSurface;
   /**
@@ -815,6 +815,13 @@ export function QualifiedImpressionBoundary({
 
     const recommendation = getShowcaseRecommendation(item);
     const impressionKey = recommendation?.deliveryId ?? `${feedSessionId ?? 'unranked'}:${item.id}`;
+    // A look: half the card on screen while the page is in front. A second of
+    // it qualifies the card: its impression goes once a delivery, its view each
+    // look (the reporter keeps one a reader, post and UTC day, so the next look
+    // sends one whose send failed, and a look on a new day counts for that
+    // day). A hidden page ends the look; the second starts again when it is back.
+    let halfOnScreen = false;
+    let lookQualified = false;
     let qualificationTimer: ReturnType<typeof setTimeout> | null = null;
 
     const cancelQualification = () => {
@@ -824,34 +831,28 @@ export function QualifiedImpressionBoundary({
       }
     };
 
-    const observer = new IntersectionObserver((entries) => {
-      const entry = entries.find((candidate) => candidate.target === boundary) ?? entries[0];
-      const isQualifiedVisibility = Boolean(
-        entry?.isIntersecting && entry.intersectionRatio >= 0.5
-      );
-      const attention = attentionRef.current;
-      if (attention) sendAttention(attention.setQualified(isQualifiedVisibility, Date.now()));
-
-      if (!isQualifiedVisibility) {
+    const updateQualification = () => {
+      if (!halfOnScreen || isPageHidden()) {
         cancelQualification();
+        lookQualified = false;
         return;
       }
-
-      if (sentImpressionKeyRef.current === impressionKey || qualificationTimer) {
+      if (lookQualified || qualificationTimer) {
         return;
       }
 
       qualificationTimer = setTimeout(() => {
         qualificationTimer = null;
+        lookQualified = true;
+        // A view whatever the lane: an unranked card sends no impression, but
+        // it was seen all the same.
+        viewQualifiedRef.current = true;
+        reportViewIfDue();
         if (sentImpressionKeyRef.current === impressionKey) {
           return;
         }
 
         sentImpressionKeyRef.current = impressionKey;
-        // A view whatever the lane: an unranked card sends no impression, but
-        // it was seen all the same.
-        viewQualifiedRef.current = true;
-        reportViewIfDue();
         void sendShowcaseFeedEvent({
           item,
           eventType: 'impression',
@@ -864,15 +865,27 @@ export function QualifiedImpressionBoundary({
           void error;
         });
       }, 1000);
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+      // The newest entry: a card scrolled in and out between two callbacks
+      // comes with both, and only the last is where it is now.
+      const entry = newestEntryFor(entries, boundary) ?? entries.at(-1);
+      halfOnScreen = Boolean(entry?.isIntersecting && entry.intersectionRatio >= 0.5);
+      const attention = attentionRef.current;
+      if (attention) sendAttention(attention.setQualified(halfOnScreen, Date.now()));
+      updateQualification();
     }, {
       threshold: [0.5],
     });
 
     observer.observe(boundary);
+    document.addEventListener('visibilitychange', updateQualification);
 
     return () => {
       cancelQualification();
       observer.disconnect();
+      document.removeEventListener('visibilitychange', updateQualification);
     };
   }, [accessToken, feedSessionId, item, position, reportViewIfDue, sendAttention, sourceSurface]);
 

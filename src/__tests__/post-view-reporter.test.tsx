@@ -1,12 +1,13 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   POST_VIEW_FLUSH_DELAY_MS,
   POST_VIEW_MAX_WAIT_MS,
+  SCREEN_MIDDLE_ROOT_MARGIN,
   flushPostViews,
-  isPostHalfOnScreen,
+  newestEntryFor,
   reportPostView,
   resetPostViewReporterForTests,
   usePostViewOnScreen,
@@ -185,67 +186,115 @@ describe('reportPostView', () => {
     expect(viewRequests()).toHaveLength(2);
     expect(viewRequests()[1].body.views).toEqual([{ postId: POST_B, surface: 'post-page' }]);
   });
-});
 
-describe('isPostHalfOnScreen', () => {
-  const rect = (height: number) => ({ height }) as DOMRectReadOnly;
+  // A page the back/forward cache keeps hears that answer when it is brought back.
+  it('lets the views of the batch sent as the page was left go too, when that send fails', async () => {
+    fetchStatus = 503;
+    reportPostView({ postId: POST_A, surface: 'post-page' });
+    window.dispatchEvent(new Event('pagehide'));
+    await settle();
+    expect(viewRequests()).toHaveLength(1);
 
-  it('asks half of the post, as the feed’s qualified impression does', () => {
-    expect(isPostHalfOnScreen({ isIntersecting: true, intersectionRatio: 0.5, intersectionRect: rect(200), rootBounds: rect(800) })).toBe(true);
-    expect(isPostHalfOnScreen({ isIntersecting: true, intersectionRatio: 0.49, intersectionRect: rect(196), rootBounds: rect(800) })).toBe(false);
-    expect(isPostHalfOnScreen({ isIntersecting: false, intersectionRatio: 0, intersectionRect: rect(0), rootBounds: rect(800) })).toBe(false);
-  });
-
-  it('takes half the screen for a post too tall to show half of itself', () => {
-    // A 3,000px post on an 800px screen shows at most 27% of itself.
-    expect(isPostHalfOnScreen({ isIntersecting: true, intersectionRatio: 0.14, intersectionRect: rect(420), rootBounds: rect(800) })).toBe(true);
-    expect(isPostHalfOnScreen({ isIntersecting: true, intersectionRatio: 0.12, intersectionRect: rect(360), rootBounds: rect(800) })).toBe(false);
+    fetchStatus = 204;
+    reportPostView({ postId: POST_A, surface: 'post-page' });
+    await act(async () => { await flushPostViews(); });
+    expect(viewRequests()).toHaveLength(2);
   });
 });
+
+describe('newestEntryFor', () => {
+  it('takes the last of a callback’s entries for the element, as they come oldest first', () => {
+    const post = document.createElement('section');
+    const other = document.createElement('section');
+    const entries = [
+      { target: post, isIntersecting: true },
+      { target: other, isIntersecting: true },
+      { target: post, isIntersecting: false },
+    ];
+    expect(newestEntryFor(entries, post)).toBe(entries[2]);
+    expect(newestEntryFor(entries, other)).toBe(entries[1]);
+    expect(newestEntryFor(entries, document.createElement('div'))).toBeUndefined();
+  });
+});
+
+type FakeObserver = { callback: IntersectionObserverCallback; options: IntersectionObserverInit | undefined; targets: Element[] };
+
+function stubIntersectionObservers(): FakeObserver[] {
+  const observers: FakeObserver[] = [];
+  vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+    const observer: FakeObserver = { callback, options, targets: [] };
+    observers.push(observer);
+    return {
+      root: null,
+      rootMargin: options?.rootMargin ?? '0px',
+      thresholds: [],
+      observe: vi.fn((element: Element) => { observer.targets.push(element); }),
+      unobserve: vi.fn(),
+      disconnect: vi.fn(() => { observer.targets = []; }),
+      takeRecords: vi.fn(() => []),
+    } satisfies IntersectionObserver;
+  }));
+  return observers;
+}
+
+function entryOf(target: Element, intersectionRatio: number, isIntersecting = intersectionRatio > 0) {
+  return { target, isIntersecting, intersectionRatio } as IntersectionObserverEntry;
+}
+
+function setPageHidden(hidden: boolean) {
+  const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(hidden ? 'hidden' : 'visible');
+  act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+  return visibility;
+}
 
 describe('usePostViewOnScreen', () => {
-  let observerCallback: IntersectionObserverCallback | null = null;
-  let observedElement: Element | null = null;
+  let observers: FakeObserver[] = [];
 
   beforeEach(() => {
-    observerCallback = null;
-    observedElement = null;
-    vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(callback: IntersectionObserverCallback) {
-      observerCallback = callback;
-      return {
-        root: null,
-        rootMargin: '0px',
-        thresholds: [],
-        observe: vi.fn((element: Element) => { observedElement = element; }),
-        unobserve: vi.fn(),
-        disconnect: vi.fn(() => { observerCallback = null; }),
-        takeRecords: vi.fn(() => []),
-      } satisfies IntersectionObserver;
-    }));
+    observers = stubIntersectionObservers();
   });
 
-  function show(ratio: number) {
-    act(() => {
-      observerCallback?.([{
-        isIntersecting: ratio > 0,
-        intersectionRatio: ratio,
-        intersectionRect: { height: ratio * 400 } as DOMRectReadOnly,
-        rootBounds: { height: 800 } as DOMRectReadOnly,
-        target: observedElement,
-      } as IntersectionObserverEntry], {} as IntersectionObserver);
-    });
+  /** The live observer of the post: of half of it on screen, or of it across the screen's middle. */
+  function watching(kind: 'half' | 'middle') {
+    const post = screen.getByTestId('post');
+    const observer = observers.findLast((candidate) => candidate.targets.includes(post)
+      && (candidate.options?.rootMargin === SCREEN_MIDDLE_ROOT_MARGIN) === (kind === 'middle'));
+    expect(observer, `the post's ${kind} is watched`).toBeDefined();
+    return { observer: observer!, post };
   }
 
-  function PostPage({ postId = POST_A, enabled = true, accessToken = null }: { postId?: string; enabled?: boolean; accessToken?: string | null }) {
-    const ref = useRef<HTMLElement | null>(null);
-    usePostViewOnScreen(ref, { postId, surface: 'post-page', accessToken, enabled });
-    return <section ref={ref}>Post</section>;
+  /** The share of the post on screen, as its observer is told. */
+  function show(ratio: number) {
+    const { observer, post } = watching('half');
+    act(() => { observer.callback([entryOf(post, ratio)], {} as IntersectionObserver); });
+  }
+
+  /** Whether the post crosses the middle of the screen, as its observer is told. */
+  function acrossMiddle(across: boolean) {
+    const { observer, post } = watching('middle');
+    act(() => { observer.callback([entryOf(post, across ? 1 : 0, across)], {} as IntersectionObserver); });
+  }
+
+  function PostPage({ postId = POST_A, enabled = true, accessToken = null, drawn = true }: {
+    postId?: string;
+    enabled?: boolean;
+    accessToken?: string | null;
+    drawn?: boolean;
+  }) {
+    const ref = usePostViewOnScreen({ postId, surface: 'post-page', accessToken, enabled });
+    return drawn ? <section data-testid="post" ref={ref}>Post</section> : <p>Not available</p>;
   }
 
   async function sentViews() {
     await act(async () => { await flushPostViews(); });
     return viewRequests().flatMap((request) => request.body.views);
   }
+
+  it('watches half of the post, and the post across the middle of the screen', () => {
+    render(<PostPage />);
+    expect(watching('half').observer.options?.threshold).toEqual([0, 0.5]);
+    expect(watching('middle').observer.options).toEqual(expect.objectContaining({ rootMargin: '-50% 0px -49% 0px' }));
+  });
 
   it('reports the post after a second half on screen, and not a moment before', async () => {
     render(<PostPage />);
@@ -266,6 +315,18 @@ describe('usePostViewOnScreen', () => {
     show(0);
     act(() => { vi.advanceTimersByTime(2_000); });
     expect(await sentViews()).toEqual([]);
+  });
+
+  // A 20-screen recipe shows 5% of itself at most: the share alone would never be told again.
+  it('counts a post taller than the screen once it crosses the screen’s middle, however small a share of it shows', async () => {
+    render(<PostPage />);
+    show(0.04);
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(await sentViews()).toEqual([]);
+
+    acrossMiddle(true);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toEqual([{ postId: POST_A, surface: 'post-page' }]);
   });
 
   it('counts no second while the page is in the background', async () => {
@@ -309,6 +370,66 @@ describe('usePostViewOnScreen', () => {
     expect(await sentViews()).toHaveLength(1);
   });
 
+  it('sends a view again on the next look when its send failed', async () => {
+    fetchStatus = 503;
+    render(<PostPage />);
+    show(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toHaveLength(1);
+
+    // Still the same look: nothing new.
+    fetchStatus = 204;
+    show(0.9);
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(await sentViews()).toHaveLength(1);
+
+    show(0);
+    show(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toHaveLength(2);
+  });
+
+  it('reports the next day’s view on a look after midnight, from a page left open', async () => {
+    vi.setSystemTime(new Date('2026-11-23T23:59:00.000Z'));
+    render(<PostPage />);
+    show(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toHaveLength(1);
+
+    vi.setSystemTime(new Date('2026-11-24T08:00:00.000Z'));
+    const visibility = setPageHidden(true);
+    visibility.mockReturnValue('visible');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    act(() => { vi.advanceTimersByTime(1_000); });
+    visibility.mockRestore();
+    expect(await sentViews()).toEqual([
+      { postId: POST_A, surface: 'post-page' },
+      { postId: POST_A, surface: 'post-page' },
+    ]);
+  });
+
+  it('acts on the newest of a callback’s entries', async () => {
+    render(<PostPage />);
+    const { observer, post } = watching('half');
+    act(() => { observer.callback([entryOf(post, 1), entryOf(post, 0)], {} as IntersectionObserver); });
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(await sentViews()).toEqual([]);
+
+    act(() => { observer.callback([entryOf(post, 0), entryOf(post, 1)], {} as IntersectionObserver); });
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toEqual([{ postId: POST_A, surface: 'post-page' }]);
+  });
+
+  // The post page draws a notice in the post's place for a blocked reader, and the post again once unblocked.
+  it('watches the post drawn afresh under the same post', async () => {
+    const { rerender } = render(<PostPage />);
+    rerender(<PostPage drawn={false} />);
+    rerender(<PostPage drawn />);
+    show(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toEqual([{ postId: POST_A, surface: 'post-page' }]);
+  });
+
   it('never reports a view that may not be sent', async () => {
     render(<PostPage enabled={false} />);
     show(1);
@@ -331,24 +452,10 @@ describe('usePostViewOnScreen', () => {
 });
 
 describe('QualifiedImpressionBoundary views', () => {
-  let observerCallback: IntersectionObserverCallback | null = null;
-  let observedElement: Element | null = null;
+  let observers: FakeObserver[] = [];
 
   beforeEach(() => {
-    observerCallback = null;
-    observedElement = null;
-    vi.stubGlobal('IntersectionObserver', vi.fn(function IntersectionObserverMock(callback: IntersectionObserverCallback) {
-      observerCallback = callback;
-      return {
-        root: null,
-        rootMargin: '0px',
-        thresholds: [0.5],
-        observe: vi.fn((element: Element) => { observedElement = element; }),
-        unobserve: vi.fn(),
-        disconnect: vi.fn(),
-        takeRecords: vi.fn(() => []),
-      } satisfies IntersectionObserver;
-    }));
+    observers = stubIntersectionObservers();
   });
 
   const item = {
@@ -378,45 +485,95 @@ describe('QualifiedImpressionBoundary views', () => {
     );
   }
 
+  function cardObserver() {
+    const observer = observers.findLast((candidate) => candidate.targets.length > 0);
+    expect(observer, 'the card is watched').toBeDefined();
+    return { observer: observer!, card: observer!.targets[0] };
+  }
+
   function showCard(ratio: number) {
-    act(() => {
-      observerCallback?.([{ isIntersecting: ratio > 0, intersectionRatio: ratio, target: observedElement } as IntersectionObserverEntry], {} as IntersectionObserver);
-    });
+    const { observer, card } = cardObserver();
+    act(() => { observer.callback([entryOf(card, ratio)], {} as IntersectionObserver); });
+  }
+
+  async function sentViews() {
+    await act(async () => { await flushPostViews(); });
+    return viewRequests().flatMap((request) => request.body.views);
   }
 
   it('reports a Home card’s view after a second half on screen, an unranked card’s too', async () => {
     renderCard({ viewSurface: 'feed' });
     showCard(0.6);
     act(() => { vi.advanceTimersByTime(999); });
-    await act(async () => { await flushPostViews(); });
-    expect(viewRequests()).toHaveLength(0);
+    expect(await sentViews()).toEqual([]);
 
     act(() => { vi.advanceTimersByTime(1); });
-    await act(async () => { await flushPostViews(); });
-    expect(viewRequests().flatMap((request) => request.body.views)).toEqual([{ postId: POST_A, surface: 'feed' }]);
+    expect(await sentViews()).toEqual([{ postId: POST_A, surface: 'feed' }]);
   });
 
   it('reports nothing where the boundary names no view surface (Explore’s grid)', async () => {
     renderCard();
     showCard(1);
     act(() => { vi.advanceTimersByTime(2_000); });
-    await act(async () => { await flushPostViews(); });
-    expect(viewRequests()).toHaveLength(0);
+    expect(await sentViews()).toEqual([]);
   });
 
   it('holds the view until the session is known', async () => {
     const { rerender } = renderCard({ viewSurface: 'feed', viewReady: false });
     showCard(1);
     act(() => { vi.advanceTimersByTime(1_000); });
-    await act(async () => { await flushPostViews(); });
-    expect(viewRequests()).toHaveLength(0);
+    expect(await sentViews()).toEqual([]);
 
     rerender(
       <QualifiedImpressionBoundary item={item} position={0} sourceSurface="feed" viewSurface="feed" viewReady>
         Card
       </QualifiedImpressionBoundary>,
     );
-    await act(async () => { await flushPostViews(); });
-    expect(viewRequests().flatMap((request) => request.body.views)).toEqual([{ postId: POST_A, surface: 'feed' }]);
+    expect(await sentViews()).toEqual([{ postId: POST_A, surface: 'feed' }]);
+  });
+
+  it('counts no second while the page is hidden, and a whole one once it is back', async () => {
+    renderCard({ viewSurface: 'feed' });
+    showCard(1);
+    act(() => { vi.advanceTimersByTime(500); });
+    const visibility = setPageHidden(true);
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(await sentViews()).toEqual([]);
+
+    visibility.mockReturnValue('visible');
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    act(() => { vi.advanceTimersByTime(999); });
+    expect(await sentViews()).toEqual([]);
+    act(() => { vi.advanceTimersByTime(1); });
+    visibility.mockRestore();
+    expect(await sentViews()).toEqual([{ postId: POST_A, surface: 'feed' }]);
+  });
+
+  it('sends a view again on the card’s next look when its send failed', async () => {
+    fetchStatus = 503;
+    renderCard({ viewSurface: 'feed' });
+    showCard(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toHaveLength(1);
+
+    fetchStatus = 204;
+    showCard(0.2);
+    showCard(0.8);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toHaveLength(2);
+
+    // Answered: a third look sends nothing more today.
+    showCard(0);
+    showCard(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(await sentViews()).toHaveLength(2);
+  });
+
+  it('acts on the newest of a callback’s entries', async () => {
+    renderCard({ viewSurface: 'feed' });
+    const { observer, card } = cardObserver();
+    act(() => { observer.callback([entryOf(card, 1), entryOf(card, 0)], {} as IntersectionObserver); });
+    act(() => { vi.advanceTimersByTime(2_000); });
+    expect(await sentViews()).toEqual([]);
   });
 });

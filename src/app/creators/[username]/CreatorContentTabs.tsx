@@ -705,7 +705,8 @@ function CreatorCard({
             className="ui-focus-ring flex h-full w-full flex-col justify-between bg-[linear-gradient(145deg,#211613,#111215_55%,#0a1118)] p-4 text-left sm:p-5"
           >
             <FileText className="h-6 w-6 text-[var(--ui-primary)]" />
-            <span className="line-clamp-7 text-sm font-bold leading-6 text-zinc-100 sm:text-base">
+            {/* A count of views takes the tile's foot: the writing ends above it. */}
+            <span className={`${viewCount ? 'mb-6 ' : ''}line-clamp-7 text-sm font-bold leading-6 text-zinc-100 sm:text-base`}>
               {itemDisplayText(item)}
             </span>
           </button>
@@ -724,8 +725,11 @@ function CreatorCard({
           </button>
         )}
 
-        {/* A tile with no media draws the count over a scrim of its own; the carousel draws a picture's. */}
-        {viewCount && !(mediaItems.length > 0 && !isText) ? (
+        {/* The carousel draws a picture's count over its scrim. A text tile's sits under its writing,
+            in line with it; a tile with no media at all draws it over a scrim of its own. */}
+        {viewCount && isText ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] flex p-4 sm:p-5">{viewCount}</div>
+        ) : viewCount && mediaItems.length === 0 ? (
           <>
             <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] h-16 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
             <div className="pointer-events-none absolute bottom-3 left-3 z-[5] flex">{viewCount}</div>

@@ -189,7 +189,9 @@ export interface OwnerPostListItem {
   commentCount: number;
   /**
    * Lifetime views, counted while the post was public (migration
-   * 20261123070740); left out by the fallback reads.
+   * 20261123070740); left out by the fallback reads, and for a post the public
+   * cannot see whatever its visibility says (hidden by review, or deleted and
+   * kept for the people who have its recipe), whose count no one is shown.
    */
   viewCount?: number;
   createdAt: string;
@@ -831,7 +833,9 @@ async function toOwnerPostListItem(
     sourceTools,
     sourceLabel: getSourceLabel(sourceKind),
     commentCount: Math.max(0, row.comment_count ?? 0),
-    ...(row.view_count === undefined ? {} : { viewCount: Math.max(0, Number(row.view_count) || 0) }),
+    ...(row.view_count === undefined || row.review_status === 'hidden' || row.tombstoned_at
+      ? {}
+      : { viewCount: Math.max(0, Number(row.view_count) || 0) }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publicPath: canShare ? `/showcase/${row.id}` : null,
