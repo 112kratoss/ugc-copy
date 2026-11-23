@@ -599,8 +599,76 @@ describe('showcase feed route adapter service', () => {
         })),
         getShowcaseFeedPage: vi.fn(async () => createFeedPage()) as unknown as typeof getShowcaseFeedPage,
         prepareShowcaseFeedReadAhead: vi.fn(async () => prepared) as unknown as typeof prepareShowcaseFeedReadAhead,
+        recordShowcaseFeedReadAheadEvent: vi.fn(async () => undefined),
+        runAfterResponse: vi.fn(),
+        logError: vi.fn(),
       };
     }
+
+    /** Runs what the route left for after its answer, as Next does once the response has gone. */
+    async function runAfterResponseTasks(dependencies: ReturnType<typeof readAheadDependencies>) {
+      for (const [task] of dependencies.runAfterResponse.mock.calls) await (task as () => Promise<unknown>)();
+    }
+
+    function readWith(dependencies: ReturnType<typeof readAheadDependencies>, query: string) {
+      return getShowcaseFeedRouteResponse({
+        request: new Request(`http://localhost/api/showcase/feed?${query}`, {
+          headers: { Authorization: 'Bearer user-token' },
+        }),
+        dependencies,
+      });
+    }
+
+    it('counts a held ranking once its answer has gone, and nothing when there was none to hold', async () => {
+      const held = readAheadDependencies();
+      const response = await readWith(held, 'sort=for-you&category=media&offset=0&readAhead=1');
+
+      expect(response.status).toBe(200);
+      // Left for after the answer, never on its way.
+      expect(held.recordShowcaseFeedReadAheadEvent).not.toHaveBeenCalled();
+      await runAfterResponseTasks(held);
+      expect(held.recordShowcaseFeedReadAheadEvent.mock.calls).toEqual([['hold']]);
+
+      const empty = readAheadDependencies({ prepared: null });
+      await readWith(empty, 'sort=for-you&readAhead=1');
+      expect(empty.runAfterResponse).not.toHaveBeenCalled();
+    });
+
+    it("counts a token handed back as a claim or a miss, as the page's read says, and no other read", async () => {
+      const dependencies = readAheadDependencies();
+      vi.mocked(dependencies.getShowcaseFeedPage)
+        .mockImplementationOnce(async (options) => {
+          options.onReadAheadClaim?.(true);
+          return createFeedPage();
+        })
+        .mockImplementationOnce(async (options) => {
+          options.onReadAheadClaim?.(false);
+          return createFeedPage();
+        });
+
+      await readWith(dependencies, `sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`);
+      await readWith(dependencies, `sort=for-you&category=media&offset=0&readAheadToken=${TOKEN}`);
+      await readWith(dependencies, 'sort=for-you&category=media&offset=0');
+      await readWith(dependencies, `sort=for-you&offset=12&readAheadToken=${TOKEN}`);
+      await runAfterResponseTasks(dependencies);
+
+      expect(dependencies.recordShowcaseFeedReadAheadEvent.mock.calls).toEqual([['claim'], ['claim_miss']]);
+      const calls = vi.mocked(dependencies.getShowcaseFeedPage).mock.calls.map(([options]) => options);
+      expect(calls.map((options) => 'onReadAheadClaim' in options)).toEqual([true, true, false, false]);
+    });
+
+    it('answers the read whose count cannot be kept', async () => {
+      const dependencies = readAheadDependencies();
+      dependencies.runAfterResponse.mockImplementation(() => {
+        throw new Error('after() was called outside a request scope');
+      });
+
+      const response = await readWith(dependencies, 'sort=for-you&readAhead=1');
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ readAhead: { token: TOKEN, expiresInMs: 120_000 } });
+      expect(dependencies.logError).toHaveBeenCalledWith('Showcase feed read-ahead count failed:', expect.any(Error));
+    });
 
     it('ranks a signed-in first page ahead and answers only its token, never an ordinary page', async () => {
       const dependencies = readAheadDependencies();

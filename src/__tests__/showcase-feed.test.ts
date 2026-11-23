@@ -2029,6 +2029,8 @@ describe('showcase feed', () => {
     const handed: unknown[] = [];
     vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
       handed.push(options.prepared ?? null);
+      // Served from the held ranking, as the personalized page does.
+      if (options.prepared) options.onPreparedServed?.();
       return {
         items: [],
         feedSessionId: null,
@@ -2043,6 +2045,7 @@ describe('showcase feed', () => {
       filters: ranking.filters,
       viewerUserId: 'viewer-1',
     }));
+    const claims: boolean[] = [];
     const read = (offset: number) => getShowcaseFeedPage({
       category: 'media',
       sort: 'for-you',
@@ -2051,12 +2054,15 @@ describe('showcase feed', () => {
       viewerUserId: 'viewer-1',
       bypassCache: true,
       readAheadToken: readAhead?.token,
+      onReadAheadClaim: (claimed) => claims.push(claimed),
     });
     await read(12);
     await read(0);
     await read(0);
 
     expect(handed).toEqual([null, ranking, null]);
+    // The later page never looks its token up; the second first page finds it spent.
+    expect(claims).toEqual([true, false]);
   });
 
   it('keeps filling For you\'s recent pool by the scan', async () => {

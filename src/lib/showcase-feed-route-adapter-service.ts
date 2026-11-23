@@ -2,7 +2,7 @@ import 'server-only';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { logBackendRouteError } from '@/lib/backend-logger';
 
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 
 import {
   applyPrivateNoStoreApiResponseHeaders,
@@ -39,6 +39,11 @@ import {
 } from '@/lib/showcase';
 import { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
 import { isShowcaseFeedReadAheadToken } from '@/lib/showcase-feed-read-ahead';
+import {
+  recordShowcaseFeedReadAheadEvent,
+  type ShowcaseFeedReadAheadEvent,
+} from '@/lib/showcase-feed-read-ahead-counts';
+import type { RunAfterResponse } from '@/lib/deferrable-notification';
 
 type ShowcaseFeedRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
@@ -48,6 +53,8 @@ type ShowcaseFeedRouteDependencies = {
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   getShowcaseFeedPage?: typeof getShowcaseFeedPage;
   prepareShowcaseFeedReadAhead?: typeof prepareShowcaseFeedReadAhead;
+  recordShowcaseFeedReadAheadEvent?: (event: ShowcaseFeedReadAheadEvent) => Promise<void>;
+  runAfterResponse?: RunAfterResponse;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
 };
@@ -63,6 +70,9 @@ function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undef
     // Read when a read-ahead arrives, not here: a request that is not one never needs it.
     prepareShowcaseFeedReadAhead: dependencies?.prepareShowcaseFeedReadAhead
       ?? ((options: Parameters<typeof prepareShowcaseFeedReadAhead>[0]) => prepareShowcaseFeedReadAhead(options)),
+    recordShowcaseFeedReadAheadEvent: dependencies?.recordShowcaseFeedReadAheadEvent
+      ?? ((event: ShowcaseFeedReadAheadEvent) => recordShowcaseFeedReadAheadEvent(event)),
+    runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
   };
@@ -116,6 +126,16 @@ async function handleShowcaseFeedGET(
       // can diagnose a tail without exposing timings on ordinary public reads.
       response.headers.set('x-scaling-certification-timing', renderedTimings);
       return response;
+    };
+    // Explore's read-ahead counts (`showcase-feed-read-ahead-counts.ts`), kept
+    // once the answer has gone. A count that cannot be scheduled is lost; the
+    // read it counts never is.
+    const countReadAhead = (event: ShowcaseFeedReadAheadEvent) => {
+      try {
+        dependencies.runAfterResponse(() => dependencies.recordShowcaseFeedReadAheadEvent(event));
+      } catch (error) {
+        dependencies.logError('Showcase feed read-ahead count failed:', error);
+      }
     };
     if (timingEnabled) {
       // Admission can run in the proxy or in the regional route handler.
@@ -228,6 +248,7 @@ async function handleShowcaseFeedGET(
         ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
       });
       recordPhase('feed_total', performance.now() - feedStartedAt);
+      if (prepared) countReadAhead('hold');
       // Null: nothing to hold (no active algorithm, an empty ranking). The app
       // then reads the page the ordinary way when Explore opens.
       return withPhaseTimings(NextResponse.json(
@@ -255,7 +276,12 @@ async function handleShowcaseFeedGET(
       // share the same base page instead of rebuilding it per request. An
       // identity-less For you first page is the cached bootstrap.
       bypassCache: (sort === 'for-you' && !identityless) || Boolean(cursor),
-      ...(readAheadToken ? { readAheadToken } : {}),
+      ...(readAheadToken
+        ? {
+          readAheadToken,
+          onReadAheadClaim: (claimed: boolean) => countReadAhead(claimed ? 'claim' : 'claim_miss'),
+        }
+        : {}),
       ...(seedBucket === null ? {} : { seedBucket }),
       ...(fresh ? { fresh } : {}),
       ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
