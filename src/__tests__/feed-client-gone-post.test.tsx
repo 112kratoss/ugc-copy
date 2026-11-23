@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedClient, { forgetFeedRemovalsForTests } from '@/app/feed/FeedClient';
-import type { ShowcaseFeedItem, ShowcaseFeedPage } from '@/lib/showcase';
+import type { ShowcaseFeedItem, ShowcaseFeedPage, ShowcaseMediaItem } from '@/lib/showcase';
 
 vi.mock('@/components/AuthProvider', () => ({
     useAuth: () => ({ session: null, user: null }),
@@ -17,15 +17,15 @@ vi.mock('next/navigation', () => ({
 // button stands for it, so the test drives the lane's real answer.
 vi.mock('@/app/feed/FeedPostCard', () => ({
     default: function MockFeedPostCard({ card, onMediaUnavailable }: {
-        card: { id: string };
-        onMediaUnavailable?: (postId: string) => Promise<'removed' | 'retry'>;
+        card: { id: string; item: ShowcaseFeedItem };
+        onMediaUnavailable?: (postId: string, mediaItem: ShowcaseMediaItem) => Promise<'removed' | 'retry'>;
     }) {
         const [answer, setAnswer] = useState<string | null>(null);
         return (
             <article data-testid={`card:${card.id}`}>
                 <button
                     type="button"
-                    onClick={() => void onMediaUnavailable?.(card.id).then(setAnswer)}
+                    onClick={() => void onMediaUnavailable?.(card.id, card.item.mediaItems![0]!).then(setAnswer)}
                 >
                     {`fail:${card.id}`}
                 </button>
@@ -35,11 +35,27 @@ vi.mock('@/app/feed/FeedPostCard', () => ({
     },
 }));
 
+function mediaUrl(postId: string) {
+    return `/api/media?bucket=post_media&path=private-posts%2F${postId}%2Fphoto.jpg`;
+}
+
 function item(id: string): ShowcaseFeedItem {
     return {
         id,
-        mediaUrl: null,
-        mediaKind: null,
+        mediaUrl: mediaUrl(id),
+        mediaKind: 'image',
+        mediaItems: [{
+            id: `${id}-media`,
+            url: mediaUrl(id),
+            previewUrl: null,
+            mediaKind: 'image',
+            contentType: 'image/jpeg',
+            originalName: 'photo.jpg',
+            width: 800,
+            height: 1000,
+            durationSeconds: null,
+            sortOrder: 0,
+        }],
         model: 'external',
         title: id,
         prompt: '',
@@ -65,19 +81,29 @@ const feed: ShowcaseFeedPage = {
     pageInfo: { hasMore: false, nextOffset: null },
 } as ShowcaseFeedPage;
 
-const resolverAnswers: Record<string, number> = {
-    '/api/showcase/posts/archived-post/resolve': 404,
-    '/api/showcase/posts/live-post/resolve': 200,
+// What the media route answers each post's media now: the archived post's is refused.
+const mediaAnswers: Record<string, number> = {
+    [mediaUrl('archived-post')]: 404,
+    [mediaUrl('live-post')]: 503,
 };
 
-describe('FeedClient: a card whose post left public view', () => {
+let answerGuestPageOne: (page: ShowcaseFeedPage) => void;
+
+describe('FeedClient: a card whose media is gone', () => {
     beforeEach(() => {
         forgetFeedRemovalsForTests();
         vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-            const status = resolverAnswers[String(input)];
-            // The guest's own page one, which the signed-out feed asks for: never answered here.
-            if (!status) return new Promise(() => undefined);
-            return Promise.resolve(new Response(JSON.stringify({}), { status }));
+            const url = String(input);
+            const status = mediaAnswers[url];
+            if (status) return Promise.resolve(new Response(JSON.stringify({}), { status }));
+            // The guest's own page one, which the signed-out feed asks for at
+            // mount and merges under the cards drawn: answered when a test says.
+            if (url.startsWith('/api/showcase/feed')) {
+                return new Promise<Response>((resolve) => {
+                    answerGuestPageOne = (page) => resolve(new Response(JSON.stringify(page), { status: 200 }));
+                });
+            }
+            return new Promise(() => undefined);
         }));
     });
 
@@ -86,19 +112,23 @@ describe('FeedClient: a card whose post left public view', () => {
         vi.unstubAllGlobals();
     });
 
-    it('removes the card when the resolver says the post is gone', async () => {
-        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
-
+    async function failAndWaitForRemoval() {
         await act(async () => {
             fireEvent.click(screen.getByText('fail:archived-post'));
         });
-
         await waitFor(() => expect(screen.queryByTestId('card:archived-post')).not.toBeInTheDocument());
+    }
+
+    it('removes the card when its media is gone, asking the media address itself', async () => {
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+        await failAndWaitForRemoval();
+
         expect(screen.getByTestId('card:live-post')).toBeInTheDocument();
-        expect(fetch).toHaveBeenCalledWith('/api/showcase/posts/archived-post/resolve', expect.anything());
+        expect(fetch).toHaveBeenCalledWith(mediaUrl('archived-post'), expect.objectContaining({ redirect: 'manual' }));
     });
 
-    it('keeps the card, to retry, when the post is still public', async () => {
+    it('keeps the card, to retry, when the media fails for another reason', async () => {
         render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
 
         await act(async () => {
@@ -108,5 +138,29 @@ describe('FeedClient: a card whose post left public view', () => {
         expect(await screen.findByText('answer:live-post:retry')).toBeInTheDocument();
         expect(screen.getByTestId('card:live-post')).toBeInTheDocument();
         expect(screen.getByTestId('card:archived-post')).toBeInTheDocument();
+    });
+
+    it('keeps the post out when a page fetched afterwards brings it back', async () => {
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+        await failAndWaitForRemoval();
+
+        await act(async () => {
+            answerGuestPageOne({ ...feed, items: [item('archived-post'), item('live-post'), item('new-post')] });
+        });
+
+        await waitFor(() => expect(screen.getByTestId('card:new-post')).toBeInTheDocument());
+        expect(screen.queryByTestId('card:archived-post')).not.toBeInTheDocument();
+    });
+
+    it('keeps the post out for the rest of the visit, when the feed opens again with it', async () => {
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+        await failAndWaitForRemoval();
+        cleanup();
+
+        // Back on Home: the page the feed opens with still names the post.
+        render(<FeedClient initialFeed={feed} initialChipId="for-you" />);
+
+        expect(screen.getByTestId('card:live-post')).toBeInTheDocument();
+        expect(screen.queryByTestId('card:archived-post')).not.toBeInTheDocument();
     });
 });

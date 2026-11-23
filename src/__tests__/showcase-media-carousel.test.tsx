@@ -751,6 +751,44 @@ describe('ShowcaseMediaCarousel', () => {
       expect(await screen.findByRole('button', { name: 'Retry image' })).toBeInTheDocument();
     });
 
+    it('holds each failed slide until its own answer, when the reader swipes between them', async () => {
+      const answers = new Map<string, ReturnType<typeof deferredAnswer>>();
+      const onMediaUnavailable = vi.fn((item: ShowcaseMediaItem) => {
+        const pending = deferredAnswer();
+        answers.set(item.id, pending);
+        return pending.promise;
+      });
+      const secondItem = { ...imageItem, id: 'image-2', url: 'https://example.com/second.jpg', previewUrl: 'https://example.com/second.webp', sortOrder: 1 };
+      render(
+        <ShowcaseMediaCarousel
+          title="Campaign still"
+          mediaItems={[imageItem, secondItem]}
+          onMediaUnavailable={onMediaUnavailable}
+        />
+      );
+
+      failImage();
+      fireEvent.click(screen.getByRole('button', { name: 'Next media' }));
+      failImage();
+      expect(onMediaUnavailable).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        answers.get('image-2')!.answer('retry');
+        await answers.get('image-2')!.promise;
+      });
+      expect(screen.getByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+
+      // The first slide's question is still out: no retry there yet.
+      fireEvent.click(screen.getByRole('button', { name: 'Previous media' }));
+      expect(screen.queryByRole('button', { name: 'Retry image' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        answers.get('image-1')!.answer('retry');
+        await answers.get('image-1')!.promise;
+      });
+      expect(screen.getByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+    });
+
     it('asks about a failed feed video the same way', async () => {
       const { promise, answer } = deferredAnswer();
       const mediaItem = createVideoItem();

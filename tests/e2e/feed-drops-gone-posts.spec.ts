@@ -5,9 +5,10 @@ import { expect, test, type Page } from '@playwright/test';
 // media route answers 404 to a new read (`post-media-read-service.ts`). Before
 // 2026-11-23 a feed image never reported the failure, so the card sat on its
 // blurred placeholder for good (seen on production on 2026-11-14). Now the
-// feed asks the live-post resolver about the post: a post that is gone leaves
-// the feed quietly, as a feed drops a post that is no longer there, and a post
-// still public offers a retry, its failure being the media's or the network's.
+// feed asks the failed media address itself: media gone for this viewer (404
+// from the media route, 400 from Storage for a removed public copy) takes the
+// card out quietly, as a feed drops a post that is no longer there, and any
+// other failure offers a retry, its cause being the network's or the server's.
 //
 // Signed out: offline the feed's server read fails, so the feed asks
 // `/api/showcase/feed` from the browser, which this spec answers, as
@@ -88,12 +89,12 @@ function feedItem(key: PostKey) {
 }
 
 /**
- * Answers the feed with the three posts, their media as each post's case
- * needs, and the resolver as the server would: 404 for the archived post, the
- * post itself for the others. Returns the posts the resolver was asked about.
+ * Answers the feed with the three posts and their media as each post's case
+ * needs. Returns the posts whose media address the page asked about from
+ * script, the question a failed load raises (an <img> asks as an image).
  */
 async function answerHome(page: Page) {
-  const asked: string[] = [];
+  const asked = new Set<string>();
   await page.route('**/api/showcase/feed?*', (route) => route.fulfill({
     json: {
       items: (['gone', 'live', 'fine'] as const).map(feedItem),
@@ -103,17 +104,11 @@ async function answerHome(page: Page) {
   await page.route((url) => url.pathname === '/api/media', (route) => {
     const path = new URL(route.request().url()).searchParams.get('path') ?? '';
     const post = Object.values(POSTS).find(({ id }) => path.includes(id));
+    if (post && route.request().resourceType() === 'fetch') asked.add(post.id);
     if (post?.media === 200) return route.fulfill({ status: 200, contentType: 'image/png', body: PIXEL });
     // The archived post's media is refused as the route refuses it (404); the
     // live post's fails as a storage hiccup would (503).
     return route.fulfill({ status: post?.media ?? 404, json: { error: 'Media not found' } });
-  });
-  await page.route((url) => /^\/api\/showcase\/posts\/[^/]+\/resolve$/.test(url.pathname), (route) => {
-    const postId = decodeURIComponent(new URL(route.request().url()).pathname.split('/')[4] ?? '');
-    asked.push(postId);
-    return postId === POSTS.gone.id
-      ? route.fulfill({ status: 404, json: { error: 'Post not found.' } })
-      : route.fulfill({ status: 200, json: { success: true, postId } });
   });
   return asked;
 }
@@ -137,11 +132,12 @@ test('a post that left public view leaves the feed; a live one whose image faile
   await expect(live).toBeVisible();
   await expect(live.getByRole('button', { name: 'Retry image' })).toBeVisible();
 
-  // The image that loaded raised no question, and the card that loaded stays.
+  // The removed card was drawn and its failure asked about (a card never drawn
+  // would pass the count above too); the image that loaded raised no question.
   await expect(card(page, 'fine').getByRole('img', { name: POSTS.fine.title })).toBeVisible();
-  expect(asked).not.toContain(POSTS.fine.id);
-  expect(asked).toContain(POSTS.gone.id);
-  expect(asked).toContain(POSTS.live.id);
+  expect(asked.has(POSTS.gone.id)).toBe(true);
+  expect(asked.has(POSTS.live.id)).toBe(true);
+  expect(asked.has(POSTS.fine.id)).toBe(false);
 });
 
 test('a retried image that loads clears the retry', async ({ page }) => {

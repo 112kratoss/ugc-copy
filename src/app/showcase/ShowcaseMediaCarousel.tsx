@@ -193,8 +193,9 @@ export default function ShowcaseMediaCarousel({
   const attachVideo = useInlineMediaPlayback(activeVideoRef);
   const lifecycleStatusRef = useRef<Map<string, 'ready' | 'error'>>(new Map());
   const [failedLoadKeys, setFailedLoadKeys] = useState<Set<string>>(new Set());
-  // The failed load whose retry waits on `onMediaUnavailable`'s answer.
-  const [askingLoadKey, setAskingLoadKey] = useState<string | null>(null);
+  // The failed loads whose retry waits on `onMediaUnavailable`'s answer, one
+  // per slide, so a reader who swipes between failed slides sees none early.
+  const [askingLoadKeys, setAskingLoadKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [loadAttempts, setLoadAttempts] = useState<Record<string, number>>({});
   const { prefersReducedMotion, saveData } = useMediaLoadingPreferences();
   const requestedAutoPlay = autoPlayVideo ?? mode !== 'feed';
@@ -244,7 +245,7 @@ export default function ShowcaseMediaCarousel({
     ? JSON.stringify([activeItem.id, activePlaybackUrl, activeLoadAttempt])
     : '';
   const hasActiveMediaError = Boolean(activeLoadKey && failedLoadKeys.has(activeLoadKey));
-  const showsRetry = hasActiveMediaError && askingLoadKey !== activeLoadKey;
+  const showsRetry = hasActiveMediaError && !askingLoadKeys.has(activeLoadKey);
   const shouldActuallyPlayVideo = shouldPlayVideo && !hasActiveMediaError;
 
   const reportMediaReady = useCallback((mediaItem: ShowcaseMediaItem, loadKey: string) => {
@@ -304,8 +305,13 @@ export default function ShowcaseMediaCarousel({
     onMediaError?.(activeItem);
     if (!onMediaUnavailable) return;
     const failedLoadKey = activeLoadKey;
-    const offerRetry = () => setAskingLoadKey((current) => (current === failedLoadKey ? null : current));
-    setAskingLoadKey(failedLoadKey);
+    const offerRetry = () => setAskingLoadKeys((current) => {
+      if (!current.has(failedLoadKey)) return current;
+      const next = new Set(current);
+      next.delete(failedLoadKey);
+      return next;
+    });
+    setAskingLoadKeys((current) => new Set(current).add(failedLoadKey));
     onMediaUnavailable(activeItem).then((answer) => {
       // A removed card unmounts; its frame keeps the placeholder until then.
       if (answer !== 'removed') offerRetry();
