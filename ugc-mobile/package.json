@@ -44,7 +44,7 @@
     "@react-navigation/bottom-tabs": "^7.15.5",
     "@react-navigation/native": "^7.1.33",
     "@shopify/flash-list": "2.3.2",
-    "@supabase/supabase-js": "2.105.4",
+    "@supabase/auth-js": "2.105.4",
     "@tanstack/react-query": "5.100.10",
     "expo": "~55.0.32",
     "expo-apple-authentication": "~55.0.17",
@@ -86,6 +86,7 @@
     "react-native-worklets": "0.7.4"
   },
   "devDependencies": {
+    "@supabase/supabase-js": "2.105.4",
     "@types/react": "~19.2.10",
     "@types/react-test-renderer": "19.1.0",
     "babel-preset-expo": "~55.0.8",

@@ -22,6 +22,7 @@ const POST_MEDIA_PATH_COLUMNS = [
   'rendition_storage_path',
   'teaser_storage_path',
   'display_storage_path',
+  'thumb_storage_path',
 ] as const;
 
 export type PostModerationQueueItem = {
@@ -252,6 +253,7 @@ type PostMediaModerationRow = {
   rendition_storage_path: string | null;
   display_storage_path?: string | null;
   teaser_storage_path: string | null;
+  thumb_storage_path?: string | null;
   external_url: string | null;
 };
 
@@ -452,7 +454,7 @@ export async function revokePostPublicMedia(
       .maybeSingle(),
     supabase
       .from('post_media')
-      .select('storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path, display_storage_path, external_url')
+      .select('storage_path, preview_storage_path, rendition_storage_path, teaser_storage_path, display_storage_path, thumb_storage_path, external_url')
       .eq('post_id', postId),
   ]);
 

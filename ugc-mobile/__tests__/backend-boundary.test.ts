@@ -39,7 +39,6 @@ describe('mobile backend boundary', () => {
 
   it('keeps Supabase database and storage authority out of mobile app code', () => {
     const disallowedSupabaseFiles = mobileSourceFiles
-      .filter((filePath) => !['lib/media.ts', 'lib/supabase.ts'].includes(relativePath(filePath)))
       .filter((filePath) => /supabase\.(from|rpc|functions|storage|channel|realtime)\b/.test(readFileSync(filePath, 'utf8')))
       .map(relativePath);
 

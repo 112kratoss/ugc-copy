@@ -507,6 +507,7 @@ async function repairPostMedia(
       storagePath,
       supabase,
       onUploaded: (path) => { uploaded.push(path); },
+      withThumb: true,
     });
     if (!preview) throw new Error('Media type does not support a visual preview.');
 
@@ -517,6 +518,10 @@ async function repairPostMedia(
       // readers fall back to the source. Written either way so a repair that
       // replaces the media cannot leave the old display behind.
       display_storage_path: preview.displayStoragePath ?? null,
+      // The same for the row thumb: null when none was made, and a search row
+      // then draws the preview. A thumb the row stops naming goes to the
+      // revocation queue (trigger `post_media_thumb_follows_its_preview`).
+      thumb_storage_path: preview.thumbStoragePath ?? null,
       preview_status: 'ready',
       preview_attempt_count: reservedAttempt,
       preview_error: null,
@@ -530,7 +535,7 @@ async function repairPostMedia(
       supabase,
       resultQuery.select('id'),
       uploaded,
-      [preview.previewStoragePath, preview.displayStoragePath],
+      [preview.previewStoragePath, preview.displayStoragePath, preview.thumbStoragePath],
     );
   } catch (error) {
     const failure = supabase.from('post_media').update({
@@ -1201,7 +1206,10 @@ export type VideoPosterRegenerationSummary = {
 };
 
 type ReadyGenerationVideoRow = GenerationRepairRow & { preview_url: string | null };
-type ReadyPostMediaVideoRow = PostMediaRepairRow & { preview_storage_path: string | null };
+type ReadyPostMediaVideoRow = PostMediaRepairRow & {
+  preview_storage_path: string | null;
+  thumb_storage_path?: string | null;
+};
 
 const VIDEO_SOURCE_EXTENSION = /\.(m4v|mov|mp4|webm)(\?|#|$)/i;
 
@@ -1280,7 +1288,7 @@ export async function regenerateVideoPosters(
 
   const postResult = await supabase
     .from('post_media')
-    .select('id, post_id, storage_path, media_kind, content_type, preview_storage_path, preview_attempt_count')
+    .select('id, post_id, storage_path, media_kind, content_type, preview_storage_path, thumb_storage_path, preview_attempt_count')
     .eq('media_kind', 'video')
     .eq('preview_status', 'ready')
     .not('preview_storage_path', 'is', null)
@@ -1310,21 +1318,28 @@ export async function regenerateVideoPosters(
         storagePath,
         supabase,
         onUploaded: (path) => { uploaded.push(path); },
+        withThumb: true,
       });
       if (!preview) throw new Error('Media type does not support a visual preview.');
       if (preview.previewStoragePath === row.preview_storage_path) {
+        // The same poster, so the same thumb (made from its bytes), unless the
+        // row has none yet: what it does not name goes to the queue.
+        await queueUnrecordedShowcaseMedia(supabase, uploaded.filter((path) => (
+          path !== row.preview_storage_path && path !== row.thumb_storage_path
+        )));
         posts.unchanged += 1;
         log(`post_media ${row.id}: poster already at the first frame`);
         continue;
       }
-      // Only the poster fields. A video row's width/height describe the clip,
-      // and a poster result carries none.
+      // Only the poster fields and the thumb made from the poster. A video
+      // row's width/height describe the clip, and a poster result carries none.
       const update = supabase.from('post_media').update({
         preview_storage_path: preview.previewStoragePath,
         preview_thumbhash: preview.previewThumbhash,
         preview_generated_at: new Date().toISOString(),
+        thumb_storage_path: preview.thumbStoragePath ?? null,
       }).eq('id', row.id);
-      if (!await recordOrQueue(supabase, update.select('id'), uploaded, [preview.previewStoragePath])) {
+      if (!await recordOrQueue(supabase, update.select('id'), uploaded, [preview.previewStoragePath, preview.thumbStoragePath])) {
         posts.failed += 1;
         log(`post_media ${row.id}: gone before its new poster was recorded`);
         continue;

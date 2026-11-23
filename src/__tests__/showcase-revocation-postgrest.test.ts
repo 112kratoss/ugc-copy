@@ -267,7 +267,14 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await db.query("update public.post_media set content_type='image/png',preview_storage_path=null,display_storage_path=null,preview_status='pending',preview_attempt_count=0,preview_locked_at=null,preview_locked_by=null where post_id=$1",[postId]);
     const objectPrefix='/storage/v1/object/showcase_media/';
     let uploaded:string|null=null;
+    let thumb:string|null=null;
     intercept=async(url,method,target,init)=>{
+      // The row thumb the sweep makes from that preview (20261123152813), after
+      // the post is gone: unrecorded alike, so queued and removed with it.
+      if(!thumb&&method==='POST'&&url.pathname.startsWith(`${objectPrefix}showcase/${generationId}/source.thumb.`)){
+        thumb=decodeURIComponent(url.pathname.slice(objectPrefix.length));paths.push(thumb);
+        return null;
+      }
       if(uploaded||method!=='POST'||!url.pathname.startsWith(`${objectPrefix}showcase/${generationId}/source.preview.`))return null;
       const response=await originalFetch(target,init);expect(response.ok).toBe(true);
       uploaded=decodeURIComponent(url.pathname.slice(objectPrefix.length));paths.push(uploaded);
@@ -277,7 +284,9 @@ describe.skipIf(!configPath||!connectionString)('background showcase revocation 
     await repairMediaPreviews(admin,{batchSize:5,invalidateShowcaseFeedAndRefreshEveryPage:vi.fn()});
     intercept=null;
     expect(uploaded,'The sweep never uploaded a preview').not.toBeNull();
+    expect(thumb,'The sweep never uploaded the preview\'s thumb').not.toBeNull();
     expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,uploaded])).rows).toEqual([{reason:'sweep_unrecorded'}]);
+    expect((await db.query('select reason from public.showcase_media_revocations where generation_id=$1 and showcase_asset_path=$2',[generationId,thumb])).rows).toEqual([{reason:'sweep_unrecorded'}]);
     await db.query("update public.showcase_media_revocations set next_attempt_at=now()-interval '1 minute' where generation_id=$1",[generationId]);
     expect(await processShowcaseMediaRevocations(admin,{now:new Date()})).toMatchObject({due:paths.length,removed:paths.length,rescheduled:0});
     await assertRemoved();

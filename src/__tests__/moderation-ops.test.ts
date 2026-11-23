@@ -556,6 +556,7 @@ describe('moderation operations', () => {
           rendition_storage_path: null,
           teaser_storage_path: null,
           display_storage_path: null,
+          thumb_storage_path: null,
           external_url: null,
         };
       }
