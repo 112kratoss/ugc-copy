@@ -265,6 +265,7 @@ type GenerationPostCoverRow = {
   display_storage_path?: string | null;
   rendition_storage_path?: string | null;
   teaser_storage_path?: string | null;
+  thumb_storage_path?: string | null;
 };
 
 function isDuplicateRowError(error: { code?: string } | null): boolean {
@@ -363,7 +364,7 @@ export async function ensureGenerationPostCoverMedia({
 
   const { data, error: loadError } = await adminSupabase
     .from('post_media')
-    .select('id, storage_path, sort_order, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path')
+    .select('id, storage_path, sort_order, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path, thumb_storage_path')
     .eq('post_id', postId);
   if (loadError) {
     return { outcome: 'failed', error: loadError };
@@ -418,6 +419,8 @@ export async function ensureGenerationPostCoverMedia({
         teaser_generated_at: null,
         teaser_error: null,
         teaser_attempt_count: 0,
+        // Made from the old preview; the sweep makes the new one with it.
+        thumb_storage_path: null,
         // The old values were measured from the replaced file. The seed
         // describes the file the row now points at.
         width: coverSize?.width ?? null,
@@ -469,7 +472,7 @@ export async function ensureGenerationPostCoverMedia({
 
 /**
  * Retires what a repointed cover row stopped serving: the superseded derivative
- * and the preview, display, rendition and teaser built from it. Only a path
+ * and the preview, display, rendition, teaser and thumb built from it. Only a path
  * under this generation's own showcase prefix is removed, and never the one
  * the row now points at. The row has already moved, so a removal that fails
  * leaves an orphan in the public bucket — exactly what every repoint left
@@ -495,6 +498,7 @@ async function retireSupersededCoverObjects({
     coverRow.display_storage_path,
     coverRow.rendition_storage_path,
     coverRow.teaser_storage_path,
+    coverRow.thumb_storage_path,
   ]) {
     const canonicalPath = getCanonicalGenerationShowcaseAssetPath(candidate, generationId);
     if (canonicalPath && canonicalPath !== derivativePath) superseded.add(canonicalPath);
@@ -552,7 +556,7 @@ export async function removeGenerationShowcaseDerivative({
   if (postId) {
     const { data, error: loadError } = await adminSupabase
       .from('post_media')
-      .select('id, storage_path, preview_storage_path, rendition_storage_path, display_storage_path, teaser_storage_path')
+      .select('id, storage_path, preview_storage_path, rendition_storage_path, display_storage_path, teaser_storage_path, thumb_storage_path')
       .eq('post_id', postId);
     if (loadError) {
       return { removed: false, removedPaths: [], removedMediaRows: 0, error: loadError };
@@ -564,12 +568,13 @@ export async function removeGenerationShowcaseDerivative({
       rendition_storage_path?: string | null;
       display_storage_path?: string | null;
       teaser_storage_path?: string | null;
+      thumb_storage_path?: string | null;
     };
     const legacyRows = ((data ?? []) as LegacyMediaRow[]).filter((row) => (
       Boolean(getCanonicalGenerationShowcaseAssetPath(row.storage_path, generationId))
     ));
     for (const row of legacyRows) {
-      for (const candidate of [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.display_storage_path, row.teaser_storage_path]) {
+      for (const candidate of [row.storage_path, row.preview_storage_path, row.rendition_storage_path, row.display_storage_path, row.teaser_storage_path, row.thumb_storage_path]) {
         const canonicalPath = getCanonicalGenerationShowcaseAssetPath(candidate, generationId);
         if (canonicalPath) removablePaths.add(canonicalPath);
       }

@@ -2069,10 +2069,12 @@ describe('for-you-rules v3 wiring', () => {
         hydratePostIds = async (ids: string[]) => ids.map(item),
         viewerUserId = 'viewer-1',
         fresh = false,
+        onPreparedServed,
       }: {
         hydratePostIds?: (ids: string[]) => Promise<ShowcaseFeedItem[]>;
         viewerUserId?: string | null;
         fresh?: boolean;
+        onPreparedServed?: () => void;
       } = {},
     ) {
       return getPersonalizedShowcaseFeedPage({
@@ -2087,6 +2089,7 @@ describe('for-you-rules v3 wiring', () => {
         serviceClient: client,
         viewerUserId,
         ...(fresh ? { fresh } : {}),
+        ...(onPreparedServed ? { onPreparedServed } : {}),
       });
     }
 
@@ -2122,8 +2125,12 @@ describe('for-you-rules v3 wiring', () => {
     it('serves the prepared ranking when it is shown, persisting it then with only page one served', async () => {
       const prepared = await prepare(v3Client({ candidates }).client);
       const { client, persisted, rpc } = v3Client({ candidates });
+      const onPreparedServed = vi.fn();
 
-      const page = await serve(client, prepared);
+      const page = await serve(client, prepared, { onPreparedServed });
+
+      // Says so, for the read-ahead's claim count.
+      expect(onPreparedServed).toHaveBeenCalledTimes(1);
 
       // No new retrieval: the ranking served is the one prepared, in its order.
       expect(rpc.mock.calls.map(([name]) => name)).toEqual(['persist_ranked_feed_session']);
@@ -2172,8 +2179,9 @@ describe('for-you-rules v3 wiring', () => {
     it('ranks afresh when the prepared ranking is for someone else, or its checks cannot be read', async () => {
       const prepared = await prepare(v3Client({ candidates }).client);
 
+      const onPreparedServed = vi.fn();
       const otherViewer = v3Client({ candidates });
-      const otherPage = await serve(otherViewer.client, prepared, { viewerUserId: 'viewer-2' });
+      const otherPage = await serve(otherViewer.client, prepared, { viewerUserId: 'viewer-2', onPreparedServed });
       expect(otherViewer.rpc.mock.calls.map(([name]) => name)).toEqual([
         'get_ranked_feed_candidates_v3',
         'persist_ranked_feed_session',
@@ -2182,8 +2190,9 @@ describe('for-you-rules v3 wiring', () => {
       expect(otherPage.items).toHaveLength(12);
 
       const unreadable = v3Client({ candidates, failingTable: 'feed_user_post_feedback' });
-      await serve(unreadable.client, prepared);
+      await serve(unreadable.client, prepared, { onPreparedServed });
       expect(unreadable.rpc.mock.calls[0][0]).toBe('get_ranked_feed_candidates_v3');
+      expect(onPreparedServed).not.toHaveBeenCalled();
     });
 
     it('reuses a session read within the window rather than serving page one a second time', async () => {
@@ -2211,13 +2220,16 @@ describe('for-you-rules v3 wiring', () => {
         })),
       };
       const { client, persisted, rpc } = v3Client({ candidates, rows, session });
+      const onPreparedServed = vi.fn();
 
-      const page = await serve(client, prepared);
+      const page = await serve(client, prepared, { onPreparedServed });
 
       expect(page.feedSessionId).toBe('session-earlier');
       expect(page.items.map((entry) => entry.id)).toEqual(['earlier-a', 'earlier-b']);
       expect(persisted).toEqual([]);
       expect(rpc).not.toHaveBeenCalled();
+      // Not the held ranking: its token counts as a miss.
+      expect(onPreparedServed).not.toHaveBeenCalled();
     });
 
     // A reader's own refresh (a pull, "New posts") asks for a new ranking: the

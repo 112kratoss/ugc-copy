@@ -40,7 +40,11 @@ ALTER TABLE public.post_media
       CASE WHEN starts_with(rendition_storage_path, 'private-posts/' || post_id::text || '/')
         THEN 'public-posts/' || substr(rendition_storage_path, 15) END,
       CASE WHEN starts_with(teaser_storage_path, 'private-posts/' || post_id::text || '/')
-        THEN 'public-posts/' || substr(teaser_storage_path, 15) END
+        THEN 'public-posts/' || substr(teaser_storage_path, 15) END,
+      -- The row thumb (20261123152813) lives only in a creation's public
+      -- folder today; named here so a copy of one stays held to its row too.
+      CASE WHEN starts_with(thumb_storage_path, 'private-posts/' || post_id::text || '/')
+        THEN 'public-posts/' || substr(thumb_storage_path, 15) END
     ]
   );
 
@@ -208,7 +212,8 @@ BEGIN
     public.post_media_public_copy_path(NEW.post_id, NEW.preview_storage_path),
     public.post_media_public_copy_path(NEW.post_id, NEW.display_storage_path),
     public.post_media_public_copy_path(NEW.post_id, NEW.rendition_storage_path),
-    public.post_media_public_copy_path(NEW.post_id, NEW.teaser_storage_path)
+    public.post_media_public_copy_path(NEW.post_id, NEW.teaser_storage_path),
+    public.post_media_public_copy_path(NEW.post_id, NEW.thumb_storage_path)
   ];
 
   SELECT coalesce(array_agg(DISTINCT recorded.path), '{}'::text[])
@@ -237,7 +242,7 @@ $$;
 
 CREATE TRIGGER post_media_prune_public_copies
 BEFORE UPDATE OF storage_path, preview_storage_path, display_storage_path, rendition_storage_path,
-  teaser_storage_path, post_id
+  teaser_storage_path, thumb_storage_path, post_id
 ON public.post_media
 FOR EACH ROW
 EXECUTE FUNCTION public.prune_post_media_public_copies();
@@ -375,7 +380,8 @@ AS $$
     (media.preview_storage_path),
     (media.display_storage_path),
     (CASE WHEN media.rendition_status = 'ready' THEN media.rendition_storage_path END),
-    (media.teaser_storage_path)
+    (media.teaser_storage_path),
+    (media.thumb_storage_path)
   ) AS named(object_path)
   CROSS JOIN LATERAL (
     SELECT (objects.metadata->>'size')::bigint AS size_bytes
@@ -493,7 +499,7 @@ BEGIN
       WHERE media.post_id = p_post_id
         AND v_source = ANY(ARRAY[
           media.storage_path, media.preview_storage_path, media.display_storage_path,
-          media.rendition_storage_path, media.teaser_storage_path
+          media.rendition_storage_path, media.teaser_storage_path, media.thumb_storage_path
         ])
         AND NOT (v_copy = ANY(media.public_copy_paths));
       -- A copy of the path begun under 15 minutes ago may still land: its row
@@ -517,7 +523,7 @@ BEGIN
         WHERE media.post_id = p_post_id
           AND v_source = ANY(ARRAY[
             media.storage_path, media.preview_storage_path, media.display_storage_path,
-            media.rendition_storage_path, media.teaser_storage_path
+            media.rendition_storage_path, media.teaser_storage_path, media.thumb_storage_path
           ])
       ) THEN
       SELECT (objects.metadata->>'size')::bigint INTO v_source_size
@@ -533,7 +539,7 @@ BEGIN
         WHERE media.post_id = p_post_id
           AND v_source = ANY(ARRAY[
             media.storage_path, media.preview_storage_path, media.display_storage_path,
-            media.rendition_storage_path, media.teaser_storage_path
+            media.rendition_storage_path, media.teaser_storage_path, media.thumb_storage_path
           ])
           AND NOT (v_copy = ANY(media.public_copy_paths));
         -- A sweep that replaced the source on the row meanwhile (it takes no

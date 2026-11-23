@@ -4065,6 +4065,7 @@ describe('updateOwnerPostForRoute', () => {
           width: 800,
           height: 600,
           displayStoragePath: null,
+          thumbStoragePath: null,
         })),
       },
     });

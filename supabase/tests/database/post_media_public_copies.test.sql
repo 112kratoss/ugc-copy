@@ -3,7 +3,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(71);
+select plan(73);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at) values
   ('ac100000-0000-4000-8000-000000000001', 'copies-owner@example.invalid', 'authenticated', 'authenticated', '{}', '{}', now()),
@@ -134,6 +134,30 @@ select results_eq(
   $$select private_object, object_bytes from public.post_media_public_copy_sources('be100000-0000-4000-8000-000000000001')$$,
   $$values ('private-posts/be100000-0000-4000-8000-000000000001/0/clip.feed.mp4'::text, 50::bigint)$$,
   'a ready rendition Storage holds is one, with its size');
+
+-- The row thumb (20261123152813) lives only in a creation's public folder:
+-- never a copy source, and a write that names it leaves the row's copies be.
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, showcase_asset_path)
+values ('bf300000-0000-4000-8000-000000000001', 'ac100000-0000-4000-8000-000000000001', 'private', 'image', 'manual', 'media',
+  'private-posts/bf300000-0000-4000-8000-000000000001/0/photo.jpg');
+insert into public.post_media (post_id, storage_path, preview_storage_path, thumb_storage_path, media_kind, sort_order)
+values ('bf300000-0000-4000-8000-000000000001', 'private-posts/bf300000-0000-4000-8000-000000000001/0/photo.jpg',
+  'showcase/cf300000-0000-4000-8000-000000000001/photo.preview.webp',
+  'showcase/cf300000-0000-4000-8000-000000000001/photo.thumb.webp', 'image', 0);
+update public.posts set visibility = 'public' where id = 'bf300000-0000-4000-8000-000000000001';
+insert into storage.objects (bucket_id, name, metadata) values
+  ('post_media', 'private-posts/bf300000-0000-4000-8000-000000000001/0/photo.jpg', '{"size":100}'),
+  ('showcase_media', 'public-posts/bf300000-0000-4000-8000-000000000001/0/photo.jpg', '{"size":100}');
+select results_eq(
+  $$select private_object from public.post_media_public_copy_sources('bf300000-0000-4000-8000-000000000001')$$,
+  $$values ('private-posts/bf300000-0000-4000-8000-000000000001/0/photo.jpg'::text)$$,
+  'a row thumb in a creation''s public folder is no copy source');
+do $$ begin perform * from public.begin_post_media_public_copies('bf300000-0000-4000-8000-000000000001'); end $$;
+do $$ begin perform public.commit_post_media_public_copies('bf300000-0000-4000-8000-000000000001',
+  array['public-posts/bf300000-0000-4000-8000-000000000001/0/photo.jpg']); end $$;
+update public.post_media set thumb_storage_path = thumb_storage_path
+where post_id = 'bf300000-0000-4000-8000-000000000001';
+select is(pg_temp.recorded('bf300000-0000-4000-8000-000000000001'), 1, 'a write naming the thumb keeps the row''s copies');
 
 -- A removal that verifies a path gone while a copy of it began minutes ago
 -- keeps the row until that copy could no longer land.

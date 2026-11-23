@@ -34,7 +34,8 @@ describe('post media public copies migration', () => {
 
   it('lets a row record only the public twin of its own private paths', () => {
     expect(sql).toContain('ADD CONSTRAINT post_media_public_copy_paths_check CHECK ( public_copy_paths <@ ARRAY[');
-    for (const column of ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path']) {
+    // Every path column the row has, the row thumb (20261123152813) included.
+    for (const column of ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path', 'thumb_storage_path']) {
       expect(sql).toContain(
         `CASE WHEN starts_with(${column}, 'private-posts/' || post_id::text || '/') THEN 'public-posts/' || substr(${column}, 15) END`,
       );
@@ -67,7 +68,7 @@ describe('post media public copies migration', () => {
     );
     expect(sql).toContain('CREATE TRIGGER post_media_queue_deleted_public_copies AFTER DELETE ON public.post_media');
     expect(sql).toContain(
-      'CREATE TRIGGER post_media_prune_public_copies BEFORE UPDATE OF storage_path, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path, post_id ON public.post_media',
+      'CREATE TRIGGER post_media_prune_public_copies BEFORE UPDATE OF storage_path, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path, thumb_storage_path, post_id ON public.post_media',
     );
     expect(sql).toContain('CREATE TRIGGER profiles_revoke_media_public_copies AFTER UPDATE OF identity_state ON public.profiles');
 
@@ -100,6 +101,11 @@ describe('post media public copies migration', () => {
     const sources = definition('CREATE FUNCTION public.post_media_public_copy_sources(p_post_id uuid)');
     expect(sources).toContain("(CASE WHEN media.rendition_status = 'ready' THEN media.rendition_storage_path END)");
     expect(sources).toContain("WHERE objects.bucket_id = 'post_media' AND objects.name = named.object_path");
+    expect(sources).toContain('(media.teaser_storage_path), (media.thumb_storage_path) ) AS named(object_path)');
+    // Commit names the source by every path column, the row thumb included.
+    const commitBody = definition('CREATE FUNCTION public.commit_post_media_public_copies(p_post_id uuid, p_copy_paths text[])');
+    expect(commitBody.split('media.teaser_storage_path, media.thumb_storage_path ])').length - 1).toBe(3);
+    expect(commitBody).not.toMatch(/media\.teaser_storage_path \]\)/u);
 
     const commit = definition('CREATE FUNCTION public.commit_post_media_public_copies(p_post_id uuid, p_copy_paths text[])');
     expect(commit).toContain('SELECT post.user_id INTO v_owner_id FROM public.posts AS post WHERE post.id = p_post_id FOR UPDATE;');
