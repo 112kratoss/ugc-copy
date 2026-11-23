@@ -555,10 +555,9 @@ describe('central route identity admission', () => {
 
     expect(admission.rejection).toBeNull();
     expect(onTokenVerified).toHaveBeenCalledOnce();
-    expect(onTokenVerified).toHaveBeenCalledWith({
-      userId: SUBJECT,
-      claims: expect.objectContaining({ sub: SUBJECT, session_id: SESSION }),
-    });
+    // The subject alone: the hook never holds the claims admission builds its user from.
+    expect(onTokenVerified.mock.calls[0]).toEqual([{ userId: SUBJECT }]);
+    expect(admission.claims).toMatchObject({ sub: SUBJECT, session_id: SESSION });
     const [verifiedAt] = client.auth.getClaims.mock.invocationCallOrder;
     const [toldAt] = onTokenVerified.mock.invocationCallOrder;
     const [lifecycleAt] = client.rpc.mock.invocationCallOrder;

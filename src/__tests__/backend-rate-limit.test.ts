@@ -4,6 +4,7 @@ import {
   BackendRateLimitError,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
+  refundBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 
 function createRpcClient(result: { data: unknown; error: Error | null }) {
@@ -80,5 +81,42 @@ describe('backend rate limiting', () => {
       code: 'RATE_LIMITED',
       retryAfterSeconds: 42,
     });
+  });
+
+  it('gives a count back in the window the check made it in', async () => {
+    const client = createRpcClient({ data: true, error: null });
+
+    await expect(refundBackendRateLimit(client, {
+      scope: 'showcase-feed:for-you-read',
+      key: 'user-1',
+      windowSeconds: 600,
+      resetAt: '2026-11-23T10:10:00.000Z',
+    })).resolves.toBe(true);
+
+    expect(client.rpc).toHaveBeenCalledWith('refund_backend_rate_limit', {
+      p_scope: 'showcase-feed:for-you-read',
+      p_subject_key: 'user-1',
+      p_window_start: '2026-11-23T10:00:00.000Z',
+    });
+  });
+
+  it('says when a window had nothing left to give, and throws a failed refund', async () => {
+    const options = { scope: 'scope', key: 'key', windowSeconds: 600, resetAt: '2026-11-23T10:10:00.000Z' };
+    await expect(refundBackendRateLimit(createRpcClient({ data: false, error: null }), options)).resolves.toBe(false);
+    await expect(refundBackendRateLimit(createRpcClient({ data: null, error: new Error('down') }), options))
+      .rejects.toThrow('down');
+  });
+
+  it('refuses a refund it cannot place before asking the database', async () => {
+    const client = createRpcClient({ data: true, error: null });
+    for (const options of [
+      { scope: ' ', key: 'key', windowSeconds: 600, resetAt: '2026-11-23T10:10:00.000Z' },
+      { scope: 'scope', key: '', windowSeconds: 600, resetAt: '2026-11-23T10:10:00.000Z' },
+      { scope: 'scope', key: 'key', windowSeconds: 0, resetAt: '2026-11-23T10:10:00.000Z' },
+      { scope: 'scope', key: 'key', windowSeconds: 600, resetAt: 'not a time' },
+    ]) {
+      await expect(refundBackendRateLimit(client, options)).rejects.toThrow();
+    }
+    expect(client.rpc).not.toHaveBeenCalled();
   });
 });

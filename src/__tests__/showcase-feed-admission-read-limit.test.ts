@@ -13,6 +13,13 @@ import { getShowcaseFeedPage } from '@/lib/showcase-feed';
 const mocks = vi.hoisted(() => ({
   limiterRpc: vi.fn(),
   getUser: vi.fn(),
+  afterTasks: [] as Array<() => Promise<void>>,
+}));
+
+// What the route runs after its response (`after()`), held until a test runs it.
+vi.mock('next/server', async (original) => ({
+  ...await original<typeof import('next/server')>(),
+  after: vi.fn((task: () => Promise<void>) => { mocks.afterTasks.push(task); }),
 }));
 
 vi.mock('@supabase/supabase-js', async (original) => ({
@@ -115,11 +122,34 @@ function countedUnder(): Array<Record<string, unknown>> {
   return mocks.limiterRpc.mock.calls.map(([name, args]) => ({ name, ...args as Record<string, unknown> }));
 }
 
+/** Runs what the route left for after its response: the release of a count it started. */
+async function runAfterResponse() {
+  await Promise.all(mocks.afterTasks.splice(0).map((task) => task()));
+}
+
+const FOR_YOU_COUNT = {
+  name: 'check_backend_rate_limit',
+  p_scope: 'showcase-feed:for-you-read',
+  p_subject_key: USER_ID,
+  p_limit: 60,
+  p_window_seconds: 600,
+};
+// The window the count was made in: the check's resetAt less its 600 s.
+const FOR_YOU_REFUND = {
+  name: 'refund_backend_rate_limit',
+  p_scope: 'showcase-feed:for-you-read',
+  p_subject_key: USER_ID,
+  p_window_start: '2026-11-23T10:00:00.000Z',
+};
+
 describe('the feed read limit beside route-owned admission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.afterTasks.length = 0;
     vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'feed-read-limit-test-secret-at-least-32-characters');
-    mocks.limiterRpc.mockImplementation(async () => ({ data: ALLOWED, error: null }));
+    mocks.limiterRpc.mockImplementation(async (name: string) => (
+      name === 'refund_backend_rate_limit' ? { data: true, error: null } : { data: ALLOWED, error: null }
+    ));
     // With the assertion key set, the handler reads its viewer from the assertion, never Auth.
     mocks.getUser.mockImplementation(async () => {
       throw new Error('getUser is not expected while the assertion key is set');
@@ -158,8 +188,10 @@ describe('the feed read limit beside route-owned admission', () => {
     expect(response.status).toBe(200);
     expect(getShowcaseFeedPage).toHaveBeenCalledOnce();
     expect(vi.mocked(getShowcaseFeedPage).mock.calls[0][0]).toMatchObject({ viewerUserId: USER_ID, sort: 'for-you' });
-    // Counted once: the handler read the count started beside admission instead of its own.
-    expect(mocks.limiterRpc).toHaveBeenCalledOnce();
+    // Counted once: the handler read the count started beside admission instead of its own,
+    // and a count the handler claimed is not given back after the answer.
+    await runAfterResponse();
+    expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
     expect(identity.rpc).toHaveBeenCalledOnce();
   });
 
@@ -237,21 +269,25 @@ describe('the feed read limit beside route-owned admission', () => {
       expect(logBackendRouteError).not.toHaveBeenCalled();
     });
 
-    // What a refused session does to the limiter now that both run together: the count went
-    // out before the refusal was known, so the read stays counted, once, against the token's
-    // own verified subject; never against a network's key or another account's.
-    it('keeps the refused read counted once, against the token\'s own subject', async () => {
+    // What a refused session does to the limiter now that both run together: the count went out
+    // before the refusal was known, so it is given back once the refusal has been answered, and
+    // the read spends nothing, as before the count moved (PR #909's review, N1).
+    it.each(COUNT_ANSWERS)('gives the refused read\'s count back after answering, when the count was %s', async (answer, count) => {
       useIdentity(identityClient({ lifecycle }));
+      mocks.limiterRpc.mockImplementation((name: string) => (
+        name === 'refund_backend_rate_limit' ? Promise.resolve({ data: true, error: null }) : count()
+      ));
 
       await GET(feedRequest());
+      // Nothing is given back before the answer is out.
+      expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
 
-      expect(countedUnder()).toEqual([{
-        name: 'check_backend_rate_limit',
-        p_scope: 'showcase-feed:for-you-read',
-        p_subject_key: USER_ID,
-        p_limit: 60,
-        p_window_seconds: 600,
-      }]);
+      await runAfterResponse();
+      expect(countedUnder()).toEqual(answer === 'allowed' || answer === 'over the limit'
+        // The limiter answered, so the count is in: it goes back, in its own window.
+        ? [FOR_YOU_COUNT, FOR_YOU_REFUND]
+        // A failed check may never have counted: nothing goes back.
+        : [FOR_YOU_COUNT]);
     });
   });
 
@@ -273,6 +309,25 @@ describe('the feed read limit beside route-owned admission', () => {
     expect(identity.rpc).not.toHaveBeenCalled();
     expect(mocks.limiterRpc).not.toHaveBeenCalled();
     expect(getShowcaseFeedPage).not.toHaveBeenCalled();
+    expect(mocks.afterTasks).toHaveLength(0);
+  });
+
+  it('answers a refusal at once, while the count is still out, and gives it back once it is in', async () => {
+    const count = deferred<RpcAnswer>();
+    useIdentity(identityClient({ lifecycle: () => Promise.resolve({ data: { ...ACTIVE, session_valid: false }, error: null }) }));
+    mocks.limiterRpc.mockImplementation((name: string) => (
+      name === 'refund_backend_rate_limit' ? Promise.resolve({ data: true, error: null }) : count.promise
+    ));
+
+    // The count never answers before the refusal does (PR #909's review, N2).
+    const response = await GET(feedRequest());
+    expect(response.status).toBe(401);
+    expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
+
+    const released = runAfterResponse();
+    count.resolve({ data: ALLOWED, error: null });
+    await released;
+    expect(countedUnder()).toEqual([FOR_YOU_COUNT, FOR_YOU_REFUND]);
   });
 
   it('answers an exhausted read limit with its 429 once admission passes', async () => {
@@ -295,6 +350,8 @@ describe('the feed read limit beside route-owned admission', () => {
     expect(response.headers.get('X-RateLimit-Reset')).toBe(RESET_AT);
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(getShowcaseFeedPage).not.toHaveBeenCalled();
+    // The handler read the count, so it stands, as a 429'd read always has.
+    await runAfterResponse();
     expect(mocks.limiterRpc).toHaveBeenCalledOnce();
   });
 
@@ -312,6 +369,8 @@ describe('the feed read limit beside route-owned admission', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store');
     expect(logBackendRouteError).toHaveBeenCalledWith('Showcase feed rate limit failed:', expect.anything());
     expect(getShowcaseFeedPage).not.toHaveBeenCalled();
+    await runAfterResponse();
+    expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
   });
 
   it.each([
@@ -325,6 +384,7 @@ describe('the feed read limit beside route-owned admission', () => {
     useIdentity(identityClient());
 
     const response = await GET(feedRequest(query));
+    await runAfterResponse();
 
     expect(response.status).toBe(200);
     expect(countedUnder()).toEqual([{
@@ -349,15 +409,17 @@ describe('the feed read limit beside route-owned admission', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'READ_AHEAD_UNSUPPORTED' });
     expect(mocks.limiterRpc).not.toHaveBeenCalled();
     expect(getShowcaseFeedPage).not.toHaveBeenCalled();
+    expect(mocks.afterTasks).toHaveLength(0);
   });
 
   it('counts a guest\'s read under the guest\'s own id', async () => {
     useIdentity(identityClient({ tokenClaims: claims({ sub: GUEST_ID, is_anonymous: true }) }));
 
     const response = await GET(feedRequest());
+    await runAfterResponse();
 
     expect(response.status).toBe(200);
-    expect(countedUnder()).toEqual([expect.objectContaining({ p_subject_key: GUEST_ID })]);
+    expect(countedUnder()).toEqual([expect.objectContaining({ name: 'check_backend_rate_limit', p_subject_key: GUEST_ID })]);
     expect(vi.mocked(getShowcaseFeedPage).mock.calls[0][0]).toMatchObject({ viewerUserId: GUEST_ID });
   });
 
@@ -366,6 +428,7 @@ describe('the feed read limit beside route-owned admission', () => {
 
     expect(response.status).toBe(200);
     expect(createClient).not.toHaveBeenCalled();
+    expect(mocks.afterTasks).toHaveLength(0);
     expect(countedUnder()).toEqual([expect.objectContaining({ p_scope: 'showcase-feed:read' })]);
     expect(countedUnder()[0].p_subject_key).not.toBe(USER_ID);
   });
@@ -381,10 +444,11 @@ describe('the feed read limit beside route-owned admission', () => {
 
       expect(response.status).toBe(200);
       expect(mocks.getUser).toHaveBeenCalledOnce();
-      expect(mocks.limiterRpc).toHaveBeenCalledOnce();
+      await runAfterResponse();
+      expect(countedUnder()).toEqual([FOR_YOU_COUNT]);
     });
 
-    it('answers the handler\'s 401 as before, with that read counted once against the token\'s subject', async () => {
+    it('answers the handler\'s 401 as before, and gives that read\'s count back after', async () => {
       useIdentity(identityClient());
       mocks.getUser.mockImplementation(async () => ({ data: { user: null }, error: new Error('session not found') }));
 
@@ -392,8 +456,24 @@ describe('the feed read limit beside route-owned admission', () => {
 
       expect(response.status).toBe(401);
       await expect(response.json()).resolves.toEqual({ error: 'Authentication required.' });
-      expect(countedUnder()).toEqual([expect.objectContaining({ p_subject_key: USER_ID })]);
       expect(getShowcaseFeedPage).not.toHaveBeenCalled();
+      await runAfterResponse();
+      expect(countedUnder()).toEqual([FOR_YOU_COUNT, FOR_YOU_REFUND]);
+    });
+
+    it('gives back the count started beside admission when the handler\'s check names another account, so the read counts once', async () => {
+      useIdentity(identityClient());
+      mocks.getUser.mockImplementation(async () => ({ data: { user: { id: GUEST_ID } }, error: null }));
+
+      const response = await GET(feedRequest());
+      await runAfterResponse();
+
+      expect(response.status).toBe(200);
+      expect(countedUnder()).toEqual([
+        FOR_YOU_COUNT,
+        { ...FOR_YOU_COUNT, p_subject_key: GUEST_ID },
+        FOR_YOU_REFUND,
+      ]);
     });
   });
 });

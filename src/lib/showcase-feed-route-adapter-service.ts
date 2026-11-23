@@ -17,6 +17,8 @@ import {
   SHOWCASE_FOR_YOU_FEED_READ_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
+  refundBackendRateLimit,
+  type BackendRateLimitState,
 } from '@/lib/backend-rate-limit';
 import { withProviderFetchRequestId } from '@/lib/provider-fetch';
 import { IDENTITY_PROXY_TIMING_HEADER } from '@/lib/identity-admission-assertion';
@@ -44,6 +46,7 @@ type ShowcaseFeedRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   createUserClient?: typeof createUserClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
+  refundBackendRateLimit?: typeof refundBackendRateLimit;
   getFeedNetworkKeyHash?: typeof getFeedNetworkKeyHash;
   resolveFeedAnonymousIdentity?: typeof resolveFeedAnonymousIdentity;
   getShowcaseFeedPage?: typeof getShowcaseFeedPage;
@@ -57,6 +60,7 @@ function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undef
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     createUserClient: dependencies?.createUserClient ?? createUserClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
+    refundBackendRateLimit: dependencies?.refundBackendRateLimit ?? refundBackendRateLimit,
     getFeedNetworkKeyHash: dependencies?.getFeedNetworkKeyHash ?? getFeedNetworkKeyHash,
     resolveFeedAnonymousIdentity: dependencies?.resolveFeedAnonymousIdentity ?? resolveFeedAnonymousIdentity,
     getShowcaseFeedPage: dependencies?.getShowcaseFeedPage ?? getShowcaseFeedPage,
@@ -136,7 +140,7 @@ function showcaseFeedReadRateLimit(sort: ShowcaseFeedReadQuery['sort']) {
 }
 
 type ShowcaseFeedReadLimitOutcome =
-  | { allowed: true; durationMs: number }
+  | { allowed: true; state: BackendRateLimitState; durationMs: number }
   | { allowed: false; error: unknown; durationMs: number };
 
 /** A signed-in read's count, started beside admission's lifecycle round trip. */
@@ -145,6 +149,15 @@ export type StartedShowcaseFeedReadLimit = {
   key: string;
   /** Settles once the count is in, with the limiter's answer or its error; never rejects. */
   settled: Promise<ShowcaseFeedReadLimitOutcome>;
+  /** The handler's read of the count at its limit step: the count then stands, whatever it says. */
+  claim: () => Promise<ShowcaseFeedReadLimitOutcome>;
+  /**
+   * Run once the request has been answered (`route-owned-identity-admission.ts`): gives the count
+   * back when the handler never claimed it (admission refused the read, or the handler answered
+   * before its limit step), so such a read spends nothing, as before the count moved. Waits for
+   * the count first; never rejects.
+   */
+  release: () => Promise<void>;
 };
 
 /**
@@ -153,8 +166,9 @@ export type StartedShowcaseFeedReadLimit = {
  * waits for the slower of the two instead of both. It counts what the handler below would count
  * for that viewer, under the same scope, limit, window and key, and nothing for a read the
  * handler refuses before counting (a read-ahead it will not serve). The handler reads the answer
- * only once admission has passed. A read whose admission is refused stays counted, once and
- * against the token's own subject, and is answered with admission's refusal as before. Null when
+ * only once admission has passed (`claim`). A read the handler never claims, because admission
+ * refused it or the handler answered first, gets its count back after the answer (`release`,
+ * through `refund_backend_rate_limit`), so it spends nothing, as before the count moved. Null when
  * nothing was started; the handler then counts the read itself.
  */
 export function startShowcaseFeedReadLimit(
@@ -174,18 +188,49 @@ export function startShowcaseFeedReadLimit(
     return null;
   }
   const startedAt = performance.now();
-  const settled = new Promise((resolve) => {
+  const settled = new Promise<BackendRateLimitState>((resolve) => {
     // In the executor, so a dependency that throws instead of rejecting settles as a failure too.
     resolve(resolved.enforceBackendRateLimit(serviceClient, { ...readRateLimit, key: viewerUserId }));
   }).then(
-    (): ShowcaseFeedReadLimitOutcome => ({ allowed: true, durationMs: performance.now() - startedAt }),
+    (state): ShowcaseFeedReadLimitOutcome => ({ allowed: true, state, durationMs: performance.now() - startedAt }),
     (error: unknown): ShowcaseFeedReadLimitOutcome => ({
       allowed: false,
       error,
       durationMs: performance.now() - startedAt,
     }),
   );
-  return { scope: readRateLimit.scope, key: viewerUserId, settled };
+  let claimed = false;
+  return {
+    scope: readRateLimit.scope,
+    key: viewerUserId,
+    settled,
+    claim: () => {
+      claimed = true;
+      return settled;
+    },
+    release: async () => {
+      if (claimed) return;
+      const outcome = await settled;
+      if (claimed) return;
+      // The count is in whenever the limiter answered, allowed or over the limit. A failed check
+      // may never have counted, so nothing is given back for it.
+      const counted = outcome.allowed
+        ? outcome.state
+        : outcome.error instanceof BackendRateLimitError ? outcome.error.state : null;
+      if (!counted) return;
+      try {
+        await resolved.refundBackendRateLimit(serviceClient, {
+          scope: readRateLimit.scope,
+          key: viewerUserId,
+          windowSeconds: readRateLimit.windowSeconds,
+          resetAt: counted.resetAt,
+        });
+      } catch (error) {
+        // The read stays counted: its account sees one more read in this window than it made.
+        resolved.logError('Showcase feed read limit refund failed:', error);
+      }
+    },
+  };
 }
 
 async function handleShowcaseFeedGET(
@@ -281,7 +326,8 @@ async function handleShowcaseFeedGET(
     // normally counted already, beside admission's lifecycle round trip: that count is read
     // here when it was made under the limit and key this step would use (both come from the same
     // address and the same verified subject, so it always is), and answered exactly as this
-    // step's own count would be. Otherwise the read is counted here, as it always was.
+    // step's own count would be. Otherwise the read is counted here, as it always was, and the
+    // count started beside admission, never claimed, is given back after the answer.
     {
       const limiterStartedAt = performance.now();
       const readRateLimit = showcaseFeedReadRateLimit(sort);
@@ -291,7 +337,7 @@ async function handleShowcaseFeedGET(
         && startedReadLimit?.key === viewerUserId
         && startedReadLimit.scope === readRateLimit.scope
       ) {
-        const outcome = await startedReadLimit.settled;
+        const outcome = await startedReadLimit.claim();
         // What admission's round trip did not already cover.
         recordPhase('rate_limit_wait', performance.now() - limiterStartedAt);
         if (outcome.allowed) recordPhase('rate_limit', outcome.durationMs);

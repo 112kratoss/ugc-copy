@@ -24,7 +24,6 @@ type ProxyIdentityClient = {
 export type VerifiedRouteToken = {
   /** The token's subject: a well-formed user id from a signature checked here. */
   userId: string;
-  claims: ProxyIdentityClaims;
 };
 
 export type ProxyIdentityDependencies = {
@@ -204,7 +203,8 @@ export async function evaluateUserFacingRouteIdentity(
     // below, or a lifecycle refusal first), so nothing is started for it.
     if (dependencies.onTokenVerified && !(policy === 'registered' && isAnonymous)) {
       try {
-        dependencies.onTokenVerified({ userId, claims });
+        // The subject alone: the claims stay admission's, which builds its user from them below.
+        dependencies.onTokenVerified({ userId });
       } catch {
         // The hook's work is the route's own; admission's answer does not depend on it.
       }

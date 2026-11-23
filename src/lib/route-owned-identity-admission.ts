@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { after, NextRequest } from 'next/server';
 
 import { MCP_POSTS_ROUTE_PATH, MCP_ROUTE_PATH } from '@/lib/agent-token';
 import {
@@ -68,12 +68,26 @@ export async function rebuildAdmittedRequest(
 }
 
 /**
- * Work a route starts beside the lifecycle round trip (`besideLifecycle`). `settled` must never
- * reject: it is what the route's answer waits for.
+ * Work a route starts beside the lifecycle round trip (`besideLifecycle`). Neither promise may
+ * reject. `release` runs after the request has been answered, whatever the answer, and undoes the
+ * work unless the route's handler used it (the feed gives back a count no handler read).
  */
 export type StartedBesideLifecycle = {
   readonly settled: Promise<unknown>;
+  readonly release: () => Promise<void>;
 };
+
+/**
+ * Runs a task after the response is sent (`after()`). Outside a request's scope, where `after`
+ * throws (a route export called directly, as the tests do), the task runs at once, unawaited.
+ */
+function runAfterResponseByDefault(task: () => Promise<void>) {
+  try {
+    after(task);
+  } catch {
+    void task();
+  }
+}
 
 /**
  * Run the same fresh checks at the route, before any route work.
@@ -83,14 +97,16 @@ export type StartedBesideLifecycle = {
  * work that only needs that subject and that the route would do for an admitted request anyway
  * (the feed's read limit). The route's handler, which runs only once admission has passed, gets
  * what it started (null when nothing was: no token, or a token refused before the round trip).
- * A refusal answers exactly as it would without it and never reads what the work found. Either
- * way the answer waits until the started work has settled, so no request leaves it running.
+ * A refusal answers at once, exactly as it would without it, and never reads what the work found.
+ * Every answer is followed by the work's `release`, after the response (`runAfterResponse`), so
+ * work no handler used is undone without delaying any answer.
  */
 export async function withRouteOwnedIdentityAdmission<Started extends StartedBesideLifecycle = never>(
   request: NextRequest,
   handler: (admitted: NextRequest, started: Started | null) => Promise<Response>,
   dependencies: ProxyIdentityDependencies = {},
   besideLifecycle?: (token: VerifiedRouteToken) => Started | null,
+  runAfterResponse: (task: () => Promise<void>) => void = runAfterResponseByDefault,
 ): Promise<Response> {
   const beside: { started: Started | null } = { started: null };
   // Never trust an incoming assertion, even a still-valid one: revocation and
@@ -109,7 +125,7 @@ export async function withRouteOwnedIdentityAdmission<Started extends StartedBes
     if (admission.rejection) return admission.rejection;
     return await handler(await rebuildAdmittedRequest(request, admission), beside.started);
   } finally {
-    // Nothing started here outlives the answer, even one the handler returned without reading it.
-    await beside.started?.settled.catch(() => undefined);
+    const { started } = beside;
+    if (started) runAfterResponse(() => started.release().catch(() => undefined));
   }
 }

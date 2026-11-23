@@ -833,10 +833,15 @@ describe('showcase feed route adapter service', () => {
 
     it('is not read when it counted another key or limit: the handler counts the read itself', async () => {
       const dependencies = signedInDependencies(async () => ({}));
-      for (const startedReadLimit of [
-        { scope: 'showcase-feed:for-you-read', key: 'someone-else', settled: Promise.resolve({ allowed: true as const, durationMs: 1 }) },
-        { scope: 'showcase-feed:read', key: 'user-1', settled: Promise.resolve({ allowed: true as const, durationMs: 1 }) },
-      ]) {
+      for (const [scope, key] of [['showcase-feed:for-you-read', 'someone-else'], ['showcase-feed:read', 'user-1']]) {
+        const outcome = { allowed: true as const, state: { allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: RESET_AT }, durationMs: 1 };
+        const startedReadLimit = {
+          scope,
+          key,
+          settled: Promise.resolve(outcome),
+          claim: vi.fn(async () => outcome),
+          release: vi.fn(async () => undefined),
+        };
         vi.mocked(dependencies.enforceBackendRateLimit).mockClear();
         const response = await getShowcaseFeedRouteResponse({ request: signedInRequest(), dependencies, startedReadLimit });
         expect(response.status).toBe(200);
@@ -845,7 +850,69 @@ describe('showcase feed route adapter service', () => {
           scope: 'showcase-feed:for-you-read',
           key: 'user-1',
         }));
+        // Left unclaimed, so the route's release gives it back: the read is counted once.
+        expect(startedReadLimit.claim).not.toHaveBeenCalled();
       }
+    });
+
+    describe('given back when the handler never claimed it', () => {
+      const STATE = { allowed: true, limit: 60, remaining: 59, retryAfterSeconds: 0, resetAt: RESET_AT };
+
+      function refundDependencies(answer: () => Promise<unknown>) {
+        return {
+          ...signedInDependencies(answer),
+          refundBackendRateLimit: vi.fn(async () => true),
+        };
+      }
+
+      it.each([
+        ['allowed', async () => STATE],
+        ['over the limit', async () => {
+          throw new BackendRateLimitError({ ...STATE, allowed: false, remaining: 0, retryAfterSeconds: 42 });
+        }],
+      ])('gives back a count the limiter made (%s), in the window it was made in', async (_case, answer) => {
+        const dependencies = refundDependencies(answer);
+        const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;
+
+        await startedReadLimit.release();
+
+        expect(dependencies.refundBackendRateLimit).toHaveBeenCalledOnce();
+        expect(dependencies.refundBackendRateLimit).toHaveBeenCalledWith(expect.anything(), {
+          scope: 'showcase-feed:for-you-read',
+          key: 'user-1',
+          windowSeconds: 600,
+          resetAt: RESET_AT,
+        });
+      });
+
+      it.each([
+        ['answered with an error', async () => { throw new Error('limiter down'); }],
+        ['thrown synchronously', () => { throw new Error('thrown'); }],
+      ])('gives nothing back for a check that %s, which may never have counted', async (_case, answer) => {
+        const dependencies = refundDependencies(answer as () => Promise<unknown>);
+        await startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!.release();
+        expect(dependencies.refundBackendRateLimit).not.toHaveBeenCalled();
+      });
+
+      it('leaves a count the handler claimed standing, whatever it said', async () => {
+        const dependencies = refundDependencies(async () => STATE);
+        const startedReadLimit = startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!;
+
+        const response = await getShowcaseFeedRouteResponse({ request: signedInRequest(), dependencies, startedReadLimit });
+        await startedReadLimit.release();
+
+        expect(response.status).toBe(200);
+        expect(dependencies.refundBackendRateLimit).not.toHaveBeenCalled();
+      });
+
+      it('logs a refund that failed and still settles: the read then stays counted', async () => {
+        const dependencies = refundDependencies(async () => STATE);
+        vi.mocked(dependencies.refundBackendRateLimit).mockRejectedValue(new Error('refund down'));
+
+        await expect(startShowcaseFeedReadLimit(signedInRequest(), 'user-1', dependencies)!.release()).resolves.toBeUndefined();
+
+        expect(dependencies.logError).toHaveBeenCalledWith('Showcase feed read limit refund failed:', new Error('refund down'));
+      });
     });
 
     it('reports the count and the wait for it to the performance monitor', async () => {
