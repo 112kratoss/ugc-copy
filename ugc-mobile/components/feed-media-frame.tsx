@@ -22,6 +22,8 @@ type FeedMediaFrameBaseProps = {
   watchdog?: boolean;
   /** Where the frame is drawn, for the media diagnostics log. */
   diagnosticsSurface?: string;
+  /** The pencil sketch over a picture still loading (`StableMediaImage`'s `loadingSketch`). On unless a caller turns it off. */
+  loadingSketch?: boolean;
 };
 
 type FeedImageFrameProps = FeedMediaFrameBaseProps & {
@@ -111,6 +113,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             transition={props.transition}
             watchdog={props.watchdog}
             diagnosticsSurface={props.diagnosticsSurface}
+            loadingSketch={props.loadingSketch ?? true}
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
           />
         </>
@@ -135,6 +138,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
               contentFit={props.videoContentFit ?? 'contain'}
               watchdog={props.watchdog}
               diagnosticsSurface={props.diagnosticsSurface}
+              loadingSketch={props.loadingSketch ?? true}
               style={[absoluteFill, { backgroundColor: 'transparent' }]}
             />
           ) : null}

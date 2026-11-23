@@ -39,6 +39,7 @@ import { Reveal } from '@/components/reveal';
 import { ProfileGridSkeleton } from '@/components/skeleton';
 import { TEXT_POST_PLATE_BODY_LINE_HEIGHT, TEXT_POST_PLATE_TITLE_HEIGHT, TextPostPlate } from '@/components/text-post-plate';
 import { buildTextPostPlate, textPostPlateBodyLines } from '@/lib/text-post-plate-view-model';
+import { BookPullArea, RefreshBookChip, useBookPull } from '@/components/refresh-book';
 import { TopScrim } from '@/components/top-scrim';
 import { AppText, IconButton, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock } from '@/components/ui';
 import { loadActiveGenerationRecord } from '@/lib/active-generation-record';
@@ -138,6 +139,9 @@ const PROFILE_MEDIA_SWIPE_START_DISTANCE = 28;
 const PROFILE_MEDIA_SWIPE_COMMIT_DISTANCE = 56;
 const PROFILE_MEDIA_SWIPE_AXIS_RATIO = 1.25;
 // Three rows rise into place when a tab's media lands; later rows mount plain.
+/** For a profile with nothing to refresh: its pull is switched off. */
+const noRefresh = () => {};
+
 const PROFILE_GALLERY_REVEAL_COUNT = PROFILE_GALLERY_COLUMNS * 3;
 // The rows a tab switch shows first, whose previews are cached ahead of it once
 // Profile has stood settled this long.
@@ -860,13 +864,27 @@ function ProfileMediaList({
   }, [isLoading]);
   const pushOfferPostId = headerExtrasReady && activeTab === 'Posts' ? justPublishedPostId : null;
 
+  // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
+  const pull = useBookPull({
+    refreshing: Boolean(isRefreshing),
+    onRefresh: onRefresh ?? noRefresh,
+    enabled: Boolean(onRefresh),
+    contentTop: topInset,
+  });
+  const attachPullScroll = pull.attachScroll;
+  const attachList = useCallback((list: FlashListRef<ProfileMediaCard> | null) => {
+    listRef.current = list;
+    attachPullScroll(list?.getNativeScrollRef?.());
+  }, [attachPullScroll]);
+
   return (
     // Saved tiles here are what the reel grows out of and returns to.
     <MediaZoomSurface revealItem={revealItem}>
     <View {...swipeResponder.panHandlers} style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <BookPullArea pull={pull}>
       <FlashList
         keyboardShouldPersistTaps="never"
-        ref={listRef}
+        ref={attachList}
         data={isLoading ? [] : cards}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
         drawDistance={400}
@@ -919,8 +937,7 @@ function ProfileMediaList({
         onContentSizeChange={keepScrollWithinContent}
         onEndReached={onEndReached}
         onEndReachedThreshold={0.32}
-        onRefresh={onRefresh}
-        refreshing={Boolean(isRefreshing)}
+        refreshControl={pull.refreshControl}
         removeClippedSubviews={false}
         renderItem={({ item, index }) => (
           <Reveal
@@ -958,8 +975,11 @@ function ProfileMediaList({
           paddingBottom: contentBottomPadding + 20,
         }}
       />
+      </BookPullArea>
 
       <TopScrim topInset={topInset} />
+
+      <RefreshBookChip refreshing={Boolean(isRefreshing)} pull={onRefresh ? pull : undefined} contentTop={topInset} />
     </View>
     </MediaZoomSurface>
   );
@@ -2056,6 +2076,7 @@ function ProfileGalleryPreview({
           transition={120}
           watchdog={watchdog}
           diagnosticsSurface="profile-grid"
+          loadingSketch
           style={{ position: 'absolute', inset: 0 }}
         />
         {item.label === 'Saved' && item.post?.mediaItems[0]?.mediaKind === 'video' && isAppleZoomAvailable() ? (

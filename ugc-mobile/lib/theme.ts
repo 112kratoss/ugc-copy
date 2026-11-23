@@ -33,6 +33,13 @@ const darkColors = {
   // Loading placeholders (`SkeletonBone`): a quiet tint of the foreground.
   bone: 'rgba(255,248,237,0.07)',
   boneStrong: 'rgba(255,248,237,0.11)',
+  // The refresh book's pages (`RefreshBookChip`): paper in both schemes, and
+  // the ruled lines written on it. Ivory here, so the book reads on a dark chip.
+  paper: '#fff8ed',
+  paperLine: 'rgba(28,20,15,0.22)',
+  // Its cover: a deeper coral than the circle, so the book has an edge without
+  // a dark frame (owner, 2026-11-23: the near-black cover read as a dark boundary).
+  bookCover: '#c4401d',
   // A switch at rest: its track and thumb. On, it takes `primaryFill` and `onPrimary`.
   switchTrackOff: '#343838',
   switchThumbOff: '#cac6bd',
@@ -132,6 +139,9 @@ const lightColors: ThemeColors = {
   scrim: 'rgba(20,14,10,0.32)',
   bone: 'rgba(28,20,15,0.06)',
   boneStrong: 'rgba(28,20,15,0.09)',
+  paper: '#ffffff',
+  paperLine: 'rgba(28,20,15,0.18)',
+  bookCover: '#c4401d',
   switchTrackOff: '#ddd6cc',
   switchThumbOff: '#ffffff',
   mediaPlaceholder: '#ece6de',

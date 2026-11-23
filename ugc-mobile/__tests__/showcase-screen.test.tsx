@@ -687,6 +687,34 @@ describe('Showcase screen', () => {
     renderer.act(() => tree!.unmount());
   });
 
+  // On iOS a ScrollView draws its refresh control as a sibling of its content:
+  // taking the control away for a swipe rebuilt every card, the carousel under
+  // the finger included. A swipe stops the grid's scroll and pauses the pull.
+  it('keeps the pull control while a card\'s pictures are swiped', () => {
+    queryState.pages = [lanePage([{ id: 'post-1' }])];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ShowcaseScreen />);
+    });
+    try {
+      const listProps = () => tree!.root.find((node) => String(node.type) === 'flash-list').props;
+      const control = listProps().refreshControl;
+      expect(control).toBeDefined();
+      const pin = pinProps(listProps() as ListProps, 0) as PinProps & { onScrollToggle: (scrolling: boolean) => void };
+
+      renderer.act(() => pin.onScrollToggle(true));
+      expect(listProps().scrollEnabled).toBe(false);
+      expect(listProps().refreshControl).toBeDefined();
+      expect(listProps().refreshControl.type).toBe(control.type);
+
+      renderer.act(() => pin.onScrollToggle(false));
+      expect(listProps().scrollEnabled).toBe(true);
+      expect(listProps().refreshControl).toBeDefined();
+    } finally {
+      if (tree) renderer.act(() => tree!.unmount());
+    }
+  });
+
   // The server files the report as that delivery's `report` feed event, the
   // one way the ranker hears it.
   it('names the delivery a ranked tile was reported from', async () => {
@@ -934,7 +962,7 @@ describe('Showcase screen', () => {
 
       // A refresh re-places every card anyway, so whatever still waits lands.
       await renderer.act(async () => {
-        listProps().onRefresh();
+        listProps().refreshControl.props.onRefresh();
       });
       expect(queryState.refetch).toHaveBeenCalledTimes(1);
       expect(applied()).toEqual({ 'post-5': 2, 'post-2': 0.5, 'post-0': 1.25 });
@@ -1015,7 +1043,7 @@ describe('Showcase screen', () => {
     it('takes the reader to the top and fetches page 1 again, without the pull spinner', async () => {
       queryState.dataUpdatedAt = fiveMinutesOld();
       const { list, tree, pill } = renderWithList();
-      const refreshing = () => hostElement(tree, 'flash-list').props.refreshing;
+      const refreshing = () => hostElement(tree, 'flash-list').props.refreshControl.props.refreshing;
       let finishRefetch: () => void = () => undefined;
       const heldRefetch = () => new Promise<void>((resolve) => {
         finishRefetch = resolve;
@@ -1053,7 +1081,7 @@ describe('Showcase screen', () => {
 
         // The same reading sees a pull's own spinner.
         queryState.refetch.mockImplementationOnce(heldRefetch);
-        renderer.act(() => hostElement(tree, 'flash-list').props.onRefresh());
+        renderer.act(() => hostElement(tree, 'flash-list').props.refreshControl.props.onRefresh());
         expect(refreshing()).toBe(true);
         finishRefetch();
         await settle();

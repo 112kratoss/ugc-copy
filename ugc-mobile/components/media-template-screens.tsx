@@ -17,11 +17,12 @@ import {
   Video,
   VideoOff,
 } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, FlatList, Linking, Platform, Pressable, RefreshControl, Share, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, FlatList, Linking, Platform, Pressable, Share, View } from 'react-native';
 
 import { FeedLoadMoreErrorFooter } from '@/components/feed-pagination-footer';
 import { MediaPreview } from '@/components/media-preview';
+import { BookPullArea, RefreshBookChip, useBookPull } from '@/components/refresh-book';
 import {
   AppText,
   Card,
@@ -322,13 +323,22 @@ export function MediaTemplateCatalogScreen() {
     <FeedLoadMoreErrorFooter onRetry={() => void templatesQuery.fetchNextPage()} />
   ) : null;
 
+  // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: refreshCatalog });
+  const attachPullScroll = pull.attachScroll;
+  const attachList = useCallback((list: FlatList<MediaTemplateSummary> | null) => {
+    attachPullScroll(list?.getNativeScrollRef?.());
+  }, [attachPullScroll]);
+
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
       <Stack.Screen options={{ title: 'Templates' }} />
       {/* A list, so only the cards near the screen are mounted: as a scroll
           view every loaded template was, 48 posters on opening and 48 more
           with each page (01-5). */}
+      <BookPullArea pull={pull}>
       <FlatList
+        ref={attachList}
         keyboardShouldPersistTaps="never"
         data={templates}
         keyExtractor={(template) => template.id}
@@ -351,15 +361,7 @@ export function MediaTemplateCatalogScreen() {
         initialNumToRender={4}
         maxToRenderPerBatch={4}
         windowSize={7}
-        refreshControl={(
-          <RefreshControl
-            refreshing={pullRefreshing}
-            onRefresh={refreshCatalog}
-            tintColor={theme.colors.faint}
-            colors={[theme.colors.primary]}
-            progressBackgroundColor={theme.colors.panelSoft}
-          />
-        )}
+        refreshControl={pull.refreshControl}
         contentInsetAdjustmentBehavior="automatic"
         showsVerticalScrollIndicator={false}
         style={{ flex: 1, backgroundColor: theme.colors.background }}
@@ -369,6 +371,8 @@ export function MediaTemplateCatalogScreen() {
           paddingBottom: 36,
         }}
       />
+      </BookPullArea>
+      <RefreshBookChip refreshing={pullRefreshing} pull={pull} />
     </View>
   );
 }

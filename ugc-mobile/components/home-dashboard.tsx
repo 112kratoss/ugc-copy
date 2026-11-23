@@ -4,7 +4,7 @@ import { useIsFocused, useScrollToTop } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Crown, Plus, Search } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pressable, RefreshControl, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Dimensions, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CommentsSheet } from '@/components/comments-sheet';
@@ -17,6 +17,7 @@ import { HomeFeedCardView } from '@/components/home-feed-card';
 import { HomeShelf } from '@/components/home-shelf';
 import { MediaZoomSurface } from '@/components/media-zoom';
 import { NewPostsPill } from '@/components/new-posts-pill';
+import { BookPullArea, RefreshBookChip, useBookPull } from '@/components/refresh-book';
 import { WorkspaceSideMenu } from '@/components/workspace-side-menu';
 import { WorkspaceSideMenuGlyph, WORKSPACE_SIDE_MENU_LABEL } from '@/components/workspace-side-menu-gesture-layer';
 import { Reveal } from '@/components/reveal';
@@ -159,6 +160,9 @@ export function HomeDashboard() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const topInset = resolvedTopInset(insets.top);
+  // Under the top bar's row: where the "New posts" pill floats, and where
+  // Android's refresh circle and the refresh book come to rest.
+  const newPostsPillTop = topInset + HOME_TOP_BAR_BOTTOM + appTheme.spacing.compact;
   const bottomInset = resolvedBottomInset(insets.bottom);
   const tabBarMetrics = getMagicTabBarMetrics(width, bottomInset);
   const pageWidth = Math.min(width, 430);
@@ -537,6 +541,9 @@ export function HomeDashboard() {
   // Anywhere else the shift is kept, so every background refetch left the feed
   // permanently pushed down by another notch.
   const [pullRefreshing, setPullRefreshing] = useState(false);
+  // The "New posts" tap's own refresh: the refresh book shows for it where the
+  // pill was, with the control left out of it.
+  const [pillRefreshing, setPillRefreshing] = useState(false);
   // "New posts" (product decision D2): a ranked lane is never refetched under
   // the reader on a return to the app. Back five minutes or more after the lane
   // was fetched, the server is asked whether it has a newer post, and the pill
@@ -637,8 +644,17 @@ export function HomeDashboard() {
     haptic.light();
     newPosts.dismiss();
     feedRef.current?.scrollToOffset({ offset: 0, animated: false });
-    void refreshFirstPage();
+    setPillRefreshing(true);
+    void refreshFirstPage().finally(() => setPillRefreshing(false));
   };
+
+  // The pull to refresh, the book coming down with it (components/refresh-book.tsx).
+  const pull = useBookPull({ refreshing: pullRefreshing, onRefresh: handleRefresh, contentTop: topInset, androidRestTop: newPostsPillTop });
+  const attachPullScroll = pull.attachScroll;
+  const attachFeed = useCallback((list: FlashListRef<HomeFeedCard> | null) => {
+    feedRef.current = list;
+    attachPullScroll(list?.getNativeScrollRef?.());
+  }, [attachPullScroll]);
 
   const selectChip = (chipId: HomeFeedChipId) => {
     if (chipId === activeChipId) return;
@@ -1068,13 +1084,14 @@ export function HomeDashboard() {
     <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      <BookPullArea pull={pull}>
       <FlashList
         keyboardShouldPersistTaps="never"
         // A lane is a new feed, not a mutation of the visible one. Remounting
         // gives it a true native origin; reusing the list preserves iOS's old
         // content offset and can place the first media card above the screen.
         key={`home-feed-${activeChipId}`}
-        ref={feedRef}
+        ref={attachFeed}
         data={cards}
         keyExtractor={(card) => card.id}
         renderItem={renderCard}
@@ -1086,15 +1103,7 @@ export function HomeDashboard() {
         onStartReachedThreshold={0.25}
         onEndReached={requestNextPage}
         onEndReachedThreshold={0.32}
-        refreshControl={(
-          <RefreshControl
-            refreshing={pullRefreshing}
-            onRefresh={handleRefresh}
-            tintColor={theme.colors.faint}
-            colors={[theme.colors.primary]}
-            progressBackgroundColor={theme.colors.panelSoft}
-          />
-        )}
+        refreshControl={pull.refreshControl}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}
         onScrollEndDrag={(event) => {
@@ -1214,13 +1223,22 @@ export function HomeDashboard() {
           />
         ) : null}
       />
+      </BookPullArea>
 
       <TopScrim topInset={topInset} />
+
+      <RefreshBookChip
+        refreshing={pullRefreshing || pillRefreshing}
+        pull={pull}
+        contentTop={topInset}
+        androidRestTop={newPostsPillTop}
+        top={pillRefreshing && !pullRefreshing ? newPostsPillTop : undefined}
+      />
 
       <NewPostsPill
         visible={newPosts.hasNewer}
         onPress={showNewPosts}
-        topOffset={topInset + HOME_TOP_BAR_BOTTOM + appTheme.spacing.compact}
+        topOffset={newPostsPillTop}
       />
 
       <FeedUndoNotice

@@ -392,6 +392,8 @@ function CreationCard({
               diagnosticsSurface="home-shelf"
               metricsSurface={null}
               retryable={false}
+              // The card's caption fills its middle, where the pencil would draw.
+              loadingSketch={false}
             />
           </View>
         ) : (

@@ -7853,6 +7853,7 @@ function ReferenceMediaPreview({ media, size }: { media: MediaDraft; size?: numb
           transition={80}
           style={{ width: '100%', height: '100%' }}
           resolveRetryUrl={resolveRetryUrl}
+          loadingSketch
         />
       ) : (
         <MediaPreview
