@@ -79,18 +79,31 @@ type Frame = {
  * Records, from the document's first frame, every frame whose drawing of the top bar (and, on
  * Pricing, of the invite banner) differs from the last. The page's own scripts have not run at the
  * first frames: what they hold is the server's HTML under the stylesheet and the pre-paint script.
+ * A frame drawn while the HTML parser is still inside the top bar is not recorded: Chrome draws on a
+ * time budget, whether or not the whole document is in, so such a frame shows the bar without its
+ * search field or its right-hand controls, which is not a place they hold later (six CI runs from
+ * 2026-11-15 to 11-23 failed the check below on one, by 183 to 757px).
  */
 const RECORDER = `(() => {
   const frames = [];
   window.__layoutFrames = frames;
   let last = '';
+  // Nothing follows a part in the document until the parser has left it, so while the document is
+  // loading a part with no next sibling on itself or any ancestor is unfinished.
+  const unfinished = (element) => {
+    if (document.readyState !== 'loading') return false;
+    for (let node = element; node && node !== document.documentElement; node = node.parentNode) {
+      if (node.nextSibling) return false;
+    }
+    return true;
+  };
   const x = (element) => (element ? Math.round(element.getBoundingClientRect().x) : null);
   // To a tenth of a pixel: the balance's placeholder is as wide as the balance, and a fraction of a
   // pixel moved the controls beside it (a layout shift of 0.0002 on every signed-in load, 2026-11-18).
   const fineX = (element) => (element ? Math.round(element.getBoundingClientRect().x * 10) / 10 : null);
   function sample() {
     const header = document.querySelector('header.app-shell-header');
-    if (header) {
+    if (header && !unfinished(header)) {
       const invite = document.querySelector('section[aria-label="Invite and earn bonus credits"]');
       const avatar = header.lastElementChild
         ? Array.from(header.lastElementChild.querySelectorAll('span')).find((span) => span.className.includes('rounded-full') && span.className.includes('font-extrabold'))
