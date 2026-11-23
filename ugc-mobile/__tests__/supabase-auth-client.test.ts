@@ -255,7 +255,8 @@ describe('the app builds only the Supabase Auth client', () => {
           visit(full);
         } else if (/\.(ts|tsx|js|jsx)$/.test(entry.name)) {
           const source = fs.readFileSync(full, 'utf8');
-          if (/['"]@supabase\/(supabase-js|postgrest-js|realtime-js|storage-js|functions-js)['"]/.test(source)) {
+          // The package or any path inside it, such as `@supabase/supabase-js/dist/…`.
+          if (/['"]@supabase\/(supabase-js|postgrest-js|realtime-js|storage-js|functions-js)(\/[^'"]*)?['"]/.test(source)) {
             offenders.push(path.relative(root, full));
           }
         }

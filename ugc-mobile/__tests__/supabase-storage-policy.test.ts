@@ -15,7 +15,10 @@ const state = vi.hoisted(() => {
     platform: 'android',
     secureStorage,
     memoryStorage,
-    authOptions: null as null | { storage: unknown },
+    // Stands in for lib/supabase-fetch.ts: the fetch that puts deadlines on
+    // auth requests during a sign-out, and the wrapper that switches them on.
+    authFetch: { fetch: vi.fn(), duringSignOut: vi.fn() },
+    authOptions: null as null | { storage: unknown; fetch?: unknown },
     invalidationHandler: null as null | ((reason: string) => void),
     signOut: vi.fn(async () => ({ error: null })),
   };
@@ -50,12 +53,16 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   withSuppressedInvalidRefreshTokenConsoleError: async (operation: () => Promise<void>) => operation(),
 }));
 
+vi.mock('../lib/supabase-fetch', () => ({
+  createSupabaseAuthFetch: () => state.authFetch,
+}));
+
 vi.mock('@supabase/auth-js', () => ({
   AuthClient: class {
     initialize = vi.fn(async () => undefined);
     signOut = state.signOut;
 
-    constructor(options: { storage: unknown }) {
+    constructor(options: { storage: unknown; fetch?: unknown }) {
       state.authOptions = options;
     }
   },
@@ -72,6 +79,16 @@ describe('Supabase auth storage policy', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('sends auth requests through the deadline fetch, and exports its sign-out wrapper', async () => {
+    // Without that fetch, a logout or refresh stalled on the network has no
+    // deadline during a sign-out and holds auth-js's lock, and the person is
+    // left on "Signing out…" (lib/supabase-fetch.ts).
+    const { duringSignOut } = await import('../lib/supabase');
+
+    expect(state.authOptions?.fetch).toBe(state.authFetch.fetch);
+    expect(duringSignOut).toBe(state.authFetch.duringSignOut);
   });
 
   it('uses SecureStore on native even when there is no window global', async () => {
