@@ -259,6 +259,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   search_terms: SEARCH_DICTIONARY,
   // Words an operator took out of typeahead: a lowercase word and a note per row.
   search_suggestion_denylist: SEARCH_DENYLIST,
+  // Explore's read-ahead: an event name and an hour's count.
+  showcase_feed_read_ahead_counters: TELEMETRY,
   showcase_media_revocations: UPLOAD_BOOKKEEPING,
   showcase_saves: NO_TEXT,
   upload_byte_global_counters: NO_TEXT,

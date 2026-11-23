@@ -1466,6 +1466,8 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   anonymousKeyHash: string | null;
   cursor: string | null;
   prepared?: PreparedRankedFeedSession | null;
+  /** Called when the page is `prepared`'s, served in place of a new ranking. */
+  onPreparedServed?: () => void;
   /** The previous page's `pageInfo.seedBucket`, for a ranking the shared seed drives. */
   seedBucket?: number | null;
   /** A first page the reader asked for again: ranked afresh (`getPersonalizedShowcaseFeedPage`). */
@@ -1503,6 +1505,7 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
     offset: params.offset,
     onRankedPageItems: startPageReads,
     prepared: params.prepared ?? null,
+    ...(params.onPreparedServed ? { onPreparedServed: params.onPreparedServed } : {}),
     seedBucket: params.seedBucket ?? null,
     serviceClient: adminSupabase,
     viewerUserId: params.viewerUserId,
@@ -1666,6 +1669,13 @@ export async function getShowcaseFeedPage(options: {
    */
   readAheadToken?: string | null;
   /**
+   * Told once the page is read, for a read whose `readAheadToken` was looked
+   * up, whether the page served is the ranking held under it (`true`) or one
+   * of its own (`false`: the token was unknown, spent or expired, or the held
+   * ranking was set aside). The read-ahead's counts are kept from it.
+   */
+  onReadAheadClaim?: (claimed: boolean) => void;
+  /**
    * The `pageInfo.seedBucket` of the For you page before this one, when the
    * reader pages on by offset: the next ranking uses that page's seed if the
    * bucket is recent, so it continues the same order.
@@ -1693,6 +1703,9 @@ export async function getShowcaseFeedPage(options: {
     'viewer_state',
     options.onPhaseTiming,
   );
+  // Whether this read looked up its read-ahead token, and whether the page it
+  // is served is the ranking held under it (`onReadAheadClaim`).
+  const readAhead = { lookedUp: false, served: false };
   const baseFeed = sort === 'for-you'
     ? shouldCacheIdentitylessForYouBootstrap({
       sort,
@@ -1723,11 +1736,17 @@ export async function getShowcaseFeedPage(options: {
         seedBucket: options.seedBucket ?? null,
         fresh: Boolean(options.fresh) && offset === 0 && !options.cursor,
         prepared: options.readAheadToken && offset === 0 && !options.cursor
-          ? await measureReadAheadTake(() => takePreparedShowcaseFeedSession(options.readAheadToken as string, {
-            anonymousKeyHash: options.anonymousKeyHash ?? null,
-            viewerUserId,
-          }), options.onPhaseTiming)
+          ? await measureReadAheadTake(() => {
+            readAhead.lookedUp = true;
+            return takePreparedShowcaseFeedSession(options.readAheadToken as string, {
+              anonymousKeyHash: options.anonymousKeyHash ?? null,
+              viewerUserId,
+            });
+          }, options.onPhaseTiming)
           : null,
+        onPreparedServed: () => {
+          readAhead.served = true;
+        },
         adminSupabase,
         onPageItems: viewerState.start,
         onPhaseTiming: options.onPhaseTiming,
@@ -1740,6 +1759,7 @@ export async function getShowcaseFeedPage(options: {
     })
       ? await loadShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter)
       : await getShowcaseFeedPageBase(category, sort, offset, limit, toolSlug, unlockFilter, resourceFilter);
+  if (readAhead.lookedUp) options.onReadAheadClaim?.(readAhead.served);
   const measurePhase = async <T>(phase: string, work: () => Promise<T>) => {
     const startedAt = performance.now();
     try {
