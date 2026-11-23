@@ -218,6 +218,9 @@ function settingsOf(auth: GoTrueClient) {
     throwOnError: Boolean(client.throwOnError),
     userStorage: client.userStorage,
     lock: client.lock.name,
+    // createClient passes it unset, which auth-js reads as no time limit on its
+    // lock; that lock is navigator.locks on the web build (a no-op on native).
+    lockAcquireTimeout: client.lockAcquireTimeout,
     initializePromise: client.initializePromise,
   };
 }
@@ -297,6 +300,7 @@ describe('the app auth client matches the one createClient made', () => {
       persistSession: true,
       detectSessionInUrl: false,
       lock: 'lockNoOp',
+      lockAcquireTimeout: undefined,
       initializePromise: null,
     });
     expect((reference as unknown as { storage: unknown }).storage).toBe(referenceStorage);

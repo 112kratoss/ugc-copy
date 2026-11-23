@@ -58,7 +58,7 @@ const supabaseKey = isSupabaseConfigured ? env.supabasePublishableKey : 'missing
  * Supabase Auth's client alone. The app asks Supabase for nothing but auth (the
  * session, its refresh, sign-in and sign-out); every read and write of data goes
  * through the API. supabase-js's `createClient` also builds Realtime, PostgREST
- * and Storage clients, about 143 KB of minified code evaluated at launch, and
+ * and Storage clients, about 148 KB of minified code evaluated at launch, and
  * listens for auth events on Realtime's behalf, which reads the stored session
  * once more on every launch. This is the auth client `createClient` makes, set
  * up as `createClient` sets it up: the same `/auth/v1` URL, the publishable key
@@ -84,6 +84,9 @@ export const supabase: { readonly auth: GoTrueClient } = {
     detectSessionInUrl: false,
     flowType: 'pkce',
     skipAutoInitialize: true,
+    // As createClient passed it: unset, which auth-js reads as no time limit on
+    // its lock (navigator.locks on the web build; a no-op on native).
+    lockAcquireTimeout: undefined,
   }),
 };
 
