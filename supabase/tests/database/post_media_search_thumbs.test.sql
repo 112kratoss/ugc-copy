@@ -204,8 +204,11 @@ select is(
 );
 
 -- Only a creation's public folder is queued: anything else is no thumb this makes.
-insert into public.posts (id, user_id, visibility, category, source_kind, post_format, title)
-values (pg_temp.uid('13'), pg_temp.uid('01'), 'public', 'image', 'manual', 'media', 'Legacy upload');
+insert into public.posts (id, user_id, visibility, category, source_kind, post_format, title, showcase_asset_path)
+values (
+  pg_temp.uid('13'), pg_temp.uid('01'), 'public', 'image', 'manual', 'media', 'Legacy upload',
+  'private-posts/' || pg_temp.uid('13') || '/0/photo.jpg'
+);
 insert into public.post_media (
   id, post_id, media_key, storage_path, preview_storage_path, preview_status, thumb_storage_path,
   rendition_status, media_kind, content_type, original_name, sort_order
