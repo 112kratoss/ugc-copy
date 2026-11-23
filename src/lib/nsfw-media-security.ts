@@ -2,6 +2,8 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { logBackendWarning } from '@/lib/backend-logger';
+
 /** Stage copies, commit their verified descriptors, then revoke public objects.
  * The durable ledger makes every step retryable without breaking live media. */
 export async function secureNsfwPostMedia(client: SupabaseClient, postId: string, ownerId: string) {
@@ -12,7 +14,7 @@ export async function secureNsfwPostMedia(client: SupabaseClient, postId: string
   // A post whose creation was deleted keeps that creation's copy, in the folder
   // the database recorded when the delete unlinked it.
   const creationId = post.generation_id ?? post.deleted_generation_id;
-  const media = await client.from('post_media').select('storage_path, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path, external_url').eq('post_id', postId);
+  const media = await client.from('post_media').select('storage_path, preview_storage_path, display_storage_path, rendition_storage_path, teaser_storage_path, thumb_storage_path, external_url').eq('post_id', postId);
   if (media.error) throw media.error;
   const columns = ['storage_path', 'preview_storage_path', 'display_storage_path', 'rendition_storage_path', 'teaser_storage_path'] as const;
   const rows = media.data ?? [];
@@ -43,6 +45,20 @@ export async function secureNsfwPostMedia(client: SupabaseClient, postId: string
     if (exists.error || exists.data !== false) throw new Error('Could not verify removal of the public preview. Please retry.');
     const settled = await client.from('uploaded_media_private_copies').update({ revoked_at: new Date().toISOString() }).eq('public_path', path);
     if (settled.error) throw settled.error;
+  }
+  // A row's search thumb is never copied: nothing private draws one. The
+  // database dropped it from its row when the preview moved, and queued it for
+  // revocation (trigger post_media_thumb_follows_its_preview); removing it here
+  // too means a labelled post's small picture is not public until that queue's
+  // next run. A failure is left to the queue, which a retry here could not do
+  // better: the row no longer names the thumb.
+  const thumbs = [...new Set(rows.map((row) => row.thumb_storage_path))].filter((path): path is string => (
+    typeof path === 'string'
+    && (path.startsWith(`posts/${postId}/`) || Boolean(creationId && path.startsWith(`showcase/${creationId}/`)))
+  ));
+  if (thumbs.length > 0) {
+    const removed = await client.storage.from('showcase_media').remove(thumbs);
+    if (removed.error) logBackendWarning('nsfw_post_media_thumb_not_removed', { postId, error: removed.error });
   }
   return replacements;
 }

@@ -156,15 +156,21 @@ export function searchHistoryWithout(current: readonly string[], query: string):
 
 /**
  * A picture for a row that is not a post (a model or tool, a search to try):
- * the cover preview of a post the row opens for this viewer, by the fields a
- * post result's own cover carries (`previewUrl`, `previewThumbhash`, its
- * size). A video's is its poster. Never of a labelled post, nor of a post by
- * a creator on either side of a block with the viewer. A row has none when no
- * such post has a ready preview: draw the row without a picture.
+ * the cover of a post the row opens for this viewer, by the fields a post
+ * result's own cover carries (`previewThumbhash`, its size). A video's is its
+ * poster. Never of a labelled post, nor of a post by a creator on either side
+ * of a block with the viewer. A row has none when no such post has a ready
+ * preview: draw the row without a picture.
  */
 export interface SearchThumbnail {
   /** The post the picture is of: a key for the image, and nothing a press opens. */
   postId: string;
+  /**
+   * Sized for a row's frame (48 px at most on either client): the cover's row
+   * thumb, a WebP 144 px on its short side, where it has one (2026-11-23), and
+   * otherwise its 720 px preview, the `previewUrl` a post result carries. The
+   * server chooses; a client draws whichever it is given, cropped to its frame.
+   */
   url: string;
   thumbhash: string | null;
   /** The cover's own size, for its shape; null when the post never recorded one. */

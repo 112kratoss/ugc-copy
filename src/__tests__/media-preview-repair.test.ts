@@ -1637,6 +1637,50 @@ describe('a sweep whose update does not record what it uploaded', () => {
       expect(queued).toEqual([]);
     });
 
+    describe('with its row thumb', () => {
+      const thumb = 'showcase/gen-1/creation.abcdef123456.thumb.t1.webp';
+      const withThumb = { ...preview, thumbStoragePath: thumb };
+      const all = [...both, thumb];
+
+      it('asks for the thumb and records it with the preview it was made from', async () => {
+        const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+        previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(all, () => withThumb));
+        const { supabase, queued, updates } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
+
+        const summary = await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
+
+        expect(summary).toEqual({ attempted: 1, completed: 1, failed: 0 });
+        expect(previewMocks.createPostMediaPreview).toHaveBeenCalledWith(expect.objectContaining({ withThumb: true }));
+        const ready = updates.find((update) => update.payload.preview_status === 'ready');
+        expect(ready?.payload).toMatchObject({
+          preview_storage_path: withThumb.previewStoragePath,
+          thumb_storage_path: thumb,
+        });
+        expect(queued).toEqual([]);
+      });
+
+      it('writes none when none was made, so the old one cannot outlive the media it was made from', async () => {
+        const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+        previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(both, () => ({ ...preview, thumbStoragePath: null })));
+        const { supabase, updates } = createPreviewClient([coverRow], () => [{ id: 'media-1' }]);
+
+        await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
+
+        const ready = updates.find((update) => update.payload.preview_status === 'ready');
+        expect(ready?.payload).toHaveProperty('thumb_storage_path', null);
+      });
+
+      it('queues the thumb with the rest when the row is gone', async () => {
+        const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
+        previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(all, () => withThumb));
+        const { supabase, queued } = createPreviewClient([coverRow], rowGone);
+
+        await repairMediaPreviews(supabase as never, { batchSize: 10, invalidateShowcaseFeedAndRefreshEveryPage: vi.fn() });
+
+        expect(queuedPaths(queued)).toEqual([...all].sort());
+      });
+    });
+
     it("leaves an upload under a post's own prefix alone: this queue only takes a creation's public folder", async () => {
       const { repairMediaPreviews } = await import('@/lib/media-preview-repair');
       previewMocks.createPostMediaPreview.mockImplementationOnce(uploading(
