@@ -38,9 +38,10 @@ const UNSET_APP_ENV = Object.fromEntries(
 
 // Loaded into the dev server: it keeps the checkout's .env files from Next
 // (tests/e2e/support/no-env-files.cjs) and answers the Supabase reads of the pages specs draw whose
-// server render reads them, which Playwright's routes cannot reach (supabase-server-stub.cjs). Quoted,
-// as a checkout's path can hold a space; `next dev` hands its server process only the last --require
-// it was given, so this one goes last.
+// server render reads them, which Playwright's routes cannot reach (supabase-server-stub.cjs), and never
+// closes an idle keep-alive socket, which a spec's API read through Playwright's pool could otherwise find
+// reset under it (keep-alive-sockets.cjs). Quoted, as a checkout's path can hold a space; `next dev`
+// hands its server process only the last --require it was given, so this one goes last.
 const DEV_SERVER_PRELOAD = `--require=${JSON.stringify(path.join(__dirname, 'tests/e2e/support/dev-server.cjs'))}`;
 
 export default defineConfig({
