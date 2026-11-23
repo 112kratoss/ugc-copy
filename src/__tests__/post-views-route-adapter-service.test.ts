@@ -32,6 +32,7 @@ function harness(options: {
   identity?: FeedAnonymousIdentity;
   enforce?: (client: unknown, options: RateLimitOptions) => Promise<unknown>;
   rpcResult?: { data: unknown; error: unknown };
+  readBoundedJsonBody?: (request: Request, maxBytes: number) => Promise<unknown>;
 } = {}) {
   const rpc = vi.fn<(name: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>>(
     async () => options.rpcResult ?? { data: 1, error: null },
@@ -61,6 +62,7 @@ function harness(options: {
       getFeedNetworkKeyHash: vi.fn(() => NETWORK),
       resolveFeedAnonymousIdentity,
       logError,
+      ...(options.readBoundedJsonBody ? { readBoundedJsonBody: options.readBoundedJsonBody as never } : {}),
     },
   });
   return { send, rpc, enforceBackendRateLimit, getUser, resolveFeedAnonymousIdentity, logError };
@@ -182,7 +184,9 @@ describe('POST /api/showcase/views', () => {
   });
 
   it('answers 429 past the network\'s budget, before reading the body', async () => {
+    const readBoundedJsonBody = vi.fn(async () => ({ ok: true, value: contract.request }));
     const { send, rpc } = harness({
+      readBoundedJsonBody,
       enforce: async () => {
         throw new BackendRateLimitError({
           allowed: false,
@@ -195,6 +199,7 @@ describe('POST /api/showcase/views', () => {
     });
     const response = await send(contract.request);
     expect(response.status).toBe(429);
+    expect(readBoundedJsonBody).not.toHaveBeenCalled();
     expect(rpc).not.toHaveBeenCalled();
   });
 

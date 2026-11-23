@@ -1040,9 +1040,10 @@ export function createApiClient({
       }
       // The feed keys an anonymous viewer by it; the Invite & Earn routes read
       // it as the device an invite is made, opened and claimed on, which the
-      // referral abuse guard compares.
+      // referral abuse guard compares; the views route counts a guest with no
+      // session by it.
       if (
-        (path.startsWith('/api/showcase/feed') || path.startsWith('/api/referrals/'))
+        (path.startsWith('/api/showcase/feed') || path.startsWith('/api/referrals/') || path === '/api/showcase/views')
         && getInstallationId
         && !headers.has(FEED_INSTALLATION_ID_HEADER)
       ) {

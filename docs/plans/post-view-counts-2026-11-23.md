@@ -66,8 +66,12 @@ change. Paths are relative to `ugc-app/`; app paths are under `ugc-mobile/`.
 
 ## Design (step 1 as built)
 
-Migration `supabase/migrations/20261123070740_post_view_counts.sql`; its
-header says what each part does and why.
+Migrations `supabase/migrations/20261123070740_post_view_counts.sql`
+(records views: the marks, the days, the trigger, the route's function, the
+backfill) and `20261123070741_post_view_count_totals.sql` (the post's total,
+the rollup, the creator total). Two files, so the first holds only
+non-exclusive locks while it backfills and the second holds `posts` exclusively
+for a few milliseconds; each file's header says what each part does and why.
 
 ### Counting: one function, two ways in
 
@@ -85,7 +89,13 @@ counts when four things hold:
 
 A counted view is a row in `post_view_marks`. A repeat the same day does
 nothing. The function never raises for a view that does not count, since it
-runs inside every feed event's insert.
+runs inside every feed event's insert, and an account's view never waits: it
+reads whether the view is marked, then takes a try-lock on the view and skips
+it when another transaction holds it (that one is marking it). So two feed
+event batches of one viewer cannot deadlock. A guest's view, which only the
+route sends, waits its turn for a lock on the post's network for the day, and
+the cap is counted and written under it; the route takes a batch's posts in id
+order, so two requests never wait on each other in a cycle.
 
 - **Way in 1, no client change.** An after-insert trigger on `feed_events`
   calls the function for each `impression` from `feed` or `showcase-reel` by a
@@ -148,18 +158,29 @@ telemetry.
   calls `rollup_post_views`, which adds up to 5,000 uncounted marks to
   `view_count` and `post_view_days` in one statement and stamps them counted,
   again while a batch comes back full, within 30 s. A post's row is written at
-  most once a call, however many people saw it. An update on `posts` runs its
-  deferred NSFW media check; the rollup runs it at once, and a batch it
-  refuses is counted again post by post, so one post can hold back only its
-  own views (`posts_failed`, retried every run).
+  most once a call, however many people saw it.
+- **The rollup never waits.** It locks a batch's posts, then their marks, with
+  `SKIP LOCKED`: a post an edit, a save or a delete holds is counted on a later
+  run, and the rollup cannot deadlock with a post's or an account's deletion.
+- **A view is not an edit.** `posts_set_updated_at` skips an update that moves
+  `view_count`, so the owner's dates, the sitemap and the feed-embeddings job
+  never see a counted view.
+- **A refused post holds back only itself.** An update on `posts` runs its
+  deferred NSFW media check and the account-deletion freeze; the rollup runs
+  the check at once, counts a refused batch again post by post, and sits the
+  refused post's marks out for an hour (`retry_after`), so they never head
+  every batch. They are pruned two days after their day if still refused.
 - **Counts can lag, and that's expected.** A count can be up to 10 minutes
   behind, plus the pages' cache: post and creator pages revalidate every 5
   minutes, and the signed-out `/` every 15. Never revalidate a page because of
   a view; the `/` ISR loop spent Vercel credit on 2026-11-04.
-- **The backfill is part of the migration.** The `feed` and `showcase-reel`
-  impressions the feed still holds become marks (one per post, viewer and UTC
-  day, the creator's own left out, guests included since they predate the
-  cap), all uncounted, for the first rollups to count. It reads `feed_events`
+- **The backfill is part of the first migration.** The `feed` and
+  `showcase-reel` impressions the feed still holds become marks (one per post,
+  viewer and UTC day, the creator's own left out), all uncounted, for the
+  first rollups to count. Guests are included, since nobody had a reason to
+  forge views before counts were public, but held to 20 per post per day, as
+  one network's would be: the events keep no network, and a client that sent
+  no cookie had an id minted per request. It reads `feed_events`
   after the trigger exists, under the trigger's lock, so no impression is
   missed and a day both see is still one mark. There's no script to run by
   hand.
@@ -231,7 +252,8 @@ The Usage Information section of the privacy page (`src/app/privacy/page.tsx`,
 step 1) says that public posts viewed count once a day toward the post's
 total, which everyone can see; that a view is recorded under the account or,
 without one, under hashes of the browser's or installation's identifier and
-of the network; and that the per-view record is deleted within two days.
+of the network; and that the per-view record is deleted within three days of
+the view.
 
 ## Steps
 
@@ -280,9 +302,14 @@ Steps 2 and 3 each need step 1 live and can run side by side.
   counted, and the beacon is not sent yet).
 - **Gaming.** A person can add at most one view per post per day. A script
   that mints a fresh guest cookie per request is held to 20 views per post per
-  network per day. Fresh anonymous app accounts are the open hole, bounded by
+  network per day, however many requests it sends at once. Fresh anonymous app accounts are the open hole, bounded by
   Supabase Auth's sign-in rate limit. If a post's daily total jumps, its last
   two days of marks show where the views came from.
+- **Shared addresses.** The guest cap is per network, and Indian mobile
+  carriers put many people behind one address (CGNAT), so a post that many
+  guests on one carrier open in a day counts at most 20 of them from that
+  address. That is the price of not trusting a cookie; accounts are never
+  capped. Revisit if guest views grow.
 - **Explore undercounts.** A post found mostly through the Explore grid gains
   views only when someone opens it. That is the decision ("grid thumbnails
   don't count"); it's written here so a later "why so few views?" has its

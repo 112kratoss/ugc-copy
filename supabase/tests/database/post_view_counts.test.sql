@@ -1,10 +1,13 @@
--- Post view counts (20261123070740): a view is one mark per post, viewer and
--- UTC day, made by the feed's qualified impressions of a viewer with an
--- account (Home and the feed reel) or by POST /api/showcase/views (the post
--- page, other reels and every web guest's view, a guest held to 20 per
--- network per post per day); only a public, visible post counts and never its
--- creator's own view; the rollup adds marks to posts.view_count and
--- post_view_days once, then prunes them. Fixtures roll back.
+-- Post view counts (20261123070740, 20261123070741): a view is one mark per
+-- post, viewer and UTC day, made by the feed's qualified impressions of a
+-- viewer with an account (Home and the feed reel) or by POST
+-- /api/showcase/views (the post page, other reels and every web guest's view,
+-- a guest held to 20 per network per post per day); only a public, visible
+-- post counts and never its creator's own view; the rollup adds marks to
+-- posts.view_count and post_view_days once, without moving updated_at, holds
+-- back a post whose own checks refuse it, and prunes. The concurrency rules
+-- (try-locks, SKIP LOCKED) need two sessions and are checked outside pgTAP.
+-- Fixtures roll back.
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
@@ -25,7 +28,8 @@ insert into public.posts (id,user_id,visibility,category,source_kind,title,outpu
 ('f7a20000-0000-4000-8000-000000000004','f7a10001-0000-4000-8000-000000000001','public','image','external','Hidden fixture','generated_images/views-4.png'),
 ('f7a20000-0000-4000-8000-000000000005','f7a10001-0000-4000-8000-000000000001','public','image','external','Tombstoned fixture','generated_images/views-5.png'),
 ('f7a20000-0000-4000-8000-000000000006','f7a10001-0000-4000-8000-000000000001','public','image','external','Feed fixture','generated_images/views-6.png'),
-('f7a20000-0000-4000-8000-000000000007','f7a10001-0000-4000-8000-000000000001','public','image','external','Network fixture','generated_images/views-7.png');
+('f7a20000-0000-4000-8000-000000000007','f7a10001-0000-4000-8000-000000000001','public','image','external','Network fixture','generated_images/views-7.png'),
+('f7a20000-0000-4000-8000-000000000008','f7a10001-0000-4000-8000-000000000001','public','image','external','Refused fixture','generated_images/views-8.png');
 
 update public.posts set archived_at = now() where id = 'f7a20000-0000-4000-8000-000000000003';
 update public.posts set review_status = 'hidden' where id = 'f7a20000-0000-4000-8000-000000000004';
@@ -37,6 +41,11 @@ select col_default_is('public', 'posts', 'view_count', '0', 'a post starts at no
 select throws_ok(
   $$update public.posts set view_count = -1 where id = 'f7a20000-0000-4000-8000-000000000001'$$,
   '23514', null, 'a total is never negative'
+);
+select is(
+  (select indexdef from pg_indexes where schemaname = 'public' and indexname = 'post_view_marks_post_day_network_idx'),
+  'CREATE INDEX post_view_marks_post_day_network_idx ON public.post_view_marks USING btree (post_id, view_date, network_key_hash)',
+  'a whole index leads with the post, so a post''s deletion cascades through an index'
 );
 
 select ok(
@@ -218,6 +227,16 @@ select ok(
 insert into public.post_view_days (post_id, view_date, views) values
 ('f7a20000-0000-4000-8000-000000000006', (now() at time zone 'UTC')::date - 401, 9);
 
+-- updated_at is written by a trigger with the transaction's clock; set it in
+-- the past with the trigger off, so a move would show. (The fixtures' own
+-- deferred checks fire first: a table with pending trigger events cannot be
+-- altered.)
+set constraints all immediate;
+alter table public.posts disable trigger posts_set_updated_at;
+update public.posts set updated_at = '2026-01-01T00:00:00Z' where id in (
+  'f7a20000-0000-4000-8000-000000000001', 'f7a20000-0000-4000-8000-000000000006');
+alter table public.posts enable trigger posts_set_updated_at;
+
 set local role service_role;
 
 create temporary table first_rollup on commit drop as
@@ -243,6 +262,18 @@ select is(
 select is(
   (select view_count from public.posts where id = 'f7a20000-0000-4000-8000-000000000007'), 22::bigint,
   'the network''s post: twenty guests of one network, one of another and an account'
+);
+select is(
+  (select array_agg(updated_at order by id) from public.posts where id in (
+    'f7a20000-0000-4000-8000-000000000001', 'f7a20000-0000-4000-8000-000000000006')),
+  array['2026-01-01T00:00:00Z'::timestamptz, '2026-01-01T00:00:00Z'::timestamptz],
+  'a counted view is not an edit: updated_at stays'
+);
+update public.posts set title = 'Viewed fixture, edited' where id = 'f7a20000-0000-4000-8000-000000000001';
+select isnt(
+  (select updated_at from public.posts where id = 'f7a20000-0000-4000-8000-000000000001'),
+  '2026-01-01T00:00:00Z'::timestamptz,
+  'and an edit still moves it'
 );
 select is(
   (select array_agg(views order by view_date)
@@ -282,6 +313,81 @@ select is(
   'both views reached the total'
 );
 
+-- ─── A post whose own checks refuse the write ───────────────────────────────
+
+-- A stand-in for the posts NSFW media check or the account-deletion freeze:
+-- this post's update is refused.
+create function public.post_view_counts_test_refuse() returns trigger
+language plpgsql as $$
+begin
+  if new.id = 'f7a20000-0000-4000-8000-000000000008' then
+    raise exception 'refused for the test';
+  end if;
+  return new;
+end;
+$$;
+create trigger post_view_counts_test_refuse before update on public.posts
+for each row execute function public.post_view_counts_test_refuse();
+
+-- The refused post's view comes first, as the oldest mark of the batch.
+select ok(public.record_post_view('f7a20000-0000-4000-8000-000000000008', 'f7a10002-0000-4000-8000-000000000002', null, null, 'feed', now()), 'fixture: a view of the refused post');
+select ok(public.record_post_view('f7a20000-0000-4000-8000-000000000006', 'f7a10006-0000-4000-8000-000000000006', null, null, 'feed', now()), 'fixture: and one of another post');
+
+set local role service_role;
+create temporary table refused_rollup on commit drop as
+  select public.rollup_post_views(now(), 1) as result;
+select is((select (result->>'posts_failed')::int from refused_rollup), 1, 'the refused post is reported');
+select is((select (result->>'views_counted')::int from refused_rollup), 0, 'and counts nothing');
+select is(
+  (public.rollup_post_views(now(), 1)->>'views_counted')::int, 1,
+  'the next call counts the next post: the refused mark no longer heads the batch'
+);
+reset role;
+select is(
+  (select retry_after from public.post_view_marks where post_id = 'f7a20000-0000-4000-8000-000000000008'),
+  now() + interval '1 hour',
+  'the refused post''s mark sits out an hour'
+);
+select is(
+  (select view_count from public.posts where id = 'f7a20000-0000-4000-8000-000000000006'), 5::bigint,
+  'and the other post was counted past it'
+);
+
+set local role service_role;
+select is(
+  (public.rollup_post_views(now() + interval '2 hours', 5000)->>'posts_failed')::int, 1,
+  'after the hour it is tried again, and held again'
+);
+select is(
+  (public.rollup_post_views(now() + interval '3 days', 5000)->>'marks_pruned')::int > 0, true,
+  'two days after its day a held mark is pruned with the counted ones'
+);
+reset role;
+select is(
+  (select count(*) from public.post_view_marks where post_id = 'f7a20000-0000-4000-8000-000000000008'), 0::bigint,
+  'the refused post''s mark is gone'
+);
+
+drop trigger post_view_counts_test_refuse on public.posts;
+
+-- An old mark not yet counted (the backfill's, still in line) is kept until
+-- its turn.
+insert into public.post_view_marks (post_id, view_date, viewer_user_id, surface, viewed_at) values
+('f7a20000-0000-4000-8000-000000000001', (now() at time zone 'UTC')::date - 9, 'f7a10004-0000-4000-8000-000000000004', 'feed', now() - interval '9 days'),
+('f7a20000-0000-4000-8000-000000000001', (now() at time zone 'UTC')::date - 9, 'f7a10005-0000-4000-8000-000000000005', 'feed', now() - interval '9 days');
+set local role service_role;
+select is(
+  (public.rollup_post_views(now(), 1)->>'views_counted')::int, 1,
+  'one old mark is counted'
+);
+reset role;
+select is(
+  (select count(*) from public.post_view_marks
+   where post_id = 'f7a20000-0000-4000-8000-000000000001' and view_date = (now() at time zone 'UTC')::date - 9),
+  1::bigint,
+  'the counted one is pruned, the one still in line is kept'
+);
+
 -- ─── Who is kept ────────────────────────────────────────────────────────────
 
 delete from auth.users where id = 'f7a10005-0000-4000-8000-000000000005';
@@ -290,7 +396,7 @@ select is(
   'a deleted account''s marks go with it'
 );
 select is(
-  (select view_count from public.posts where id = 'f7a20000-0000-4000-8000-000000000006'), 4::bigint,
+  (select view_count from public.posts where id = 'f7a20000-0000-4000-8000-000000000006'), 5::bigint,
   'and the totals it added stay'
 );
 

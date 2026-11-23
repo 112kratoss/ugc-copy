@@ -816,7 +816,22 @@ Unset `RECIPE_COPY_SWEEP_DELETE` (the default), a run removes nothing and logs `
 
 ## Post View Counts
 
-A post's views (`posts.view_count`, migration `20261123070740_post_view_counts.sql`, plan `docs/plans/post-view-counts-2026-11-23.md`) are one mark per post, viewer and UTC day in `post_view_marks`, made two ways: a trigger on `feed_events` counts the qualified impressions of Home (`feed`) and the feed reel (`showcase-reel`) by a viewer with an account (an app guest's anonymous one included), and `POST /api/showcase/views` (`src/lib/post-views-route-adapter-service.ts`) takes the post page's, a non-feed reel's and every web guest's views. Only a public, visible post counts, never its creator's own view, and a web guest counts only with its hashed network, at most 20 guests of one network for a post in a day. The `post-view-counts` job (`src/lib/post-view-counts.ts`, every ten minutes on the shared scheduler; manual trigger `/api/cron/post-view-counts`) adds the uncounted marks to `view_count` and `post_view_days` in batches of 5,000 within 30 s, then prunes marks two days after their day and days older than 400 days. A run logs `post_view_counts_completed` with `views_counted`, `posts_counted`, `posts_failed`, `marks_pruned`, `days_pruned`, `batches` and `batch_limit_reached`. `posts_failed` above 0 means a post's own write was refused (its deferred NSFW media check, run at once inside the rollup): its views wait uncounted and are tried again every run, while every other post is counted; the run's warning names the post. A run that fails outright surfaces as `JOB_LATEST_RUN_FAILED` for `post-view-counts`, and marks wait uncounted until it runs again. To see where a post stands: `select view_date, views from post_view_days where post_id = '…' order by view_date desc`, and for the last two days `select view_date, surface, viewer_user_id is null as guest, count(*) from post_view_marks where post_id = '…' group by 1, 2, 3`.
+A post's views (`posts.view_count`; migrations `20261123070740_post_view_counts.sql`, which records views, and `20261123070741_post_view_count_totals.sql`, which adds the totals; plan `docs/plans/post-view-counts-2026-11-23.md`) are one mark per post, viewer and UTC day in `post_view_marks`, made two ways:
+
+- a trigger on `feed_events` counts the qualified impressions of Home (`feed`) and the feed reel (`showcase-reel`) by a viewer with an account, an app guest's anonymous one included;
+- `POST /api/showcase/views` (`src/lib/post-views-route-adapter-service.ts`) takes the post page's, a non-feed reel's and every web guest's views.
+
+Only a public, visible post counts, never its creator's own view. A web guest counts only with its hashed network, at most 20 guests of one network for a post in a day. A web guest's feed impression never counts, since a script can mint a new cookie for each one.
+
+**The job.** `post-view-counts` (`src/lib/post-view-counts.ts`, every ten minutes on the shared scheduler; manual trigger `/api/cron/post-view-counts`) calls `rollup_post_views`. It adds the uncounted marks to `view_count` and `post_view_days` in batches of 5,000 within 30 s, then prunes counted or held-back marks two days after their day and daily totals older than 400 days.
+
+- **It never waits on a lock.** It locks a batch's posts and marks with `SKIP LOCKED`, so a post an edit, save or delete holds is counted on a later run.
+- **It never moves `updated_at`.** `posts_set_updated_at` skips an update that moves `view_count`.
+- **What a run logs.** `post_view_counts_completed` with `views_counted`, `posts_counted`, `posts_failed`, `marks_pruned`, `days_pruned`, `batches` and `batch_limit_reached`.
+- **`posts_failed` above 0** means a post's own checks refused its write (the deferred NSFW media check, run at once inside the rollup, or the account-deletion freeze). Its marks sit out the batches for an hour (`retry_after`) while every other post is counted; they are tried again after the hour, and pruned two days after their day if still refused. The run's warning names the post.
+- **A run that fails outright** surfaces as `JOB_LATEST_RUN_FAILED` for `post-view-counts`, and marks wait uncounted until it runs again.
+
+**Seeing where a post stands.** Its days: `select view_date, views from post_view_days where post_id = '…' order by view_date desc`. Its last days' marks: `select view_date, surface, viewer_user_id is null as guest, counted_at is not null as counted, retry_after from post_view_marks where post_id = '…' order by id desc limit 50`.
 
 ## Storage Orphans
 
@@ -826,7 +841,7 @@ Review the file (delete a line to keep its object), then `npm run ops:storage-or
 
 ## Durable Queue Graduation Decision
 
-Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `kie-account-balance`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `recipe-copy-sweep`, `referral-reward-reconciliation`, `search-dictionary`, `search-embeddings`, `showcase-media-revocations`, and `workflow-run-steps`.
+Current decision: keep the Vercel cron orchestrator for `account-deletion-resweeps`, `backend-alert-delivery`, `feed-embeddings`, `feed-maintenance`, `generation-completions`, `generation-model-verification`, `kie-account-balance`, `media-preview-repair`, `media-upload-reclaim`, `mobile-push-receipts`, `operational-data-retention`, `post-view-counts`, `recipe-copy-sweep`, `referral-reward-reconciliation`, `search-dictionary`, `search-embeddings`, `showcase-media-revocations`, and `workflow-run-steps`.
 
 This is the cost-efficient production baseline for the current workload because the jobs are idempotent, lock-protected in Supabase, bounded by 300-second function limits, and tolerant of the current ten-minute or hourly cadence. The single `/api/cron/backend-jobs` scheduler keeps Vercel cron invocations at 144 per day while logical jobs can still run at their own cadence.
 

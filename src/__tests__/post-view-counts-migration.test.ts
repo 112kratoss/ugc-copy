@@ -11,19 +11,20 @@ import { ORPHAN_SKIPPED_TABLES } from '@/lib/storage-orphans';
 const MIGRATIONS = path.join(process.cwd(), 'supabase/migrations');
 const files = readdirSync(MIGRATIONS).filter((name) => name.endsWith('.sql')).sort();
 const strip = (text: string) => text.replace(/--[^\n]*/g, '').replace(/\s+/g, ' ').trim();
-const file = files.find((name) => name.endsWith('_post_view_counts.sql'));
-const sql = file ? readFileSync(path.join(MIGRATIONS, file), 'utf8') : '';
-const code = strip(sql);
+const marksFile = files.find((name) => name.endsWith('_post_view_counts.sql'));
+const totalsFile = files.find((name) => name.endsWith('_post_view_count_totals.sql'));
+const read = (name: string | undefined) => (name ? strip(readFileSync(path.join(MIGRATIONS, name), 'utf8')) : '');
+const marks = read(marksFile);
+const totals = read(totalsFile);
 
 /** The newest migration that defines a function, by its CREATE line. */
 function newestDefinition(signature: string): string {
   const defining = files.filter((name) => strip(readFileSync(path.join(MIGRATIONS, name), 'utf8')).includes(signature));
-  const newest = defining.at(-1);
-  return newest ? strip(readFileSync(path.join(MIGRATIONS, newest), 'utf8')) : '';
+  return read(defining.at(-1));
 }
 
-/** The body of one statement, from its CREATE line to the next statement's start. */
-function definition(signature: string): string {
+/** One function's definition, from its CREATE line to the end of its body. */
+function definition(code: string, signature: string): string {
   const start = code.indexOf(signature);
   if (start < 0) return '';
   const end = code.indexOf('$$;', start);
@@ -31,64 +32,78 @@ function definition(signature: string): string {
 }
 
 /**
- * pgTAP (post_view_counts.test.sql) runs the counting, the cap, the rollup and the prune. This pins
- * what a review reads: where a view may come from, who may call what, the backfill's rules, and that
- * the numbers the server code uses are the ones the database holds to.
+ * pgTAP (post_view_counts.test.sql) runs the counting, the cap, the rollup, the hold and the prune;
+ * the concurrency rules were checked with parallel sessions (PR #902). This pins what a review
+ * reads: where a view may come from, the locks each file takes, who may call what, the backfill's
+ * rules, and that the numbers the server code uses are the ones the database holds to.
  */
-describe('post view counts migration', () => {
-  it('is one migration', () => {
-    expect(file).toBeDefined();
+describe('post view counts migrations', () => {
+  it('are two files, the totals after the marks', () => {
+    expect(marksFile).toBeDefined();
+    expect(totalsFile).toBeDefined();
+    expect(totalsFile! > marksFile!).toBe(true);
   });
 
-  it('adds a lifetime total to posts that never goes below zero', () => {
-    expect(code).toContain(
+  it('record views without locking posts against reads: the marks file never alters posts', () => {
+    expect(marks).not.toMatch(/ALTER TABLE public\.posts/u);
+    expect(marks).not.toMatch(/LOCK TABLE/u);
+    expect(totals).toContain(
       'ALTER TABLE public.posts ADD COLUMN view_count bigint NOT NULL DEFAULT 0 CONSTRAINT posts_view_count_check CHECK (view_count >= 0);',
     );
   });
 
   it('keys a mark by post, viewer and UTC day, an account or a guest with its network', () => {
-    expect(code).toContain('CREATE TABLE public.post_view_marks');
-    expect(code).toContain('viewer_user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE');
-    expect(code).toContain(
+    expect(marks).toContain('CREATE TABLE public.post_view_marks');
+    expect(marks).toContain('viewer_user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE');
+    expect(marks).toContain(
       'CREATE UNIQUE INDEX post_view_marks_user_day_idx ON public.post_view_marks (post_id, view_date, viewer_user_id) WHERE viewer_user_id IS NOT NULL;',
     );
-    expect(code).toContain(
+    expect(marks).toContain(
       'CREATE UNIQUE INDEX post_view_marks_guest_day_idx ON public.post_view_marks (post_id, view_date, anonymous_key_hash) WHERE anonymous_key_hash IS NOT NULL;',
     );
-    // An account's mark never carries a network.
-    expect(code).toContain(
+    // Whole: a post's deletion cascades through it.
+    expect(marks).toContain(
+      'CREATE INDEX post_view_marks_post_day_network_idx ON public.post_view_marks (post_id, view_date, network_key_hash);',
+    );
+    expect(marks).toContain(
       '(viewer_user_id IS NOT NULL AND anonymous_key_hash IS NULL AND network_key_hash IS NULL)',
     );
-    expect(code).toContain(
+    expect(marks).toContain(
       `surface text NOT NULL CHECK (surface IN (${POST_VIEW_SURFACES.map((surface) => `'${surface}'`).join(', ')}))`,
     );
   });
 
   it('gives the Data API roles nothing, and the service role reads only', () => {
     for (const table of ['post_view_marks', 'post_view_days']) {
-      expect(code).toContain(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`);
-      expect(code).toContain(`REVOKE ALL ON TABLE public.${table} FROM PUBLIC, anon, authenticated, service_role;`);
-      expect(code).toContain(`GRANT SELECT ON TABLE public.${table} TO service_role;`);
+      expect(marks).toContain(`ALTER TABLE public.${table} ENABLE ROW LEVEL SECURITY;`);
+      expect(marks).toContain(`REVOKE ALL ON TABLE public.${table} FROM PUBLIC, anon, authenticated, service_role;`);
+      expect(marks).toContain(`GRANT SELECT ON TABLE public.${table} TO service_role;`);
     }
-    expect(code).not.toMatch(/CREATE POLICY [^;]* ON public\.post_view_(marks|days)/u);
+    expect(`${marks} ${totals}`).not.toMatch(/CREATE POLICY [^;]* ON public\.post_view_(marks|days)/u);
   });
 
   it('lets the server call the batch and the rollup, and nothing beneath them', () => {
-    expect(code).toContain('GRANT EXECUTE ON FUNCTION public.record_post_views(uuid, text, text, jsonb) TO service_role;');
-    expect(code).toContain('GRANT EXECUTE ON FUNCTION public.rollup_post_views(timestamptz, integer) TO service_role;');
-    expect(code).toContain(
+    expect(marks).toContain('GRANT EXECUTE ON FUNCTION public.record_post_views(uuid, text, text, jsonb) TO service_role;');
+    expect(totals).toContain('GRANT EXECUTE ON FUNCTION public.rollup_post_views(timestamptz, integer) TO service_role;');
+    expect(marks).toContain(
       'REVOKE ALL ON FUNCTION public.record_post_view(uuid, uuid, text, text, text, timestamptz) FROM PUBLIC, anon, authenticated, service_role;',
     );
-    expect(code).toContain(
+    expect(totals).toContain(
       'REVOKE ALL ON FUNCTION public.apply_post_view_marks(bigint[], timestamptz) FROM PUBLIC, anon, authenticated, service_role;',
     );
-    for (const fn of ['record_post_view(', 'record_post_views(', 'apply_post_view_marks(', 'rollup_post_views(', 'count_feed_impression_as_post_view(']) {
-      expect(definition(`CREATE OR REPLACE FUNCTION public.${fn}`)).toContain("SECURITY DEFINER SET search_path = ''");
+    for (const [code, fn] of [
+      [marks, 'record_post_view('],
+      [marks, 'record_post_views('],
+      [marks, 'count_feed_impression_as_post_view('],
+      [totals, 'apply_post_view_marks('],
+      [totals, 'rollup_post_views('],
+    ] as const) {
+      expect(definition(code, `CREATE OR REPLACE FUNCTION public.${fn}`)).toContain("SECURITY DEFINER SET search_path = ''");
     }
   });
 
   it('counts only a public, visible post, never its creator, a guest held to its network', () => {
-    const record = definition('CREATE OR REPLACE FUNCTION public.record_post_view(');
+    const record = definition(marks, 'CREATE OR REPLACE FUNCTION public.record_post_view(');
     expect(record).toContain("post.visibility = 'public'");
     expect(record).toContain('post.archived_at IS NULL');
     expect(record).toContain('post.tombstoned_at IS NULL');
@@ -102,47 +117,69 @@ describe('post view counts migration', () => {
     expect(record).not.toContain('RAISE EXCEPTION');
   });
 
-  it('takes the route\'s batch at the server\'s time, as large as the server sends', () => {
-    const batch = definition('CREATE OR REPLACE FUNCTION public.record_post_views(');
+  it('never makes an account\'s view wait, and counts a network\'s guests one at a time', () => {
+    const record = definition(marks, 'CREATE OR REPLACE FUNCTION public.record_post_view(');
+    // An account: a plain read, then a lock it skips when it is taken.
+    expect(record).toContain("IF NOT pg_try_advisory_xact_lock(hashtextextended( 'post_view:'");
+    // A guest: the network's lock, waited for, around the count and the insert.
+    expect(record).toContain("PERFORM pg_advisory_xact_lock(hashtextextended( 'post_view_network:'");
+    const batch = definition(marks, 'CREATE OR REPLACE FUNCTION public.record_post_views(');
+    // In post order, so two requests never wait on each other in a cycle.
+    expect(batch).toContain("ORDER BY value->>'postId'");
     expect(batch).toContain(`IF jsonb_array_length(p_views) > ${POST_VIEWS_MAX_BATCH} THEN`);
     expect(batch).toContain("RAISE EXCEPTION 'A guest''s post view needs its network key'");
     expect(batch).toContain('v_now timestamptz := now();');
   });
 
   it('counts a feed impression only from Home or the feed reel, by an account', () => {
-    expect(code).toContain(
+    expect(marks).toContain(
       "CREATE TRIGGER feed_events_count_post_view AFTER INSERT ON public.feed_events FOR EACH ROW WHEN ( NEW.event_type = 'impression' AND NEW.source_surface IN ('feed', 'showcase-reel') AND NEW.viewer_user_id IS NOT NULL ) EXECUTE FUNCTION public.count_feed_impression_as_post_view();",
     );
-    // The received time, never the client's occurred_at.
-    const trigger = definition('CREATE OR REPLACE FUNCTION public.count_feed_impression_as_post_view(');
+    const trigger = definition(marks, 'CREATE OR REPLACE FUNCTION public.count_feed_impression_as_post_view(');
     expect(trigger).toContain('NEW.received_at');
     expect(trigger).not.toContain('occurred_at');
   });
 
-  it('writes each post once a call and isolates a post whose own check refuses it', () => {
-    const rollup = definition('CREATE OR REPLACE FUNCTION public.rollup_post_views(');
-    expect(rollup).toContain('SET CONSTRAINTS ALL IMMEDIATE;');
-    expect(rollup).toContain('FOR UPDATE SKIP LOCKED');
-    expect(rollup).toContain("pg_try_advisory_xact_lock(hashtextextended('rollup_post_views', 0))");
-    expect(rollup).toContain('v_posts_failed := v_posts_failed + 1;');
-    // Kept two days after their day, and the days 400.
-    expect(rollup).toContain('marks.view_date < v_today - 2');
-    expect(rollup).toContain('days.view_date < v_today - 400');
-    expect(rollup).toContain('p_limit > 50000');
-    expect(POST_VIEW_ROLLUP_LIMIT).toBeLessThanOrEqual(50_000);
-  });
-
-  it('backfills the impressions the feed holds as uncounted marks, after the trigger exists', () => {
-    const trigger = code.indexOf('CREATE TRIGGER feed_events_count_post_view');
-    const backfill = code.indexOf('INSERT INTO public.post_view_marks ( post_id, view_date, viewer_user_id, anonymous_key_hash, surface, viewed_at ) SELECT DISTINCT ON');
+  it('backfills the impressions the feed holds as uncounted marks, a post\'s guests held to 20 a day', () => {
+    const trigger = marks.indexOf('CREATE TRIGGER feed_events_count_post_view');
+    const backfill = marks.indexOf('WITH impressions AS (');
     expect(trigger).toBeGreaterThan(0);
     expect(backfill).toBeGreaterThan(trigger);
-    const statement = code.slice(backfill, code.indexOf('ON CONFLICT DO NOTHING;', backfill));
+    const statement = marks.slice(backfill, marks.indexOf('ON CONFLICT DO NOTHING;', backfill));
     expect(statement).toContain("events.event_type = 'impression'");
     expect(statement).toContain("events.source_surface IN ('feed', 'showcase-reel')");
     expect(statement).toContain('post.user_id IS DISTINCT FROM events.viewer_user_id');
     expect(statement).toContain("post.review_status = 'visible'");
+    expect(statement).toContain('PARTITION BY impressions.post_id, impressions.view_date, impressions.viewer_user_id IS NULL');
+    expect(statement).toContain('WHERE ranked.viewer_user_id IS NOT NULL OR ranked.arrival <= 20');
     expect(statement).not.toContain('counted_at');
+  });
+
+  it('never counts a view as an edit', () => {
+    expect(totals).toContain(
+      'DROP TRIGGER IF EXISTS posts_set_updated_at ON public.posts; CREATE TRIGGER posts_set_updated_at BEFORE UPDATE ON public.posts FOR EACH ROW WHEN (OLD.view_count IS NOT DISTINCT FROM NEW.view_count) EXECUTE FUNCTION public.touch_updated_at_column();',
+    );
+  });
+
+  it('rolls up without waiting, holds back a refused post, and prunes what is counted or held', () => {
+    const rollup = definition(totals, 'CREATE OR REPLACE FUNCTION public.rollup_post_views(');
+    expect(rollup).toContain('SET CONSTRAINTS ALL IMMEDIATE;');
+    expect(rollup).toContain("pg_try_advisory_xact_lock(hashtextextended('rollup_post_views', 0))");
+    // Posts first, then marks, each SKIP LOCKED: a delete or an edit is never waited on.
+    const postsLock = rollup.indexOf('FOR NO KEY UPDATE SKIP LOCKED');
+    const marksLock = rollup.indexOf('FOR UPDATE SKIP LOCKED');
+    expect(postsLock).toBeGreaterThan(0);
+    expect(marksLock).toBeGreaterThan(postsLock);
+    expect(rollup).toContain('(marks.retry_after IS NULL OR marks.retry_after <= v_as_of)');
+    expect(rollup).toContain("SET retry_after = v_as_of + interval '1 hour'");
+    expect(rollup).toContain('v_posts_failed := v_posts_failed + 1;');
+    expect(rollup).toContain('(marks.counted_at IS NOT NULL OR marks.retry_after IS NOT NULL) AND marks.view_date < v_today - 2');
+    expect(rollup).toContain('days.view_date < v_today - 400');
+    expect(rollup).toContain('p_limit > 50000');
+    expect(marks).toContain(
+      'CREATE INDEX post_view_marks_prunable_day_idx ON public.post_view_marks (view_date, id) WHERE counted_at IS NOT NULL OR retry_after IS NOT NULL;',
+    );
+    expect(POST_VIEW_ROLLUP_LIMIT).toBeLessThanOrEqual(50_000);
   });
 
   it('is still in the newest definition of the creator totals and the growth accounting', () => {

@@ -224,6 +224,8 @@ async function fetchCreatorPostRows({
   let includeTextColumns = mode === 'page';
   // The post's own "Allow remixes" (owner, 2026-11-05), which closes the card's Remix.
   let includeRemixesAllowed = mode === 'page';
+  // A database from before the view counts (20261123070741) has no view_count.
+  let includeViewCount = mode === 'page';
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const columns = mode === 'page'
@@ -237,7 +239,7 @@ async function fetchCreatorPostRows({
           'category',
           includeTextColumns ? 'post_format' : null,
           'save_count',
-          'view_count',
+          includeViewCount ? 'view_count' : null,
           'remix_count',
           'created_at',
           'generation_id',
@@ -304,6 +306,11 @@ async function fetchCreatorPostRows({
     // A database from before the column: every post allows remixes, as they all did.
     if (includeRemixesAllowed && result.error?.code === '42703' && /remixes_allowed/.test(`${result.error.message ?? ''}`)) {
       includeRemixesAllowed = false;
+      shouldRetry = true;
+    }
+    // A database from before the view counts: the cards carry no viewCount.
+    if (includeViewCount && result.error?.code === '42703' && /view_count/.test(`${result.error.message ?? ''}`)) {
+      includeViewCount = false;
       shouldRetry = true;
     }
     if (shouldRetry) continue;

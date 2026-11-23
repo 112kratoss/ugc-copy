@@ -265,7 +265,7 @@ async function fetchPostRows(
 
   const result = await query.range(offset, offset + limit - 1);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed|view_count/))) {
     if (category === 'text') {
       return [];
     }
@@ -335,7 +335,7 @@ async function fetchPostRowsByIds(
     .eq('visibility', 'public')
     .is('archived_at', null);
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed|view_count/))) {
     const legacyResult = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id')
@@ -2026,7 +2026,7 @@ export async function getShowcaseFeedItemById(options: {
     .is('archived_at', null)
     .maybeSingle();
 
-  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed/))) {
+  if (isMissingPostTextColumnsError(result.error) || (result.error?.code === '42703' && `${result.error.message ?? ''}`.match(/source_tool_slug|review_status|creation_mode|remixes_allowed|view_count/))) {
     result = await adminSupabase
       .from('posts')
       .select('id, output_url, showcase_asset_path, prompt, title, description, category, save_count, remix_count, created_at, user_id, source_kind, source_tool, generation_id, visibility')
