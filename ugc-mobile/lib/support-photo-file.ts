@@ -7,18 +7,27 @@
  * after that failed the same way (seen on the Pixel 9a emulator with /data
  * 94% full, 2026-11-23). The documents folder is never emptied by the system.
  *
- * Each copy is let go once its message is sent or let go, or the draft is
- * taken off; one a closed screen left behind is swept after a day.
- * expo-file-system is read lazily, as the rest of the app does, and any
- * failure here falls back to the picker's own file rather than to no photo.
+ * Each copy is let go once its message is sent or let go, the draft is taken
+ * off, or the screen closes with it unsent; the sweep takes what an earlier
+ * run of the app left (it was stopped or reloaded with a photo waiting) and
+ * anything a day old. expo-file-system is read lazily, as the rest of the app
+ * does, and any failure here falls back to the picker's own file rather than
+ * to no photo.
  */
 
 type FileSystem = typeof import('expo-file-system');
 type FileSystemDirectory = InstanceType<FileSystem['Directory']>;
+type FileSystemFile = InstanceType<FileSystem['File']>;
 
 export const SUPPORT_PHOTO_FOLDER = 'support-photos';
 /** A copy older than this was left by a screen that closed before it was sent. */
 export const SUPPORT_PHOTO_STALE_MS = 24 * 60 * 60 * 1000;
+/**
+ * When this run of the app first read this module: every copy it keeps is
+ * written later, so an older one was kept by an earlier run, whose screens
+ * and sends are gone.
+ */
+const RUN_STARTED_AT = Date.now();
 
 /** A send whose photo is no longer on the phone: no try can read it again. */
 export class SupportPhotoGoneError extends Error {
@@ -61,14 +70,21 @@ export function supportPhotoCopyName(
 export async function keepSupportPhoto(uri: string, name: string): Promise<string> {
   const fs = await loadFileSystem();
   if (!fs) return uri;
+  let copy: FileSystemFile | null = null;
   try {
     const folder = folderOf(fs);
     if (insideFolder(folder, uri)) return uri;
     folder.create({ idempotent: true, intermediates: true });
-    const copy = new fs.File(folder, name);
+    copy = new fs.File(folder, name);
     new fs.File(uri).copy(copy);
     return copy.uri;
   } catch {
+    // A copy cut short (a full disk) is not left behind.
+    try {
+      if (copy?.exists) copy.delete();
+    } catch {
+      // The sweep takes it.
+    }
     return uri;
   }
 }
@@ -87,8 +103,15 @@ export async function letGoSupportPhoto(uri: string | null | undefined): Promise
   }
 }
 
-/** Deletes the copies a day old or more: the screen that kept them closed before they went. */
-export async function sweepSupportPhotos(now: number = Date.now()): Promise<void> {
+/**
+ * Deletes the copies nothing can still send: those an earlier run of the app
+ * kept, and those a day old (a screen of this run that closed with a send
+ * still on its way lets that copy go itself when the send settles).
+ */
+export async function sweepSupportPhotos(
+  now: number = Date.now(),
+  runStartedAt: number = RUN_STARTED_AT,
+): Promise<void> {
   const fs = await loadFileSystem();
   if (!fs) return;
   try {
@@ -97,7 +120,7 @@ export async function sweepSupportPhotos(now: number = Date.now()): Promise<void
     for (const entry of folder.list()) {
       if (!(entry instanceof fs.File)) continue;
       const time = entry.modificationTime ?? entry.creationTime ?? null;
-      if (time !== null && now - time < SUPPORT_PHOTO_STALE_MS) continue;
+      if (time !== null && time >= runStartedAt && now - time < SUPPORT_PHOTO_STALE_MS) continue;
       try {
         entry.delete();
       } catch {

@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const disk = vi.hoisted(() => ({
   files: new Map<string, { time: number | null }>(),
   folders: new Set<string>(),
-  failCopy: false,
+  // 'before' fails ahead of writing anything; 'partway' leaves part of the copy written, as a full disk does.
+  failCopy: false as false | 'before' | 'partway',
 }));
 
 vi.mock('expo-file-system', () => {
@@ -29,8 +30,9 @@ vi.mock('expo-file-system', () => {
       return null;
     }
     copy(destination: File) {
-      if (disk.failCopy || !disk.files.has(this.uri)) throw new Error('Unable to copy');
+      if (disk.failCopy === 'before' || !disk.files.has(this.uri)) throw new Error('Unable to copy');
       disk.files.set(destination.uri, { time: Date.now() });
+      if (disk.failCopy === 'partway') throw new Error('No space left on device');
     }
     delete() {
       if (!disk.files.delete(this.uri)) throw new Error('No such file');
@@ -85,8 +87,14 @@ describe('a picked photo kept for a support message', () => {
   });
 
   it('falls back to the picker\'s own file when no copy can be made', async () => {
-    disk.failCopy = true;
+    disk.failCopy = 'before';
     await expect(keepSupportPhoto(PICKED, 'lq1-abc.jpg')).resolves.toBe(PICKED);
+  });
+
+  it('leaves no copy cut short behind when the disk fills partway', async () => {
+    disk.failCopy = 'partway';
+    await expect(keepSupportPhoto(PICKED, 'lq1-abc.jpg')).resolves.toBe(PICKED);
+    expect(disk.files.has(`${FOLDER}lq1-abc.jpg`)).toBe(false);
   });
 
   it('does not copy a copy again', async () => {
@@ -105,14 +113,19 @@ describe('a picked photo kept for a support message', () => {
     await expect(letGoSupportPhoto(null)).resolves.toBeUndefined();
   });
 
-  it('sweeps the copies a day old that a closed screen left behind, and keeps the newer ones', async () => {
+  it('sweeps what an earlier run of the app left and what is a day old, and keeps this run\'s copies', async () => {
     const now = Date.now();
+    const runStartedAt = now - 10 * 60_000;
     disk.folders.add(FOLDER);
-    disk.files.set(`${FOLDER}old.jpg`, { time: now - SUPPORT_PHOTO_STALE_MS - 1 });
-    disk.files.set(`${FOLDER}new.jpg`, { time: now - 60_000 });
-    await sweepSupportPhotos(now);
-    expect(disk.files.has(`${FOLDER}old.jpg`)).toBe(false);
-    expect(disk.files.has(`${FOLDER}new.jpg`)).toBe(true);
+    // The app was stopped, or reloaded, with a photo waiting a minute before this run began.
+    disk.files.set(`${FOLDER}earlier-run.jpg`, { time: runStartedAt - 60_000 });
+    // A send of this run that outlived its screen, two minutes ago.
+    disk.files.set(`${FOLDER}this-run.jpg`, { time: now - 2 * 60_000 });
+    disk.files.set(`${FOLDER}a-day-old.jpg`, { time: now - SUPPORT_PHOTO_STALE_MS - 1 });
+    await sweepSupportPhotos(now, runStartedAt);
+    expect(disk.files.has(`${FOLDER}earlier-run.jpg`)).toBe(false);
+    expect(disk.files.has(`${FOLDER}a-day-old.jpg`)).toBe(false);
+    expect(disk.files.has(`${FOLDER}this-run.jpg`)).toBe(true);
     expect(disk.files.has(PICKED)).toBe(true);
   });
 
