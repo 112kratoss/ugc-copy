@@ -63,6 +63,8 @@ Public Showcase objects use a one-day browser and image-cache TTL (`SHOWCASE_PUB
 
 An uploaded post keeps its media in the private `post_media` bucket (`private-posts/<post>/`), and `/api/media` checks the post again at every request. While the post is public, a link that route hands out lasts up to 15 minutes, and the viewer's browser may keep the redirect for up to 13. Hiding the post (`hide`, or `/admin` → Content), or its owner archiving it, making it private, marking it NSFW or deleting the account, stops every new view at once but does not revoke a link already handed out: it keeps working for up to 15 minutes. When the media must stop at once, use `take_down`: it deletes the objects, which ends every link.
 
+Since 2026-11-23 a public uploaded post is also served from public copies of those objects (`showcase_media`, `public-posts/<post>/`, `src/lib/post-media-public-copies.ts`), recorded on its `post_media` rows (`public_copy_paths`). Every write that ends the post's public reading (a hide or take-down, an archive, made private, marked NSFW, a tombstone, a delete, its owner deleting the account) clears those records in its own transaction, so the app stops naming the copies at once, and queues them in `post_media_public_copy_queue`. `hide` and `take_down` then delete the copies before they answer (`take_down` verifies each one gone with the private objects; a `hide` whose removal Storage refused says so, and the `showcase-media-revocations` job retries it within the hour). A viewer who already loaded a copy can replay it from their own browser cache, as with any public post. A `restore` makes the copies again.
+
 Dismiss a report only after confirming the content does not violate policy:
 
 ```sh

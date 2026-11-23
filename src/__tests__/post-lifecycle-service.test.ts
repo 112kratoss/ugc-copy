@@ -217,6 +217,75 @@ describe('restoreOwnerPostForRoute', () => {
     clearCacheMocks();
   });
 
+  // The public copies of a post's uploaded media (post-media-public-copies.ts).
+  describe('the public copies of its uploaded media', () => {
+    function copies() {
+      const order: string[] = [];
+      return {
+        order,
+        publicCopies: {
+          sync: vi.fn(async () => {
+            order.push('sync');
+            return { begun: 1, committed: 1, refused: 0, failed: 0 };
+          }),
+          removeQueued: vi.fn(async () => {
+            order.push('remove');
+            return { due: 1, removed: 1, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
+          }),
+        },
+      };
+    }
+
+    it('go before the answer when the post is archived, which queued them', async () => {
+      const client = createClient();
+      const { publicCopies } = copies();
+
+      const result = await archiveOwnerPostForRoute({
+        adminSupabase: client.client, ownerUserId: 'user-1', postId: 'post-1', publicCopies,
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(publicCopies.removeQueued).toHaveBeenCalledWith(client.client, { postId: 'post-1' });
+      expect(publicCopies.sync).not.toHaveBeenCalled();
+    });
+
+    it('are made again for a public post restored, before its pages are refreshed', async () => {
+      const client = createClient({
+        postResult: { data: { id: 'post-1', generation_id: null, visibility: 'public', showcase_asset_path: null }, error: null },
+      });
+      const { publicCopies, order } = copies();
+      cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockImplementationOnce(async () => { order.push('refresh'); });
+
+      await restoreOwnerPostForRoute({ adminSupabase: client.client, ownerUserId: 'user-1', postId: 'post-1', publicCopies });
+
+      expect(publicCopies.sync).toHaveBeenCalledWith(client.client, 'post-1');
+      expect(order).toEqual(['sync', 'refresh']);
+    });
+
+    it('are not made for a private post restored', async () => {
+      const client = createClient({
+        postResult: { data: { id: 'post-1', generation_id: null, visibility: 'private', showcase_asset_path: null }, error: null },
+      });
+      const { publicCopies } = copies();
+
+      await restoreOwnerPostForRoute({ adminSupabase: client.client, ownerUserId: 'user-1', postId: 'post-1', publicCopies });
+
+      expect(publicCopies.sync).not.toHaveBeenCalled();
+    });
+
+    it('never fail the archive when Storage refuses', async () => {
+      const client = createClient();
+      const { publicCopies } = copies();
+      publicCopies.removeQueued.mockRejectedValueOnce(new Error('storage unavailable'));
+
+      const result = await archiveOwnerPostForRoute({
+        adminSupabase: client.client, ownerUserId: 'user-1', postId: 'post-1', publicCopies,
+      });
+
+      expect(result).toEqual({ ok: true, body: { success: true, archived: true } });
+    });
+  });
+
   it('restores only archived posts owned by the caller', async () => {
     const client = createClient({
       postResult: { data: { id: 'post-1', generation_id: null, visibility: 'public', showcase_asset_path: null }, error: null },

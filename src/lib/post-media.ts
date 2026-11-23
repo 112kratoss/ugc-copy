@@ -1,4 +1,5 @@
 import { postMediaReadUrl } from '@/lib/post-media-storage';
+import { servedPostMediaPathUrl } from '@/lib/post-media-public-copies';
 import 'server-only';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -103,6 +104,11 @@ interface PostMediaDbRow {
   teaser_error?: string | null;
   /** Set when the media's only source is known to be gone; see the 20260908061500 migration. */
   source_unavailable_at?: string | null;
+  /**
+   * Recorded public copies of this row's private objects (`post-media-public-copies.ts`).
+   * The database clears them in the same write that stops the post being readable by anyone.
+   */
+  public_copy_paths?: string[] | null;
   external_url: string | null;
   media_kind: ShowcaseMediaKind;
   content_type: string | null;
@@ -179,6 +185,15 @@ function isMissingPostMediaTeaserColumnError(error: unknown): boolean {
     && /teaser_(storage_path|bytes|generated_at|error)/.test(message);
 }
 
+function isMissingPostMediaPublicCopyColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const { code, message = '' } = error as SupabaseSchemaError;
+  return (code === '42703' || code === 'PGRST204') && /public_copy_paths/.test(message);
+}
+
 export function isMissingPostMediaSchemaError(error: unknown): boolean {
   if (!error || typeof error !== 'object') {
     return false;
@@ -204,12 +219,27 @@ export function getMediaKindFromContentType(contentType: string | null | undefin
   return null;
 }
 
+/**
+ * The URL a reader is handed for one of a row's stored paths: its recorded
+ * public copy, straight from the storage CDN, when the row has one; else the
+ * authorized `/api/media` route for a private path, or the public URL.
+ */
+function readPostMediaDbRowPath(supabase: SupabaseClient, row: PostMediaDbRow, path: string): string {
+  return servedPostMediaPathUrl({
+    client: supabase,
+    postId: row.post_id,
+    path,
+    recordedCopies: row.public_copy_paths,
+    fallback: (stored) => postMediaReadUrl(supabase, stored),
+  });
+}
+
 async function resolvePostMediaDbRowUrl(
   supabase: SupabaseClient,
   row: PostMediaDbRow
 ): Promise<string | null> {
   if (row.storage_path) {
-    return postMediaReadUrl(supabase, row.storage_path);
+    return readPostMediaDbRowPath(supabase, row, row.storage_path);
   }
 
   if (!row.external_url) {
@@ -240,12 +270,12 @@ async function resolvePostMediaDbRows(
         }
 
         const previewUrl = row.preview_storage_path
-          ? postMediaReadUrl(supabase, row.preview_storage_path)
+          ? readPostMediaDbRowPath(supabase, row, row.preview_storage_path)
           : null;
         // Null whenever no display rendition was worth storing; every reader
         // falls back to `url`, which is what it used before this existed.
         const displayUrl = row.display_storage_path
-          ? postMediaReadUrl(supabase, row.display_storage_path)
+          ? readPostMediaDbRowPath(supabase, row, row.display_storage_path)
           : null;
         // A source known to be gone can never earn a preview: report it failed
         // so no grid waits on it, and carry the marker so clients say why.
@@ -256,14 +286,14 @@ async function resolvePostMediaDbRows(
         // Only a 'ready' row is served: a path left behind by a half-finished
         // attempt must never reach the feed.
         const renditionUrl = row.rendition_storage_path && row.rendition_status === 'ready'
-          ? postMediaReadUrl(supabase, row.rendition_storage_path)
+          ? readPostMediaDbRowPath(supabase, row, row.rendition_storage_path)
           : null;
         const renditionStatus: PostMediaRenditionStatus = row.rendition_status
           ?? (row.media_kind === 'video' ? 'pending' : 'skipped');
         // Path presence is the teaser's ready signal: the worker records it
         // only after the content-hashed object uploaded.
         const teaserUrl = row.teaser_storage_path
-          ? postMediaReadUrl(supabase, row.teaser_storage_path)
+          ? readPostMediaDbRowPath(supabase, row, row.teaser_storage_path)
           : null;
         const feedStreamUrl = row.media_kind === 'video'
           ? resolvePostVideoFeedStreamUrl({
@@ -338,6 +368,7 @@ export async function loadPostMediaItemsMap(
   const TEASER_COLUMNS = 'teaser_storage_path, teaser_bytes, teaser_generated_at, teaser_error';
   const SOURCE_COLUMNS = 'source_unavailable_at';
   const DISPLAY_COLUMNS = 'display_storage_path';
+  const PUBLIC_COPY_COLUMNS = 'public_copy_paths';
 
   const selectPostMedia = (columns: string) => supabase
     .from('post_media')
@@ -345,9 +376,16 @@ export async function loadPostMediaItemsMap(
     .in('post_id', uniquePostIds)
     .order('sort_order', { ascending: true });
 
-  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}, ${DISPLAY_COLUMNS}`);
+  const fullResult = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}, ${DISPLAY_COLUMNS}, ${PUBLIC_COPY_COLUMNS}`);
   let data = fullResult.data as PostMediaDbRow[] | null;
   let error = fullResult.error;
+
+  // Before the public copies migration every read takes the authorized route.
+  if (isMissingPostMediaPublicCopyColumnError(error)) {
+    const withoutPublicCopies = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}, ${DISPLAY_COLUMNS}`);
+    data = withoutPublicCopies.data as PostMediaDbRow[] | null;
+    error = withoutPublicCopies.error;
+  }
 
   if (isMissingPostMediaDisplayColumnError(error)) {
     const withoutDisplay = await selectPostMedia(`${BASE_COLUMNS}, media_key, ${PREVIEW_COLUMNS}, ${RENDITION_COLUMNS}, ${TEASER_COLUMNS}, ${SOURCE_COLUMNS}`);

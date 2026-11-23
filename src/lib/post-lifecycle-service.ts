@@ -7,10 +7,23 @@ import {
   POST_MUTATION_RATE_LIMIT,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
+import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
+import { removeQueuedPostMediaPublicCopies, syncPostMediaPublicCopies } from '@/lib/post-media-public-copies';
 import {
   invalidateShowcaseFeedAndRefreshPostPages,
   invalidateShowcaseFeedCache,
 } from '@/lib/showcase-feed-cache';
+
+/** The public copies of a post's uploaded media (post-media-public-copies.ts); a test seam. */
+export type PostLifecyclePublicCopies = {
+  sync: typeof syncPostMediaPublicCopies;
+  removeQueued: typeof removeQueuedPostMediaPublicCopies;
+};
+
+const defaultPublicCopies: PostLifecyclePublicCopies = {
+  sync: syncPostMediaPublicCopies,
+  removeQueued: removeQueuedPostMediaPublicCopies,
+};
 
 type ArchivedPostRow = {
   id: string;
@@ -82,11 +95,13 @@ export async function archiveOwnerPostForRoute({
   now = () => new Date(),
   ownerUserId,
   postId,
+  publicCopies = defaultPublicCopies,
 }: {
   adminSupabase: SupabaseClient;
   now?: () => Date;
   ownerUserId: string;
   postId: string;
+  publicCopies?: PostLifecyclePublicCopies;
 }): Promise<PostLifecycleResult> {
   const rateLimitError = await enforcePostLifecycleRateLimit(adminSupabase, ownerUserId);
   if (rateLimitError) {
@@ -132,6 +147,14 @@ export async function archiveOwnerPostForRoute({
 
   // A removal: every cached page that showed the post is dropped at once.
   invalidateShowcaseFeedCache();
+
+  // The archive queued the public copies of its uploaded media in the same
+  // statement; they go now, and the job retries any that fail.
+  try {
+    await publicCopies.removeQueued(adminSupabase, { postId: post.id });
+  } catch (copyRemovalError) {
+    logBackendError('failed_to_remove_public_post_media_after_archive', { error: copyRemovalError });
+  }
 
   // Bundle exposure changes in the same transaction as the post. A separate
   // demotion here could overwrite a newer restore that committed while this
@@ -184,10 +207,12 @@ export async function restoreOwnerPostForRoute({
   adminSupabase,
   ownerUserId,
   postId,
+  publicCopies = defaultPublicCopies,
 }: {
   adminSupabase: SupabaseClient;
   ownerUserId: string;
   postId: string;
+  publicCopies?: PostLifecyclePublicCopies;
 }): Promise<PostLifecycleResult> {
   const rateLimitError = await enforcePostLifecycleRateLimit(adminSupabase, ownerUserId);
   if (rateLimitError) {
@@ -228,6 +253,16 @@ export async function restoreOwnerPostForRoute({
 
   if (!post) {
     return explainUnrestoredPost(adminSupabase, ownerUserId, postId);
+  }
+
+  // A public post back on show gets its uploaded media's public copies again
+  // before its pages are refreshed, so they name them.
+  if (post.visibility === 'public') {
+    try {
+      await publicCopies.sync(adminSupabase, post.id);
+    } catch (copyError) {
+      logBackendWarning('failed_to_copy_public_post_media', { error: copyError });
+    }
   }
 
   // Nothing is removed: the post's pages are refreshed in the background, and

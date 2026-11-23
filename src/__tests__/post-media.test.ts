@@ -224,6 +224,90 @@ describe('post media summaries', () => {
     });
   });
 
+  describe('public copies of uploaded media', () => {
+    const POST = 'b9700000-0000-4000-8000-000000000001';
+    const uploadedRow = (publicCopyPaths?: string[]) => ({
+      id: 'media-1',
+      post_id: POST,
+      storage_path: `private-posts/${POST}/0/photo.jpg`,
+      preview_storage_path: `private-posts/${POST}/0/photo.preview.0123456789abcdef.webp`,
+      display_storage_path: `private-posts/${POST}/0/photo.display.0123456789abcdef.webp`,
+      external_url: null,
+      media_kind: 'image',
+      content_type: 'image/jpeg',
+      original_name: 'photo.jpg',
+      width: 1200,
+      height: 1600,
+      duration_seconds: null,
+      sort_order: 0,
+      ...(publicCopyPaths ? { public_copy_paths: publicCopyPaths } : {}),
+    });
+    const clientFor = (rows: unknown[], selections: string[] = [], failFirst = false) => {
+      const query = {
+        select(columns: string) { selections.push(columns); return query; },
+        in() { return query; },
+        order() {
+          return Promise.resolve(failFirst && selections.length === 1
+            ? { data: null, error: { code: '42703', message: 'column post_media.public_copy_paths does not exist' } }
+            : { data: rows, error: null });
+        },
+      };
+      return {
+        from: () => query,
+        storage: {
+          from: (bucket: string) => ({
+            getPublicUrl: (storagePath: string) => ({ data: { publicUrl: `https://cdn.example.com/${bucket}/${storagePath}` } }),
+          }),
+        },
+      };
+    };
+    const routed = (path: string) => `/api/media?${new URLSearchParams({ bucket: 'post_media', path })}`;
+
+    it('serves each recorded copy from the CDN and every other private path through /api/media', async () => {
+      const selections: string[] = [];
+      const supabase = clientFor([uploadedRow([
+        `public-posts/${POST}/0/photo.jpg`,
+        `public-posts/${POST}/0/photo.preview.0123456789abcdef.webp`,
+      ])], selections);
+
+      const item = (await loadPostMediaItemsMap(supabase as never, [POST])).get(POST)?.[0];
+
+      expect(selections[0]).toContain('public_copy_paths');
+      expect(item).toMatchObject({
+        url: `https://cdn.example.com/showcase_media/public-posts/${POST}/0/photo.jpg`,
+        previewUrl: `https://cdn.example.com/showcase_media/public-posts/${POST}/0/photo.preview.0123456789abcdef.webp`,
+        // Not copied yet: the authorized route, as before.
+        displayUrl: routed(`private-posts/${POST}/0/photo.display.0123456789abcdef.webp`),
+      });
+      // Keys stay the stored paths, so a client's cache keeps what it holds.
+      expect(item?.previewCacheKey).toBe(`private-posts/${POST}/0/photo.preview.0123456789abcdef.webp`);
+    });
+
+    it('keeps a post with no recorded copy on /api/media', async () => {
+      const item = (await loadPostMediaItemsMap(clientFor([uploadedRow([])]) as never, [POST])).get(POST)?.[0];
+      expect(item).toMatchObject({
+        url: routed(`private-posts/${POST}/0/photo.jpg`),
+        previewUrl: routed(`private-posts/${POST}/0/photo.preview.0123456789abcdef.webp`),
+      });
+    });
+
+    it('never serves a recorded path that is not the twin of the row\'s own private path', async () => {
+      const item = (await loadPostMediaItemsMap(clientFor([uploadedRow([
+        'public-posts/b9700000-0000-4000-8000-000000000002/0/photo.jpg',
+      ])]) as never, [POST])).get(POST)?.[0];
+      expect(item?.url).toBe(routed(`private-posts/${POST}/0/photo.jpg`));
+    });
+
+    it('keeps serving media from a database that predates public copies', async () => {
+      const selections: string[] = [];
+      const item = (await loadPostMediaItemsMap(clientFor([uploadedRow()], selections, true) as never, [POST])).get(POST)?.[0];
+      expect(selections).toHaveLength(2);
+      expect(selections[1]).not.toContain('public_copy_paths');
+      expect(selections[1]).toContain('display_storage_path');
+      expect(item?.url).toBe(routed(`private-posts/${POST}/0/photo.jpg`));
+    });
+  });
+
   it('keeps serving media from a database that predates display renditions', async () => {
     const selections: string[] = [];
     const rows = [{

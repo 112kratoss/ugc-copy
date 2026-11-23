@@ -932,6 +932,77 @@ describe('publishPreparedPost', () => {
     });
   });
 
+  // The public copies of the uploaded media (post-media-public-copies.ts): made
+  // once the post is public, before its pages are refreshed, so they name them.
+  describe('the public copies of its uploaded media', () => {
+    async function publishStagedVideo(visibility: 'public' | 'private', copyFailure: Error | null = null) {
+      const prepared = await prepareStagedMediaSubmission({ fileName: 'clip.mp4', contentType: 'video/mp4', category: 'video' });
+      const order: string[] = [];
+      const syncPostMediaPublicCopies = vi.fn(async () => {
+        order.push('copies');
+        if (copyFailure) throw copyFailure;
+        return { begun: 1, committed: 1, refused: 0, failed: 0 };
+      });
+      // Not a Once: a publish that refreshes nothing must not leave it to the next test.
+      cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockImplementation(async () => { order.push('refresh'); });
+      const result = await publishPreparedPost({
+        adminSupabase: adminSupabaseDouble({
+          storage: {
+            from: vi.fn(() => ({
+              info: vi.fn(async () => ({ data: { size: 13 * 1024 * 1024, contentType: 'video/mp4' }, error: null })),
+              copy: vi.fn(async () => ({ data: { path: 'private-posts/post-1/0/clip.mp4' }, error: null })),
+              download: vi.fn(),
+              remove: vi.fn(async () => ({ data: [], error: null })),
+            })),
+          },
+          from: vi.fn(() => ({
+            update: vi.fn(() => ({ in: vi.fn(() => ({ is: vi.fn(async () => ({ error: null })) })) })),
+          })),
+        }),
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        submission: { ...prepared.submission, visibility },
+        dependencies: {
+          getMarketplaceQualityErrorForPostBundle: vi.fn(async () => null),
+          createPostWithResourceBundleAtomically: vi.fn(async () => ({
+            postId: 'post-1', visibility: 'private' as const, bundleId: null, bundleStatus: null,
+          })),
+          updatePostWithResourceBundleAtomically: vi.fn(async () => ({
+            postId: 'post-1', visibility: 'public' as const, bundleId: null, bundleStatus: null,
+          })),
+          insertPostMediaItems: vi.fn(),
+          insertPostSourceTools: vi.fn(),
+          createPostMediaPreview: vi.fn(),
+          createPostMediaRendition: vi.fn(),
+          syncPostMediaPublicCopies,
+        },
+      });
+      cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mockImplementation(async () => {});
+      return { result, order, syncPostMediaPublicCopies };
+    }
+
+    it('are made once the post is public, before its pages are refreshed', async () => {
+      const { result, order, syncPostMediaPublicCopies } = await publishStagedVideo('public');
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'public' } });
+      expect(syncPostMediaPublicCopies).toHaveBeenCalledWith(expect.anything(), 'post-1');
+      expect(order).toEqual(['copies', 'refresh']);
+    });
+
+    it('are not made for a post published privately', async () => {
+      const { result, syncPostMediaPublicCopies } = await publishStagedVideo('private');
+
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(syncPostMediaPublicCopies).not.toHaveBeenCalled();
+    });
+
+    it('never fail the publish: the media is served through /api/media until a later sync', async () => {
+      const { result, order } = await publishStagedVideo('public', new Error('storage unavailable'));
+      expect(order).toEqual(['copies', 'refresh']);
+      expect(result).toMatchObject({ ok: true, body: { visibility: 'public' } });
+    });
+  });
+
   it('seeds duration_seconds from the client report on the staged video path', async () => {
     const prepared = await prepareStagedMediaSubmission({
       fileName: 'clip.mp4',

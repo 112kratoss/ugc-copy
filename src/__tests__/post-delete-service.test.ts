@@ -558,6 +558,74 @@ describe('deleteOwnerPostForRoute', () => {
     ]);
   });
 
+  // The tombstone or delete queued them in its own statement (post-media-public-copies.ts).
+  describe('the public copies of its uploaded media', () => {
+    const uploadPost = {
+      id: 'post-1',
+      user_id: 'user-1',
+      generation_id: null,
+      visibility: 'public' as const,
+      title: 'Studio shots',
+      source_kind: 'external',
+      showcase_asset_path: 'private-posts/post-1/0/photo.jpg',
+    };
+    const paidBundle = {
+      id: 'bundle-1',
+      access_mode: 'paid' as const,
+      status: 'published' as const,
+      price_usd_cents: 500,
+      sales_count: 1,
+      earnings_usd_cents: 500,
+      prompt_text: 'Prompt',
+      notes_markdown: null,
+      workflow_share_url: null,
+      workflow_snapshot: null,
+      attachments: [],
+      allow_remix: false,
+    };
+    const removal = { due: 2, removed: 2, served: 0, gone: 0, rescheduled: 0, stuck: 0 };
+
+    it('go before the answer when the post is deleted', async () => {
+      const { client } = createSupabaseMock({ purchases: [], post: uploadPost, bundle: null });
+      const removeQueuedPublicCopies = vi.fn(async () => removal);
+
+      const result = await deleteOwnerPostForRoute({
+        adminSupabase: client, ownerUserId: 'user-1', postId: 'post-1', removeQueuedPublicCopies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { deleted: true } });
+      expect(removeQueuedPublicCopies).toHaveBeenCalledWith(client, { postId: 'post-1' });
+    });
+
+    it('go before the answer when the post is tombstoned for its buyers, whose private media stays', async () => {
+      const { client, calls } = createSupabaseMock({
+        purchases: [{ bundle_id: 'bundle-1' }], post: uploadPost, bundle: paidBundle,
+      });
+      const removeQueuedPublicCopies = vi.fn(async () => removal);
+
+      const result = await deleteOwnerPostForRoute({
+        adminSupabase: client, ownerUserId: 'user-1', postId: 'post-1', forceDelete: true, removeQueuedPublicCopies,
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { tombstoned: true } });
+      expect(removeQueuedPublicCopies).toHaveBeenCalledWith(client, { postId: 'post-1' });
+      expect(calls.removals).toHaveLength(0);
+    });
+
+    it('are left to the job when Storage refuses, without failing the delete', async () => {
+      const { client } = createSupabaseMock({ purchases: [], post: uploadPost, bundle: null });
+
+      const result = await deleteOwnerPostForRoute({
+        adminSupabase: client,
+        ownerUserId: 'user-1',
+        postId: 'post-1',
+        removeQueuedPublicCopies: vi.fn(async () => { throw new Error('storage unavailable'); }),
+      });
+
+      expect(result).toMatchObject({ ok: true, body: { deleted: true } });
+    });
+  });
+
   it('does not remove a foreign generation showcase path referenced by an owned post', async () => {
     const foreignGenerationId = 'generation-2';
     const { client, calls } = createSupabaseMock({

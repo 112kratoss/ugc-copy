@@ -30,6 +30,7 @@ import {
   markMediaUploadIntentsConsumed,
 } from '@/lib/media-upload-intents';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
+import { syncPostMediaPublicCopies } from '@/lib/post-media-public-copies';
 import { createPostMediaRendition, type PostMediaTeaserOutcome } from '@/lib/post-media-rendition';
 import type { VideoProbeResult } from '@/lib/video-rendition';
 import { invalidateShowcaseFeedAndRefreshPostPages } from '@/lib/showcase-feed-cache';
@@ -82,6 +83,7 @@ export type PostPublishDependencies = {
   insertPostSourceTools?: typeof insertPostSourceTools;
   createPostMediaPreview?: typeof createPostMediaPreview;
   createPostMediaRendition?: typeof createPostMediaRendition;
+  syncPostMediaPublicCopies?: typeof syncPostMediaPublicCopies;
 };
 
 type ResolvedPostPublishDependencies = Required<PostPublishDependencies>;
@@ -122,6 +124,7 @@ function resolveDependencies(dependencies: PostPublishDependencies | undefined):
     insertPostSourceTools: dependencies?.insertPostSourceTools ?? insertPostSourceTools,
     createPostMediaPreview: dependencies?.createPostMediaPreview ?? createPostMediaPreview,
     createPostMediaRendition: dependencies?.createPostMediaRendition ?? createPostMediaRendition,
+    syncPostMediaPublicCopies: dependencies?.syncPostMediaPublicCopies ?? syncPostMediaPublicCopies,
   };
 }
 
@@ -734,6 +737,13 @@ export async function publishPreparedPost({
         finalVisibility = promoted.visibility;
         finalBundleStatus = promoted.bundleStatus;
         didMutateSharedFeed = finalVisibility === 'public';
+        if (finalVisibility === 'public' && storagePathsToCleanup.length > 0) {
+          // Before the pages below are refreshed, so they name the copies.
+          await resolvedDependencies.syncPostMediaPublicCopies(adminSupabase, post.postId).catch((copyError) => {
+            // The media is served through /api/media until the next sync.
+            logBackendWarning('failed_to_copy_public_post_media', { error: copyError });
+          });
+        }
       } catch (promoteError) {
         // Everything the user made exists, just privately. Do not tear it down —
         // report the failure and let them publish from the editor.
