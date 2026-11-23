@@ -50,15 +50,14 @@ vi.mock('../lib/supabase-auth-recovery', () => ({
   withSuppressedInvalidRefreshTokenConsoleError: async (operation: () => Promise<void>) => operation(),
 }));
 
-vi.mock('@supabase/supabase-js', () => ({
-  createClient: (_url: string, _key: string, options: { auth: { storage: unknown } }) => {
-    state.authOptions = options.auth;
-    return {
-      auth: {
-        initialize: vi.fn(async () => undefined),
-        signOut: state.signOut,
-      },
-    };
+vi.mock('@supabase/auth-js', () => ({
+  AuthClient: class {
+    initialize = vi.fn(async () => undefined);
+    signOut = state.signOut;
+
+    constructor(options: { storage: unknown }) {
+      state.authOptions = options;
+    }
   },
 }));
 

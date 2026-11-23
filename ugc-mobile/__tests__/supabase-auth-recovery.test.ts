@@ -3,7 +3,7 @@ import {
   AuthRetryableFetchError,
   AuthSessionMissingError,
   AuthUnknownError,
-} from '@supabase/supabase-js';
+} from '@supabase/auth-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
