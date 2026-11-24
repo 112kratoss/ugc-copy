@@ -41,7 +41,7 @@ async function shot(page: Page, name: string) {
 
 const WALL = path.join(process.cwd(), 'src/app/login/wall');
 const PICTURE_HOST = 'https://example.supabase.co/storage/v1/object/public/e2e-search';
-const picture = (n: number) => `${PICTURE_HOST}/wall-${String(((n - 1) % 12) + 1).padStart(2, '0')}.jpg`;
+const picture = (n: number) => `${PICTURE_HOST}/wall-${String(((n - 1) % 12) + 1).padStart(2, '0')}.webp`;
 const MISSING_PICTURE = `${PICTURE_HOST}/missing.jpg`;
 const thumbnail = (n: number, url = picture(n)) => ({ postId: `post-${n}`, url, thumbhash: null, width: 900, height: 1200, mediaKind: 'image' });
 
@@ -52,7 +52,7 @@ async function servePictures(page: Page, { delayMs = 0 }: { delayMs?: number } =
     const source = path.join(WALL, file);
     if (delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
     if (!fs.existsSync(source)) return route.fulfill({ status: 404, body: '' });
-    return route.fulfill({ path: source, contentType: 'image/jpeg' });
+    return route.fulfill({ path: source, contentType: 'image/webp' });
   });
 }
 
