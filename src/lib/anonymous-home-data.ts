@@ -23,12 +23,14 @@ import { SHOWCASE_FEED_CACHE_TAG, SHOWCASE_FEED_REFRESH_TAG } from '@/lib/showca
  * it about once a minute. Read through the two caches below, the page keeps
  * its own window.
  *
- * Both carry the feed's tag, which also puts it on the page: a publish, edit,
- * delete, take-down, profile edit or repaired poster (`invalidateShowcaseFeedCache`)
- * rebuilds `/` at its next visit rather than at the end of the window. They
- * carry the feeds' refresh tag too, so the hourly feed maintenance has `/`
- * drawn again in the background, the next visitor answered from the cache
- * (`refreshShowcaseFeedsInBackground`). What no tag covers waits for the window: likes,
+ * Both carry the feed's tag, which also puts it on the page: a delete,
+ * take-down, move to private or anything else that takes content out of view
+ * (`invalidateShowcaseFeedCache`) rebuilds `/` at its next visit rather than at
+ * the end of the window. They carry the feeds' refresh tag too, so a publish,
+ * edit, restore, profile edit, repaired poster and the hourly feed maintenance
+ * have `/` drawn again in the background, the next visitor answered from the
+ * cache and the one after it shown the change (`showcase-feed-cache.ts`). What
+ * no tag covers waits for the window: likes,
  * comment counts and the For you order between those events, and what a
  * catalog release or the welcome-credit amount changes (the "What's new"
  * models card, a shelf card's credit price and its "Free to try").

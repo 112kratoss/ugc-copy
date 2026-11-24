@@ -101,20 +101,24 @@ describe('showcase feed cache', () => {
   });
 
   describe('a change to one post', () => {
-    it("expires the feed at once and refreshes the post's pages, its creator's and the storefront in the background", async () => {
+    // An addition or an edit takes nothing out of view: the next visitor of `/`
+    // and Explore is answered from the cache while the feeds are drawn again
+    // behind them (speed remeasure, 2026-11-24: a cold `/` after every publish).
+    it("refreshes the feeds, the post's pages, its creator's and the storefront in the background", async () => {
       const { client, calls } = remixesClient({ data: [] });
 
       await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false });
 
       expect(cacheMocks.revalidateTag.mock.calls).toEqual([
-        [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
+        [SHOWCASE_FEED_REFRESH_TAG, IN_THE_BACKGROUND],
         [publicPostPageTag('post-1'), IN_THE_BACKGROUND],
         // The creation's id is a legacy address of the same page.
         [publicPostPageTag('gen-1'), IN_THE_BACKGROUND],
         [publicCreatorPageTag('creator-1'), IN_THE_BACKGROUND],
         [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND],
       ]);
-      // Never the removal tag, and never every page: the change names its pages.
+      // Never a removal tag, and never every page: the change names its pages.
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(SHOWCASE_FEED_CACHE_TAG, expect.anything());
       expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(PUBLIC_PAGE_CACHE_TAG, expect.anything());
       expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(PUBLIC_PAGE_REFRESH_TAG, expect.anything());
       expect(calls).toEqual([{
@@ -134,21 +138,42 @@ describe('showcase feed cache', () => {
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostArrivalTag('post-1'), AT_ONCE);
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostArrivalTag('gen-1'), AT_ONCE);
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostPageTag('post-1'), IN_THE_BACKGROUND);
+      // A new post on `/` may wait one visit: nothing is taken out of view.
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(SHOWCASE_FEED_REFRESH_TAG, IN_THE_BACKGROUND);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(SHOWCASE_FEED_CACHE_TAG, expect.anything());
     });
 
     // The replaced files are deleted with the edit: one stale serve of the
     // post's own page would draw them broken. Its cards elsewhere still wait
     // for the background refresh.
-    it('draws the post\'s own page again at once when the change deleted media it drew', async () => {
+    it('draws the post\'s own page and the feeds again at once when the change deleted media it drew', async () => {
       const { client } = remixesClient({ data: [] });
 
       await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, mediaRemoved: true });
+
+      // The feeds' cards draw the same files: a stale serve of `/` would too.
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(SHOWCASE_FEED_CACHE_TAG, AT_ONCE);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(SHOWCASE_FEED_REFRESH_TAG, expect.anything());
 
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostArrivalTag('post-1'), AT_ONCE);
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostArrivalTag('gen-1'), AT_ONCE);
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicCreatorPageTag('creator-1'), IN_THE_BACKGROUND);
       expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND);
       expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(PUBLIC_PAGE_CACHE_TAG, expect.anything());
+    });
+
+    // A listed post's words edited (a phone number out of a title): every cached
+    // card draws them, so the feeds are drawn again at once (review of #918).
+    // Its pages still refresh in the background, as before this change.
+    it('expires the feeds at once when the change edited words a feed card draws', async () => {
+      const { client } = remixesClient({ data: [] });
+
+      await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, feedTextChanged: true });
+
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(SHOWCASE_FEED_CACHE_TAG, AT_ONCE);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(SHOWCASE_FEED_REFRESH_TAG, expect.anything());
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostPageTag('post-1'), IN_THE_BACKGROUND);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(publicPostArrivalTag('post-1'), expect.anything());
     });
 
     it('refreshes the pages of the remixes that credit the post, and their creators', async () => {
@@ -193,7 +218,7 @@ describe('showcase feed cache', () => {
 
       expect(calls).toEqual([]);
       expect(cacheMocks.revalidateTag.mock.calls).toEqual([
-        [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
+        [SHOWCASE_FEED_REFRESH_TAG, IN_THE_BACKGROUND],
         [publicPostPageTag('post-new'), IN_THE_BACKGROUND],
         [publicPostArrivalTag('post-new'), AT_ONCE],
         [publicCreatorPageTag('creator-1'), IN_THE_BACKGROUND],
@@ -203,12 +228,37 @@ describe('showcase feed cache', () => {
   });
 
   describe('a change whose pages cannot be named', () => {
-    it('expires the feed at once and refreshes every public page in the background', () => {
+    it('refreshes the feeds, the storefront and every public page in the background', () => {
       invalidateShowcaseFeedAndRefreshEveryPage();
+
+      expect(cacheMocks.revalidateTag.mock.calls).toEqual([
+        [SHOWCASE_FEED_REFRESH_TAG, IN_THE_BACKGROUND],
+        [PUBLIC_PAGE_REFRESH_TAG, IN_THE_BACKGROUND],
+        // The storefront's first pages carry the feed tag, which this no longer expires.
+        [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND],
+      ]);
+    });
+
+    // A profile photo replaced (its old file is deleted) or taken off: the
+    // feeds' cards draw it, so they are drawn again at once.
+    it('expires the feeds at once when the change took media out', () => {
+      invalidateShowcaseFeedAndRefreshEveryPage({ mediaRemoved: true });
 
       expect(cacheMocks.revalidateTag.mock.calls).toEqual([
         [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
         [PUBLIC_PAGE_REFRESH_TAG, IN_THE_BACKGROUND],
+        [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND],
+      ]);
+    });
+
+    // A display name or handle changed is drawn on every card of the creator's.
+    it('expires the feeds at once when a profile change edited words a feed card draws', () => {
+      invalidateShowcaseFeedAndRefreshEveryPage({ feedTextChanged: true });
+
+      expect(cacheMocks.revalidateTag.mock.calls).toEqual([
+        [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
+        [PUBLIC_PAGE_REFRESH_TAG, IN_THE_BACKGROUND],
+        [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND],
       ]);
     });
 
@@ -216,8 +266,9 @@ describe('showcase feed cache', () => {
       invalidateShowcaseFeedAndRefreshEveryPage({ postIds: ['post-1'], handles: ['@New.Name', '   '] });
 
       expect(cacheMocks.revalidateTag.mock.calls).toEqual([
-        [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
+        [SHOWCASE_FEED_REFRESH_TAG, IN_THE_BACKGROUND],
         [PUBLIC_PAGE_REFRESH_TAG, IN_THE_BACKGROUND],
+        [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND],
         [publicPostArrivalTag('post-1'), AT_ONCE],
         [publicCreatorHandleTag('new.name'), AT_ONCE],
       ]);
@@ -237,6 +288,9 @@ describe('showcase feed cache', () => {
     await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, mediaRemoved: true });
     await invalidateShowcaseFeedAndRefreshPostPages(remixesClient({ error: { message: 'boom' } }).client, { ...post, arrived: false });
     invalidateShowcaseFeedAndRefreshEveryPage({ postIds: ['post-1'], handles: ['someone'] });
+    invalidateShowcaseFeedAndRefreshEveryPage({ mediaRemoved: true });
+    invalidateShowcaseFeedAndRefreshEveryPage({ feedTextChanged: true });
+    await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, feedTextChanged: true });
 
     const profilesByTag = new Map<string, Set<string>>();
     for (const [tag, profile] of cacheMocks.revalidateTag.mock.calls as Array<[string, unknown]>) {

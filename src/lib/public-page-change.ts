@@ -70,3 +70,67 @@ export function classifyPostPageChange(before: PostPageState | null, after: Post
   if (!isPostListed(after) || after.isNsfw) return { kind: 'removal' };
   return { kind: 'change', arrived: !isPostPageDrawn(before) };
 }
+
+/**
+ * The post columns a feed card or the home shelf draws as words or as its
+ * remix button (`resolvePostRowsToFeedItems` in `showcase-feed.ts`): the title,
+ * prompt, caption and body, the category and post format that pick its lane
+ * and its layout, the tool it names, and whether it offers a remix.
+ */
+export const FEED_DRAWN_POST_COLUMNS = [
+  'title',
+  'description',
+  'prompt',
+  'body',
+  'post_format',
+  'category',
+  'source_tool',
+  'source_tool_slug',
+  'remixes_allowed',
+] as const;
+
+/** A recipe as its card draws it: the access, the price and the locked preview's words and items. */
+export type FeedDrawnRecipe = {
+  accessMode?: string | null;
+  priceUsdCents?: number | null;
+  summary?: string | null;
+  previewText?: string | null;
+  resources?: unknown;
+};
+
+function drawnRecipe(recipe: FeedDrawnRecipe | null | undefined): string {
+  if (!recipe || !recipe.accessMode || recipe.accessMode === 'none') return 'none';
+  return JSON.stringify([
+    recipe.accessMode,
+    recipe.priceUsdCents ?? null,
+    recipe.summary ?? null,
+    recipe.previewText ?? null,
+    recipe.resources ?? null,
+  ]);
+}
+
+/**
+ * Whether an edit changes words a cached feed card draws (review of #918): a
+ * listed post's old title, prompt, caption or price must not be served once
+ * more after the creator edits it out, so such an edit expires the feeds at
+ * once. Only an edit that provably leaves every drawn column and the recipe as
+ * they were (a media-only edit, which restates them) is refreshed in the
+ * background. A column the save writes but the read before it did not hold,
+ * or a recipe the save names that differs in any way from the stored one,
+ * counts as changed: when the code cannot tell, the feeds expire at once.
+ */
+export function editChangesFeedText({ before, patch, recipeBefore, recipeAfter }: {
+  before: Readonly<Record<string, unknown>>;
+  patch: Readonly<Record<string, unknown>>;
+  recipeBefore?: FeedDrawnRecipe | null;
+  /** Left out when the save names no recipe (it keeps the stored one). */
+  recipeAfter?: FeedDrawnRecipe | null;
+}): boolean {
+  const columnChanged = FEED_DRAWN_POST_COLUMNS.some((column) => {
+    if (!Object.prototype.hasOwnProperty.call(patch, column)) return false;
+    if (!Object.prototype.hasOwnProperty.call(before, column)) return true;
+    return (patch[column] ?? null) !== (before[column] ?? null);
+  });
+  if (columnChanged) return true;
+  return recipeAfter !== undefined && drawnRecipe(recipeAfter) !== drawnRecipe(recipeBefore);
+}

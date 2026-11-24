@@ -622,7 +622,9 @@ describe('updateOwnerPostForRoute', () => {
       return client;
     }
 
-    it('refreshes a public post\'s pages in the background when an edit keeps it public', async () => {
+    // Its cached cards drew the old title: the feeds expire at once (review of #918),
+    // the post's own pages still refresh in the background.
+    it('has the feeds drawn again at once when an edit changes the title of a public post', async () => {
       const client = await save(textPost({}), { visibility: 'public', title: 'Lighting notes, revised' });
 
       expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
@@ -630,8 +632,34 @@ describe('updateOwnerPostForRoute', () => {
         generationId: null,
         creatorId: 'user-1',
         arrived: false,
+        feedTextChanged: true,
       }]]);
       expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
+    });
+
+    it('refreshes everything in the background when an edit restates every word a card draws', async () => {
+      const client = await save(textPost({ remixes_allowed: true }), {
+        visibility: 'public',
+        title: 'Lighting notes',
+        body: 'Soft key light from the left.',
+      });
+
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages.mock.calls).toEqual([[client, {
+        postId: 'post-1',
+        generationId: null,
+        creatorId: 'user-1',
+        arrived: false,
+      }]]);
+    });
+
+    // A private post had no card: its new words reach the feeds in the background.
+    it('refreshes in the background when a private post is made public with a new title', async () => {
+      await save(textPost({ visibility: 'private' }), { visibility: 'public', title: 'Lighting notes, revised' });
+
+      expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.not.objectContaining({ feedTextChanged: true }),
+      );
     });
 
     it('drops the not-found of a private post made public at once, and refreshes the rest in the background', async () => {

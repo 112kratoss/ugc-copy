@@ -323,11 +323,12 @@ describe('/api/profile route', () => {
     });
     expect(profilesState[0].username).toBe('creator-name');
     // The handle is new to this account: a page drawn for it before, a
-    // not-found, is dropped at once.
-    expect(showcaseCacheMocks.invalidate.mock.calls).toEqual([[{ handles: ['creator-name'] }]]);
+    // not-found, is dropped at once, and the feeds' cards, which draw the
+    // handle and the name, are drawn again at once.
+    expect(showcaseCacheMocks.invalidate.mock.calls).toEqual([[{ handles: ['creator-name'], feedTextChanged: true }]]);
   });
 
-  it('refreshes every page in the background, and expires no handle, for a save that keeps the handle', async () => {
+  it('refreshes every page in the background, and expires no handle, for a save that keeps the handle (the new name expires the feeds)', async () => {
     profilesState[0] = { ...profilesState[0], username: 'creator-name' };
     const { PATCH } = await import('@/app/api/profile/route');
     const response = await PATCH(
@@ -340,7 +341,7 @@ describe('/api/profile route', () => {
 
     expect(response.status).toBe(200);
     expect(profilesState[0].display_name).toBe('A New Name');
-    expect(showcaseCacheMocks.invalidate.mock.calls).toEqual([[{}]]);
+    expect(showcaseCacheMocks.invalidate.mock.calls).toEqual([[{ feedTextChanged: true }]]);
   });
 
   it('rate limits profile updates before validation and persistence', async () => {

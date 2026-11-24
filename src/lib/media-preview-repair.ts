@@ -1358,8 +1358,11 @@ export async function regenerateVideoPosters(
     // Feed pages cache the preview URLs they were built from. The tag lives in
     // the Next server, so from the CLI script this throws and the cache simply
     // expires on its own schedule; inside the server it invalidates at once.
+    // A regenerated poster has a new path, and the old one's public copy is
+    // pruned at once (`prune_post_media_public_copies`): the feeds are drawn
+    // again at once so no cached card points at it.
     try {
-      invalidateShowcaseFeedAndRefreshEveryPage();
+      invalidateShowcaseFeedAndRefreshEveryPage({ mediaRemoved: true });
     } catch (error) {
       log(`feed cache not invalidated from here (${summarizeMediaToolError(error, 'no Next request context')}); it expires on its own`);
     }

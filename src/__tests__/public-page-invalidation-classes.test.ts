@@ -17,10 +17,13 @@ import { describe, expect, it } from 'vitest';
  * - `invalidateShowcaseFeedCache`: a removal, the feeds and every public page
  *   at once (and the operator's lever);
  * - `invalidateShowcaseFeedAndRefreshPostPages`: a change to one post that
- *   removes nothing, the feeds at once and the pages that draw the post in
- *   the background;
+ *   removes nothing, the feeds and the pages that draw the post in the
+ *   background (the feeds at once when it deleted media their cards draw or
+ *   edited words they draw of a listed post);
  * - `invalidateShowcaseFeedAndRefreshEveryPage`: a change whose pages cannot
- *   be named, the feeds at once and every public page in the background;
+ *   be named, the feeds, the storefront and every public page in the
+ *   background (the feeds at once when it took a profile photo or a poster
+ *   out, or changed a creator's name or handle);
  * - `invalidateShowcaseFeedCacheOnly`: the feeds alone;
  * - `refreshShowcaseFeedsInBackground`: the feeds alone, in the background
  *   (their hourly maintenance, which reorders and removes nothing);
@@ -89,8 +92,8 @@ type Classified = {
 const CLASSIFIED: Record<string, Classified> = {
   // The helpers themselves.
   'src/lib/showcase-feed-cache.ts': {
-    uses: { revalidateTag: 16 },
-    why: 'the five kinds: a removal (the feed and the removal tag at once: 2), the feed alone (1), the feed in the background (its refresh tag: 1), one post\'s pages (the feed at once; its own and its legacy address, its creator, the storefront, its remixes and their creators in the background; its own page at once on an arrival or deleted media; every page when its remixes cannot be named: 8), every page (the feed at once, the background tag, a post\'s or a handle\'s arrival at once: 4)',
+    uses: { revalidateTag: 17 },
+    why: 'the five kinds: a removal (the feed and the removal tag at once: 2), the feed alone (1), the feed in the background (its refresh tag: 1), the feeds after a change that removes nothing (their refresh tag in the background, or the feed tag at once when media a card draws was deleted: 2), one post\'s pages (its own and its legacy address, its creator, the storefront, its remixes and their creators in the background; its own page at once on an arrival or deleted media; every page when its remixes cannot be named: 7), every page (the background tag, the storefront in the background, a post\'s or a handle\'s arrival at once: 4)',
   },
   'src/lib/marketplace-resource-list-cache.ts': {
     uses: { revalidateTag: 1 },
@@ -130,14 +133,14 @@ const CLASSIFIED: Record<string, Classified> = {
   },
   'src/lib/post-update-service.ts': {
     uses: { invalidateShowcaseFeedCache: 1, invalidateShowcaseFeedAndRefreshPostPages: 1 },
-    why: 'removal or change, by classifyPostPageChange on where the save leaves the post: anywhere but public, visible and uncovered is a removal; otherwise a change (with its arrival, and its own page at once when the save deleted media)',
+    why: 'removal or change, by classifyPostPageChange on where the save leaves the post: anywhere but public, visible and uncovered is a removal; otherwise a change (with its arrival, its own page at once when the save deleted media, and the feeds at once when it edited words a card draws of a listed post)',
   },
   'src/lib/showcase-publish-service.ts': {
     uses: { invalidateShowcaseFeedCache: 1, invalidateShowcaseFeedAndRefreshPostPages: 1 },
-    why: 'removal or change, by classifyPostPageChange on where the publish leaves the creation\'s post: anywhere but public, visible and uncovered is a removal; otherwise a change',
+    why: 'removal or change, by classifyPostPageChange on where the publish leaves the creation\'s post: anywhere but public, visible and uncovered is a removal; otherwise a change (the feeds at once when the post was already listed, whose words the publish rewrites)',
   },
 
-  // Changes to one post: the feeds at once, the post's pages in the background.
+  // Changes to one post: the feeds and the post's pages in the background.
   'src/lib/post-publish-service.ts': {
     uses: { invalidateShowcaseFeedAndRefreshPostPages: 1 },
     why: 'change: a new public post (its page, its creator\'s, the storefront; no remix can credit it yet)',
@@ -146,11 +149,11 @@ const CLASSIFIED: Record<string, Classified> = {
   // Changes whose pages cannot be named: every page in the background.
   'src/lib/profile-route-service.ts': {
     uses: { invalidateShowcaseFeedAndRefreshEveryPage: 3 },
-    why: 'change: a profile saved, drawn on every page of the creator\'s, on remix credits and on the storefront; a handle just taken has its not-found dropped at once (the default under its alias, the import of it, the call)',
+    why: 'change: a profile saved, drawn on every page of the creator\'s, on remix credits and on the storefront; a handle just taken has its not-found dropped at once, and a photo replaced or taken off, or a display name or handle changed, has the feeds expired at once (the default under its alias, the import of it, the call)',
   },
   'src/lib/media-preview-repair.ts': {
     uses: { invalidateShowcaseFeedAndRefreshEveryPage: 5 },
-    why: 'change: a repaired preview, from the one-post repair and the sweep (each the option or its default, called) and the poster regeneration (the sweep knows media rows, not the pages that draw them)',
+    why: 'change: a repaired preview, from the one-post repair and the sweep (each the option or its default, called) and the poster regeneration, whose old poster is pruned at once and so expires the feeds at once (the sweep knows media rows, not the pages that draw them)',
   },
 
   // The feeds alone.
