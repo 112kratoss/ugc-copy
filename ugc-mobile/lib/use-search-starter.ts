@@ -20,10 +20,17 @@ export function searchStarterQueryKey(viewerKey: string | null) {
  * The kept answers are not drawn at the next opening, which asks again and
  * waits for it as a first opening does: a follow, an unfollow, a block or an
  * unblock changes the creators the starter offers (the API client says so,
- * `onRelationsChanged`). An opening on screen keeps what it drew.
+ * `onRelationsChanged`). An opening on screen keeps what it drew. A request
+ * already on its way was asked before the change: it is called off first, so
+ * its answer cannot land after the mark and pass for fresh, and asked again
+ * for the screen still waiting on it.
  */
-export function forgetKeptSearchStarters(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: [SEARCH_STARTER_QUERY_ROOT], refetchType: 'none' });
+export async function forgetKeptSearchStarters(queryClient: QueryClient): Promise<void> {
+  const filters = { queryKey: [SEARCH_STARTER_QUERY_ROOT] };
+  const wasAsking = queryClient.isFetching(filters) > 0;
+  await queryClient.cancelQueries(filters);
+  await queryClient.invalidateQueries({ ...filters, refetchType: 'none' });
+  if (wasAsking) await queryClient.refetchQueries({ ...filters, type: 'active' });
 }
 
 /** An answer with nothing to draw: never kept, so the next opening asks again. */

@@ -60,8 +60,16 @@ export function forgetKeptSearchStarter(): void {
  * reaches for it); then only in a browser with a session cookie, which a
  * visitor's has not (`browser-session.ts`). `kept`: an answer this tab already has for the same
  * account, no older than SEARCH_STARTER_KEPT_MS, is drawn without a request.
- * The search page asks each time it opens, as before: it draws creators with
- * Follow, which a kept answer could show a followed creator among.
+ * Who keeps one now: the top bar's panel (`kept: true`, this tab's memory) and
+ * the app's search screen (`ugc-mobile/lib/use-search-starter.ts`, the query
+ * cache per account, forgotten at the account's own follow, unfollow, block or
+ * unblock). The search page asks once per mount, as it always has. A kept
+ * answer's creators to follow can name one the account has followed since: its
+ * Follow row is then stale, not wrong in effect, because the follow request
+ * sets a state (following true or false) and asking it again changes nothing.
+ * What no client can see (a block from the other side, a moderation removal,
+ * a change made on another device) stays in a kept answer for at most
+ * SEARCH_STARTER_KEPT_MS, the same bound on both clients.
  */
 export function useSearchStarter(options: { enabled?: boolean; kept?: boolean } = {}): SearchStarterResponse | null {
   return useSearchStarterState(options).answer;

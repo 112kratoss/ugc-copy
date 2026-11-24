@@ -720,7 +720,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         catalogSchemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
       },
       // A follow or a block changes the creators search's starter offers.
-      onRelationsChanged: () => forgetKeptSearchStarters(queryClient),
+      onRelationsChanged: () => { void forgetKeptSearchStarters(queryClient); },
     }),
     [getAccessToken, queryClient]
   );

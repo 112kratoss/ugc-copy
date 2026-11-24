@@ -99,6 +99,23 @@ describe('mobile api client caching', () => {
     expect(onRelationsChanged).toHaveBeenCalledTimes(4);
   });
 
+  it('never turns a relation change the server took into a failure when onRelationsChanged throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, blocked: true, following: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      onRelationsChanged: () => { throw new Error('cache gone'); },
+    });
+
+    await expect(api.blockUser('creator-1')).resolves.toMatchObject({ blocked: true });
+    await expect(api.unblockUser('creator-1')).resolves.toMatchObject({ blocked: true });
+    await expect(api.setCreatorFollowing('creator-1', true)).resolves.toMatchObject({ following: true });
+    expect(warn).toHaveBeenCalledTimes(3);
+    warn.mockRestore();
+  });
+
   it('sends authenticated moderation reports and user block mutations', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, blocked: true }));
     const api = createApiClient({

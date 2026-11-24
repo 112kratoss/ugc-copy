@@ -986,9 +986,17 @@ export function createApiClient({
   requestTimeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
   onRelationsChanged,
 }: ApiClientOptions) {
-  /** Passes a relation's answer on, once taken, after telling `onRelationsChanged`. */
+  /**
+   * Passes a relation's answer on, once taken, after telling
+   * `onRelationsChanged`. The server has already taken the change, so a hook
+   * that throws never turns it into a failure the caller would put back.
+   */
   function afterRelationChange<T>(answer: T): T {
-    onRelationsChanged?.();
+    try {
+      onRelationsChanged?.();
+    } catch (error) {
+      console.warn('onRelationsChanged threw; the relation change stands', error);
+    }
     return answer;
   }
 

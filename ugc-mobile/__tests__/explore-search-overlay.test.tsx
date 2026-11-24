@@ -3126,6 +3126,51 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     await act(async () => tree.unmount());
   });
 
+  // Review of #920: held, never the older answer meanwhile.
+  it('draws no older answer while the new request is still on its way', async () => {
+    queryClient.setQueryData(searchStarterQueryKey(null), STARTER, { updatedAt: Date.now() - SEARCH_STARTER_KEPT_MS - 1 });
+    searchStarter.mockImplementation(() => new Promise(() => {}));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+    expect(headers(tree)).not.toContain('Creators to follow');
+    expect(tree.root.findAll((node) => node.props.testID === 'search-start-holding').length).toBeGreaterThan(0);
+    await act(async () => tree.unmount());
+  });
+
+  // Review of #920: a request asked before a follow or a block must not land
+  // after it and pass for fresh.
+  it('calls off a starter request a follow or a block overtakes, and asks again for the screen waiting on it', async () => {
+    mocks.user.value = { id: 'account-1' };
+    const before = { ...STARTER, searches: STARTER.searches.slice(0, 1) };
+    const signals: AbortSignal[] = [];
+    let answerOld: ((value: typeof STARTER) => void) | null = null;
+    searchStarter.mockImplementationOnce((signal) => {
+      if (signal) signals.push(signal);
+      return new Promise((resolve) => { answerOld = resolve as never; });
+    });
+    searchStarter.mockImplementationOnce(async () => STARTER);
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await forgetKeptSearchStarters(queryClient); });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    // The overtaken request answering late changes nothing.
+    await act(async () => { answerOld?.(before); });
+    expect(queryClient.getQueryData<{ searches: unknown[] }>(searchStarterQueryKey('account-1'))?.searches).toHaveLength(STARTER.searches.length);
+    expect(queryClient.getQueryState(searchStarterQueryKey('account-1'))?.isInvalidated).toBe(false);
+    // The cache tells the screen on its next tick.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(headers(tree)).toContain('Creators to follow');
+
+    // That answer was asked after the change: kept for the next opening.
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    await act(async () => tree.unmount());
+  });
+
   it('asks again at the next opening once the account follows or blocks anyone, keeping what this one drew', async () => {
     mocks.user.value = { id: 'account-1' };
     const onClose = vi.fn();
@@ -3133,7 +3178,7 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     expect(searchStarter).toHaveBeenCalledTimes(1);
 
     // What the API client reports once a follow or a block is taken (lib/auth.tsx).
-    act(() => forgetKeptSearchStarters(queryClient));
+    await act(async () => { await forgetKeptSearchStarters(queryClient); });
     expect(headers(tree)).toContain('Creators to follow');
     expect(searchStarter).toHaveBeenCalledTimes(1);
 
@@ -3144,7 +3189,7 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
 
     // A failure or an empty answer is not kept: the opening after it asks again.
     searchStarter.mockResolvedValueOnce({ entities: [], creators: [], searches: [] });
-    act(() => forgetKeptSearchStarters(queryClient));
+    await act(async () => { await forgetKeptSearchStarters(queryClient); });
     await update(tree, { visible: false, onClose });
     await update(tree, { visible: true, onClose });
     expect(searchStarter).toHaveBeenCalledTimes(3);
