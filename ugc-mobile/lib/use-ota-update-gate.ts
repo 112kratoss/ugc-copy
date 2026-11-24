@@ -18,6 +18,7 @@ import * as Updates from 'expo-updates';
 
 import type { MagicbookletApiClient } from './api-client';
 import { subscribeToActivity } from './app-activity';
+import { claimAppReload, releaseAppReload } from './app-reload-claim';
 import { decideUpdateActionNow, type UpdateDecision } from './app-update-policy';
 import {
   IDLE_CLOCK,
@@ -80,12 +81,17 @@ export function useOtaUpdateGate(api: Pick<MagicbookletApiClient, 'getAppVersion
     // rejects rather than doing nothing — without this guard the only people
     // who would ever see this path fail are the developers working on it.
     if (!Updates.isEnabled || reloadingRef.current) return;
+    // One reload at a time: a root remounted in this runtime may be reloading
+    // it already (lib/root-remount-reload.ts), and the update then lands at
+    // the next one.
+    if (!claimAppReload()) return;
     reloadingRef.current = true;
     Updates.reloadAsync().catch(() => {
       // A failed reload is not worth surfacing. The update stays pending and
       // lands at the next cold start, which is exactly where it would have
       // landed if this hook did not exist.
       reloadingRef.current = false;
+      releaseAppReload();
     });
   }, []);
 

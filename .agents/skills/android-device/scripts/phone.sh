@@ -10,7 +10,7 @@
 #   phone.sh logs <since>     expo-updates lines of the running app since <since>
 #   phone.sh press <x> <y> [ms]   a press that carries move events, as a finger's does
 #   phone.sh tapkey <keycode> one key (4 = BACK)
-#   phone.sh home             a launcher-style start that clears the task (after a deep-link start)
+#   phone.sh home             force-stop, then a launcher-style start in a fresh process (after a deep-link start)
 set -u
 S="${ANDROID_SERIAL:?set ANDROID_SERIAL to the serial of the phone, from adb devices}"
 PKG="${PKG:-com.magicbooklet.mobile}"
@@ -79,6 +79,8 @@ case "$cmd" in
     A logcat -d -T "$since" --pid="$pid" 2>/dev/null | grep 'dev.expo.updates' | grep -v embeddedAssetFileMap | cut -c1-260;;
   press) x="${1:?x}"; y="${2:?y}"; ms="${3:-120}"; A shell input swipe "$x" "$y" "$x" "$y" "$ms";;
   tapkey) A shell input keyevent "${1:?a keycode}";;
-  home) A shell "am start -W --activity-clear-task -n $PKG/.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER" 2>&1 | grep -E 'Status|Error' | tr '\n' ' '; echo;;
+  # A fresh process, never `--activity-clear-task` on a live one: that rebuilds the activity over the running React
+  # host, and the next tile the owner taps opens a reel that never shows (2026-11-07 and 2026-11-24, reproduced 3 of 3).
+  home) A shell am force-stop "$PKG"; A shell "am start -W -n $PKG/.MainActivity -a android.intent.action.MAIN -c android.intent.category.LAUNCHER" 2>&1 | grep -E 'Status|Error' | tr '\n' ' '; echo;;
   *) echo "unknown step: $cmd"; exit 2;;
 esac
