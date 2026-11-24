@@ -70,6 +70,60 @@ describe('ShowcaseMediaCarousel', () => {
     vi.restoreAllMocks();
   });
 
+  describe('a tile’s footer', () => {
+    const imageItem = (overrides: Partial<ShowcaseMediaItem> = {}): ShowcaseMediaItem => createVideoItem({
+      id: 'image-1',
+      url: 'https://example.com/picture.png',
+      mediaKind: 'image',
+      contentType: 'image/png',
+      durationSeconds: null,
+      ...overrides,
+    });
+
+    it('draws it at the bottom left over a scrim, with a clip’s Play badge in the same row', () => {
+      const { container } = render(
+        <ShowcaseMediaCarousel title="Campaign clip" mediaItems={[createVideoItem()]} footerStart={<span>12 views</span>} />,
+      );
+      const footer = container.querySelector<HTMLElement>('[data-media-footer-start]')!;
+      expect(footer).toHaveClass('bottom-3', 'left-3', 'pointer-events-none');
+      // The Play badge moved into the row, ahead of the footer, and is drawn once.
+      expect(footer.querySelector('svg.lucide-play')).not.toBeNull();
+      expect(container.querySelectorAll('svg.lucide-play')).toHaveLength(1);
+      expect(footer.lastElementChild).toHaveTextContent('12 views');
+      expect(footer.previousElementSibling).toHaveClass('bg-gradient-to-t', 'h-16');
+    });
+
+    it('sits above the media dots of a post with several', () => {
+      const { container } = render(
+        <ShowcaseMediaCarousel
+          title="Campaign set"
+          mediaItems={[imageItem(), imageItem({ id: 'image-2', sortOrder: 1 })]}
+          footerStart={<span>12 views</span>}
+        />,
+      );
+      const footer = container.querySelector<HTMLElement>('[data-media-footer-start]')!;
+      expect(footer).toHaveClass('bottom-12');
+      expect(footer.querySelector('svg.lucide-play')).toBeNull();
+      expect(footer.previousElementSibling).toHaveClass('h-24');
+    });
+
+    it('leaves the Play badge where it was when there is no footer, and draws no scrim', () => {
+      const { container } = render(
+        <ShowcaseMediaCarousel title="Campaign clip" mediaItems={[createVideoItem()]} footerStart={null} />,
+      );
+      expect(container.querySelector('[data-media-footer-start]')).toBeNull();
+      expect(container.querySelector('.bg-gradient-to-t')).toBeNull();
+      expect(container.querySelector('svg.lucide-play')?.closest('.absolute')).toHaveClass('bottom-3', 'left-3');
+    });
+
+    it('is a grid tile’s alone: the post page’s frame draws none', () => {
+      const { container } = render(
+        <ShowcaseMediaCarousel title="Campaign clip" mode="detail" mediaItems={[createVideoItem()]} footerStart={<span>12 views</span>} />,
+      );
+      expect(container.querySelector('[data-media-footer-start]')).toBeNull();
+    });
+  });
+
   it('plays an explicitly autoplaying feed video only while enough of the card is visible', () => {
     const { container } = render(
       <ShowcaseMediaCarousel

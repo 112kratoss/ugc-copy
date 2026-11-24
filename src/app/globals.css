@@ -75,6 +75,7 @@
 @source "../components/OptimizedPreviewImage.tsx";
 @source "../components/PostCommentAvatar.tsx";
 @source "../components/PostComments.tsx";
+@source "../components/PostViewCount.tsx";
 @source "../components/PostVisibilityMenu.tsx";
 @source "../components/ProfileShareButton.tsx";
 @source "../components/PublicIdentityDialog.tsx";

@@ -391,6 +391,96 @@ describe('FeedPostCard click routing', () => {
     });
 });
 
+describe("FeedPostCard's views", () => {
+    beforeEach(() => {
+        vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
+        vi.stubGlobal('open', vi.fn());
+    });
+
+    afterEach(() => {
+        cleanup();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    function viewCount() {
+        return document.querySelector<HTMLElement>('[data-post-view-count]');
+    }
+
+    it('draws the views at the action row’s far end, compact to the eye and whole to a screen reader', () => {
+        renderCard({ viewCount: 12_345 });
+        const views = viewCount();
+        expect(views).not.toBeNull();
+        expect(views!.querySelector('svg.lucide-eye')).not.toBeNull();
+        expect(views!.querySelector('[aria-hidden="true"]')).toHaveTextContent('12K');
+        expect(within(views!).getByText('12,345 views')).toHaveClass('sr-only');
+
+        // After every action, pushed to the end: on a phone with no room, it goes under them.
+        const share = screen.getByRole('button', { name: 'Share' });
+        const rowEnd = share.nextElementSibling as HTMLElement;
+        expect(rowEnd).toHaveAttribute('data-feed-card-row-end');
+        expect(rowEnd).toHaveClass('ml-auto');
+        expect(rowEnd.firstElementChild).toBe(views);
+        expect(views!.nextElementSibling).toBeNull();
+    });
+
+    it('keeps a recipe chip with it at the row’s end, the two wrapping under the actions together', () => {
+        const paidRecipe = {
+            id: 'bundle-1', postId: 'post-1', title: 'Recipe', accessMode: 'paid', priceUsdCents: 900,
+            previewText: 'Prompt included.', allowRemix: false, resourceKinds: ['prompt'],
+        } as ShowcaseAssetSummary;
+        renderCard({ viewCount: 40, canRemix: false, asset: paidRecipe });
+        const views = viewCount()!;
+        const chip = views.nextElementSibling as HTMLElement;
+        expect(chip.tagName).toBe('A');
+        // One box at the end holds both, so a narrow row never leaves the chip alone on a line of
+        // its own at the start (design-web.md: the chip stays at the row's far end).
+        expect(views.parentElement).toHaveAttribute('data-feed-card-row-end');
+        expect(views.parentElement).toHaveClass('ml-auto');
+        expect(screen.getByRole('button', { name: 'Share' }).nextElementSibling).toBe(views.parentElement);
+        cleanup();
+
+        renderCard({ viewCount: 0, canRemix: false, asset: paidRecipe });
+        expect(viewCount()).toBeNull();
+        const rowEnd = screen.getByRole('button', { name: 'Share' }).nextElementSibling as HTMLElement;
+        expect(rowEnd).toHaveClass('ml-auto');
+        expect(rowEnd.children).toHaveLength(1);
+        expect(rowEnd.firstElementChild?.tagName).toBe('A');
+        cleanup();
+
+        renderCard({ viewCount: 0 });
+        expect(screen.getByRole('button', { name: 'Share' }).nextElementSibling).toBeNull();
+    });
+
+    it('is a count, not a control: a click on it is the card’s and opens the post', () => {
+        const { onOpenPost, onToggleComments, onToggleSave } = renderCard({ viewCount: 7 });
+        const views = viewCount()!;
+        expect(views.closest('button, a')).toBeNull();
+        expect(views.querySelector('button, a, [tabindex]')).toBeNull();
+        expect(screen.queryByRole('button', { name: /views?$/ })).not.toBeInTheDocument();
+
+        fireEvent.click(views.querySelector('svg.lucide-eye')!);
+        expect(onOpenPost).toHaveBeenCalledTimes(1);
+        expect(onToggleComments).not.toHaveBeenCalled();
+        expect(onToggleSave).not.toHaveBeenCalled();
+    });
+
+    it('says one view in the singular', () => {
+        renderCard({ viewCount: 1 });
+        expect(within(viewCount()!).getByText('1 view')).toHaveClass('sr-only');
+    });
+
+    it('draws nothing at 0, and nothing for a read with no total', () => {
+        renderCard({ viewCount: 0 });
+        expect(viewCount()).toBeNull();
+        expect(document.querySelector('svg.lucide-eye')).toBeNull();
+        cleanup();
+
+        renderCard({ viewCount: undefined });
+        expect(viewCount()).toBeNull();
+    });
+});
+
 // The rows the app's card menu and the reel's leave out on your own post
 // (`ugc-mobile/lib/feed-feedback-menu.ts`, `getViewerSafetyActions`) follow
 // this card: there is no one to hide, report or block, and a report on your
@@ -478,7 +568,9 @@ describe("FeedPostCard's recipe chip", () => {
         expect(chip).toHaveAttribute('href', recipeHref);
         // The words, and not the post's title after them as the bar had it.
         expect(chip.textContent).toBe('Free recipe');
-        expect(actionRow()?.lastElementChild).toBe(chip);
+        // At the row's far end, in the box it shares with the views.
+        expect(actionRow()?.lastElementChild).toHaveAttribute('data-feed-card-row-end');
+        expect(actionRow()?.lastElementChild?.lastElementChild).toBe(chip);
     });
 
     // In credits, as the app's chip reads: the chip said "$2.50" here.
@@ -490,7 +582,9 @@ describe("FeedPostCard's recipe chip", () => {
         expect(screen.getByRole('button', { name: /Remix/ })).toBeInTheDocument();
         expect(chip).toHaveAttribute('href', recipeHref);
         expect(chip.textContent).toBe('250 credits');
-        expect(actionRow()?.lastElementChild).toBe(chip);
+        // At the row's far end, in the box it shares with the views.
+        expect(actionRow()?.lastElementChild).toHaveAttribute('data-feed-card-row-end');
+        expect(actionRow()?.lastElementChild?.lastElementChild).toBe(chip);
     });
 
     // Only credits buy a recipe under the cash minimum, so the card names no

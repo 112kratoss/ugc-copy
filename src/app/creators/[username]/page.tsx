@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { cache } from 'react';
 import { notFound } from 'next/navigation';
-import { Heart, Images, LockKeyhole, Repeat2 } from 'lucide-react';
+import { Eye, Heart, Images, LockKeyhole, Repeat2 } from 'lucide-react';
 
 import {
   getCreatorProfilePageData,
@@ -23,6 +23,8 @@ import {
 } from '@/lib/seo';
 import { CreatorPageViewer, CreatorPosts } from './CreatorPageViewer';
 import { CreatorProfileHeader } from './CreatorProfileHeader';
+
+import { VIEW_COUNT_TOTAL_LABEL, viewCountLabels } from '../../../../ugc-mobile/lib/view-count/view-count';
 
 type CreatorPageProps = {
   params: Promise<{ username: string }>;
@@ -159,11 +161,15 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
   if (!data) notFound();
 
   const profilePath = buildCreatorProfilePath(data.profile.username);
-  const stats = [
-    { label: 'Posts', value: data.stats.publicCreations, icon: Images },
-    { label: 'Saves', value: data.stats.totalSaves, icon: Heart },
-    { label: 'Remixes', value: data.stats.totalRemixes, icon: Repeat2 },
-    { label: 'Recipes', value: data.stats.unlocks, icon: LockKeyhole },
+  // The views of the posts the page lists (post view counts), beside saves and remixes: compact, as
+  // every view count reads ("1.2K"), the whole number for a screen reader, and none at 0.
+  const viewTotal = viewCountLabels(data.stats.totalViews);
+  const stats: Array<{ label: string; value: string; spoken?: string; icon: typeof Images }> = [
+    { label: 'Posts', value: data.stats.publicCreations.toLocaleString(), icon: Images },
+    ...(viewTotal ? [{ label: VIEW_COUNT_TOTAL_LABEL, value: viewTotal.compact, spoken: viewTotal.spoken, icon: Eye }] : []),
+    { label: 'Saves', value: data.stats.totalSaves.toLocaleString(), icon: Heart },
+    { label: 'Remixes', value: data.stats.totalRemixes.toLocaleString(), icon: Repeat2 },
+    { label: 'Recipes', value: data.stats.unlocks.toLocaleString(), icon: LockKeyhole },
   ];
   return (
     <OptionalAuth>
@@ -196,14 +202,22 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
             <CreatorProfileHeader
               profile={data.profile}
               stats={(
-                <div className="mt-5 grid grid-cols-4 divide-x divide-white/8 border-t border-white/8 pt-5">
-                  {stats.map(({ label, value, icon: Icon }) => (
-                    <div key={label} className="flex min-w-0 flex-col items-center gap-1 px-1 text-center sm:flex-row sm:justify-center sm:gap-2.5">
+                <div className={`mt-5 grid ${stats.length === 5 ? 'grid-cols-5' : 'grid-cols-4'} divide-x divide-white/8 border-t border-white/8 pt-5`}>
+                  {stats.map(({ label, value, spoken, icon: Icon }) => (
+                    <div
+                      key={label}
+                      data-creator-stat={label}
+                      className="flex min-w-0 flex-col items-center gap-1 px-1 text-center sm:flex-row sm:justify-center sm:gap-2.5"
+                    >
                       <Icon className="hidden h-4 w-4 text-zinc-500 sm:block" aria-hidden="true" />
-                      <div>
-                        <div className="text-lg font-black tabular-nums text-white sm:text-xl">{value.toLocaleString()}</div>
+                      {/* A compact figure is read whole, once: the drawn pair is hidden from a screen reader. */}
+                      <div className="min-w-0" aria-hidden={spoken ? true : undefined} title={spoken}>
+                        {/* Five columns leave a 360px phone about 57px each: a five-figure total ("12,345")
+                            fits only a size down. */}
+                        <div className={`${stats.length === 5 ? 'text-base' : 'text-lg'} font-black tabular-nums text-white sm:text-xl`}>{value}</div>
                         <div className="truncate text-[11px] font-semibold text-zinc-500 sm:text-xs">{label}</div>
                       </div>
+                      {spoken ? <span className="sr-only">{spoken}</span> : null}
                     </div>
                   ))}
                 </div>

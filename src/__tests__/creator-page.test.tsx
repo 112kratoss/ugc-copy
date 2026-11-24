@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CreatorProfilePageData } from '@/lib/creator-profile';
@@ -367,6 +367,44 @@ describe('creator page', () => {
 
       expect(screen.getByText('Saves')).toBeInTheDocument();
       expect(screen.queryByText('Saves received')).not.toBeInTheDocument();
+    });
+
+    it('draws the creator’s views beside saves and remixes, compact to the eye and whole to a screen reader', async () => {
+      const data = pageData();
+      mocks.getCreatorProfilePageData.mockResolvedValue({ ...data, stats: { ...data.stats, totalViews: 12_345 } });
+      const { container } = await renderPage();
+
+      const stats = [...container.querySelectorAll<HTMLElement>('[data-creator-stat]')];
+      expect(stats.map((stat) => stat.dataset.creatorStat)).toEqual(['Posts', 'Views', 'Saves', 'Remixes', 'Recipes']);
+      expect(stats[0].parentElement).toHaveClass('grid-cols-5');
+      const views = stats[1];
+      expect(views.querySelector('svg.lucide-eye')).not.toBeNull();
+      expect(views.querySelector('div[aria-hidden="true"]')).toHaveTextContent('12KViews');
+      expect(views.querySelector('div[aria-hidden="true"]')).toHaveAttribute('title', '12,345 views');
+      expect(within(views).getByText('12,345 views')).toHaveClass('sr-only');
+      // The other totals keep their whole numbers, a size down below 640px, where five columns leave
+      // a five-figure total no room at the larger one.
+      expect(stats[2]).toHaveTextContent('1,234Saves');
+      expect(within(stats[2]).getByText('1,234')).toHaveClass('text-base', 'sm:text-xl');
+      expect(within(stats[2]).getByText('1,234')).not.toHaveClass('text-lg');
+      expect(views.querySelector('button, a, [tabindex]')).toBeNull();
+    });
+
+    it('draws no Views total at 0, nor for a read that carries none', async () => {
+      const data = pageData();
+      mocks.getCreatorProfilePageData.mockResolvedValue({ ...data, stats: { ...data.stats, totalViews: 0 } });
+      const { container, unmount } = await renderPage();
+      let stats = [...container.querySelectorAll<HTMLElement>('[data-creator-stat]')];
+      expect(stats.map((stat) => stat.dataset.creatorStat)).toEqual(['Posts', 'Saves', 'Remixes', 'Recipes']);
+      expect(stats[0].parentElement).toHaveClass('grid-cols-4');
+      expect(within(stats[1]).getByText('1,234')).toHaveClass('text-lg', 'sm:text-xl');
+      expect(within(stats[1]).getByText('1,234')).not.toHaveClass('text-base');
+      unmount();
+
+      mocks.getCreatorProfilePageData.mockResolvedValue(pageData());
+      const second = await renderPage();
+      stats = [...second.container.querySelectorAll<HTMLElement>('[data-creator-stat]')];
+      expect(stats.map((stat) => stat.dataset.creatorStat)).not.toContain('Views');
     });
 
     it('opens each social pill on its own platform, and drops a stored link to anywhere else', async () => {

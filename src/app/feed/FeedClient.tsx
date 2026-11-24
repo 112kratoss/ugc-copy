@@ -1275,6 +1275,10 @@ export default function FeedClient({
                                     accessToken={accessToken}
                                     sourceSurface="feed"
                                     trackAttention
+                                    // Every reader's Home card reports its view: a
+                                    // web guest's views count only this way.
+                                    viewSurface="feed"
+                                    viewReady={!authLoading}
                                 >
                                 <FeedPostCard
                                     card={card}

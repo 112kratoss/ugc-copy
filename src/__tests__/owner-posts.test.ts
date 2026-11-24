@@ -336,6 +336,31 @@ describe('owner posts', () => {
     expect(post?.commentCount).toBe(7);
   });
 
+  // Post view counts: a count no one is shown, the creator included, for a post the public cannot
+  // see whatever its visibility says (the profile's tiles and reel draw what this carries).
+  it('carries a public post’s views, and none for one under or hidden by review or deleted for its recipe’s holders', async () => {
+    const { getOwnerPostList } = await import('@/lib/owner-posts');
+    const shown = { ...initialPostRows[0], visibility: 'public', view_count: 1_234, review_status: 'visible', tombstoned_at: null as string | null };
+    // The columns the read asks for, beyond what the shared rows carry.
+    postRows.value = [
+      { ...shown, id: 'post-shown' },
+      // Open reports keep a flagged post off every public read until they close.
+      { ...shown, id: 'post-flagged', review_status: 'flagged' },
+      { ...shown, id: 'post-hidden', review_status: 'hidden' },
+      { ...shown, id: 'post-deleted', tombstoned_at: '2026-11-20T00:00:00.000Z' },
+    ] as typeof postRows.value;
+
+    const posts = await getOwnerPostList('user-1');
+    const postWith = (id: string) => posts.find((post) => post.id === id);
+    expect(postWith('post-shown')?.viewCount).toBe(1_234);
+    expect(postWith('post-flagged')).toBeDefined();
+    expect(postWith('post-flagged')).not.toHaveProperty('viewCount');
+    expect(postWith('post-hidden')).toBeDefined();
+    expect(postWith('post-hidden')).not.toHaveProperty('viewCount');
+    expect(postWith('post-deleted')).toBeDefined();
+    expect(postWith('post-deleted')).not.toHaveProperty('viewCount');
+  });
+
   // Published before publishing wrote one, or its save failed: it reads as the
   // row publishing writes (generation-post-source-tools.ts).
   it('reads a creation post stored without its Made with as its creation names it', async () => {

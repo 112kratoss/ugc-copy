@@ -2,10 +2,11 @@
 
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
-import { Eye, Heart, Loader2, LockKeyhole, MessageCircle, Repeat2 } from 'lucide-react';
+import { Heart, Link2, Loader2, LockKeyhole, MessageCircle, Repeat2 } from 'lucide-react';
 
 import { useAuth } from '@/components/AuthProvider';
 import { useNsfwPostRevealed } from '@/components/NsfwPostReveal';
+import PostViewCount from '@/components/PostViewCount';
 import PublicShareButton from '@/components/PublicShareButton';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import { claimFreeRecipe } from '@/lib/free-recipe-claim-client';
@@ -13,14 +14,17 @@ import { formatCompactCount } from '@/lib/post-feed-presentation';
 import { getCurrentInternalPath } from '@/lib/share';
 import { requestShowcaseRemix } from '@/lib/showcase-remix-client';
 
+import type { ViewCountLabels } from '../../../../ugc-mobile/lib/view-count/view-count';
+
 import PostRemixes from './PostRemixes';
 import { showRecipeJump } from './recipe-jump';
 import { useOpenShowcaseDetailComments, useShowcaseDetailCommentCount } from './ShowcaseDetailCommentCount';
 
 /**
- * The verbs under the post — Remix, Save, Comment, Share — plus passive reach,
- * framed by hairlines the way the feed card frames its action row. This is the
- * one interactive strip in the document column; the rail keeps only navigation.
+ * The verbs under the post — Remix, Save, Comment, Share — plus passive reach
+ * (its views, beside saves and comments, and its link visits), framed by
+ * hairlines the way the feed card frames its action row. This is the one
+ * interactive strip in the document column; the rail keeps only navigation.
  */
 export default function ShowcaseDetailEngagementRow({
   postId,
@@ -32,6 +36,7 @@ export default function ShowcaseDetailEngagementRow({
   saveCount,
   commentCount,
   remixCount,
+  viewLabels = null,
   shareVisitCount,
   showComments,
   recipeRemix = null,
@@ -49,6 +54,11 @@ export default function ShowcaseDetailEngagementRow({
   saveCount: number;
   commentCount: number;
   remixCount: number;
+  /**
+   * The post's views as the shared rule draws them (`postViewCountLabels`):
+   * null at 0 and on a post that is not public, which shows no count at all.
+   */
+  viewLabels?: ViewCountLabels | null;
   shareVisitCount: number;
   /** Comments only mount on public posts; the anchor follows them. */
   showComments: boolean;
@@ -242,6 +252,8 @@ export default function ShowcaseDetailEngagementRow({
             {liveCommentCount > 0 ? formatCompactCount(liveCommentCount) : 'Comment'}
           </a>
         ) : null}
+        {/* A count, not a control: no press, no hover, no tab stop. */}
+        <PostViewCount labels={viewLabels} className="inline-flex min-h-11 items-center px-2" />
         <PublicShareButton
           generationId={postId}
           title={title}
@@ -251,12 +263,14 @@ export default function ShowcaseDetailEngagementRow({
           viewerIsOwner={Boolean(creatorId && user?.id === creatorId)}
           className="ui-focus-ring inline-flex min-h-11 items-center gap-2 rounded-full px-2 text-xs font-semibold text-zinc-400 transition hover:text-white"
         />
+        {/* Visits through anyone's shared link (`?s=`), as Recipe sales names them: a chain, so the
+            eye stays the views' alone. */}
         {shareVisitCount > 0 ? (
           <span
             className="inline-flex min-h-11 items-center gap-2 px-2"
-            title={shareVisitCount === 1 ? '1 visit' : `${shareVisitCount} visits`}
+            title={shareVisitCount === 1 ? '1 link visit' : `${shareVisitCount} link visits`}
           >
-            <Eye className="h-4 w-4" aria-hidden="true" />
+            <Link2 className="h-4 w-4" aria-hidden="true" />
             {formatCompactCount(shareVisitCount)}
           </span>
         ) : null}

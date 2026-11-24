@@ -18,6 +18,7 @@ import {
 
 import { useAuth } from '@/components/AuthProvider';
 import { SegmentedControl } from '@/components/DesignSystem';
+import PostViewCount from '@/components/PostViewCount';
 import { useOptimisticPostSave } from '@/components/useOptimisticPostSave';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import ShowcaseReel from '@/app/showcase/ShowcaseReel';
@@ -51,6 +52,7 @@ import { ownRecipeFirstPaintRules } from '@/lib/own-recipe-first-paint';
 import { useFirstPaintMark } from '@/lib/use-first-paint-mark';
 import { useViewerUnlockedRecipeIds, withViewerUnlockedRecipes } from '@/lib/viewer-unlocked-recipes';
 import { itemsWithoutBlockedRemixCredits } from '../../../../ugc-mobile/lib/remix-credit/remix-credit';
+import { postViewCountLabels } from '../../../../ugc-mobile/lib/view-count/view-count';
 
 const PAGE_SIZE = 24;
 const tabHashes: Record<CreatorTab, string> = CREATOR_TAB_HASHES;
@@ -675,6 +677,16 @@ function CreatorCard({
   // The label Explore and the feed give the same recipe, so a credits-only one
   // is priced in credits here too, and one the viewer has reads "Unlocked".
   const unlockLabel = item.asset ? getAssetAccessLabel(item.asset, { isOwner }) : null;
+  // The post's views, bottom left over the tile's scrim (post view counts); none at 0.
+  const viewLabels = postViewCountLabels(item);
+  const viewCount = viewLabels ? (
+    <PostViewCount
+      labels={viewLabels}
+      className="inline-flex items-center text-xs font-bold text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"
+      figureClassName="inline-flex items-center gap-1"
+      iconClassName="h-3.5 w-3.5 shrink-0"
+    />
+  ) : null;
 
   return (
     // A recipe says so, for the Recipes tab drawn from the address before the page's script
@@ -693,7 +705,8 @@ function CreatorCard({
             className="ui-focus-ring flex h-full w-full flex-col justify-between bg-[linear-gradient(145deg,#211613,#111215_55%,#0a1118)] p-4 text-left sm:p-5"
           >
             <FileText className="h-6 w-6 text-[var(--ui-primary)]" />
-            <span className="line-clamp-7 text-sm font-bold leading-6 text-zinc-100 sm:text-base">
+            {/* A count of views takes the tile's foot: the writing ends above it. */}
+            <span className={`${viewCount ? 'mb-6 ' : ''}line-clamp-7 text-sm font-bold leading-6 text-zinc-100 sm:text-base`}>
               {itemDisplayText(item)}
             </span>
           </button>
@@ -704,12 +717,24 @@ function CreatorCard({
             mode="feed"
             onOpen={(mediaIndex) => onOpen(item, mediaIndex)}
             className="h-full"
+            footerStart={viewCount}
           />
         ) : (
           <button type="button" onClick={() => onOpen(item, 0)} className="ui-focus-ring flex h-full w-full items-center justify-center text-zinc-600" aria-label={`Open ${item.title}`}>
             <Images className="h-9 w-9" />
           </button>
         )}
+
+        {/* The carousel draws a picture's count over its scrim. A text tile's sits under its writing,
+            in line with it; a tile with no media at all draws it over a scrim of its own. */}
+        {viewCount && isText ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[5] flex p-4 sm:p-5">{viewCount}</div>
+        ) : viewCount && mediaItems.length === 0 ? (
+          <>
+            <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 z-[3] h-16 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
+            <div className="pointer-events-none absolute bottom-3 left-3 z-[5] flex">{viewCount}</div>
+          </>
+        ) : null}
 
         {unlockLabel ? (
           <div className="pointer-events-none absolute left-2.5 top-2.5 z-[5] inline-flex max-w-[75%] items-center gap-1.5 rounded-full border border-amber-300/20 bg-black/75 px-2.5 py-1 text-[11px] font-black text-amber-300 backdrop-blur-md">

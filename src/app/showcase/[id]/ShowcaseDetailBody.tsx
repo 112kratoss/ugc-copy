@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Suspense, useRef } from 'react';
 import { BookText, ShoppingBag } from 'lucide-react';
 
+import { useAuth } from '@/components/AuthProvider';
 import PostCommentAvatar from '@/components/PostCommentAvatar';
 import IntentLink from '@/components/IntentLink';
 import { getPostFeedTitle, type PostPreviewKind } from '@/lib/post-feed-presentation';
@@ -19,6 +20,9 @@ import type { PostResourceBundleDetail } from '@/lib/post-resource-bundles-serve
 import type { PublicPostDetail } from '@/lib/public-posts';
 
 import RemixCreditLine from '@/app/showcase/RemixCreditLine';
+import { usePostViewOnScreen } from '@/app/showcase/post-view-reporter';
+
+import { postViewCountLabels } from '../../../../ugc-mobile/lib/view-count/view-count';
 
 import PostGenerationSetupLine from './PostGenerationSetupLine';
 import PostRelativeTime from './PostRelativeTime';
@@ -282,6 +286,16 @@ export default function ShowcaseDetailBody({
     : null;
   // The rail ends inside the window: it is told where its top is.
   usePostRailTop(layoutRef, `${detail.id}:${viewer.blocked ? 'blocked' : 'drawn'}`);
+  // The post's view (post view counts): its content looked at for a second, reported once the
+  // session is known, for a public post and anyone but its creator, whom the server never counts.
+  const { session, isLoading: authLoading } = useAuth();
+  const postContentRef = usePostViewOnScreen({
+    postId: detail.id,
+    surface: 'post-page',
+    accessToken: session?.access_token ?? null,
+    enabled: !authLoading && visibility === 'public' && !viewerIsCreator,
+  });
+  const viewLabels = postViewCountLabels({ viewCount: detail.viewCount, visibility });
   const previewKinds = bundle?.lockedPreview?.resourceKinds ?? bundle?.resourceKinds ?? [];
   const previewKindSummary = formatResourceKinds(previewKinds);
   const postTypeLabel = getPostTypeLabel({
@@ -436,6 +450,7 @@ export default function ShowcaseDetailBody({
       saveCount={detail.saveCount}
       commentCount={detail.commentCount}
       remixCount={detail.remixCount}
+      viewLabels={viewLabels}
       shareVisitCount={detail.shareVisitCount}
       showComments={commentsAreOpen}
       recipeRemix={remixWaitsForRead ? null : remixOffer.recipeRemix}
@@ -562,6 +577,7 @@ export default function ShowcaseDetailBody({
           </header>
 
           <section
+            ref={postContentRef}
             data-testid="canonical-post-media"
             aria-label="Post content"
             className="canonical-post-media min-w-0"
