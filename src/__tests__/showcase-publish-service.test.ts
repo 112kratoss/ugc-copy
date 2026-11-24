@@ -3297,13 +3297,17 @@ describe('the cached public pages a publish reaches', () => {
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 
-  it('refreshes a public post\'s pages in the background when it is published again', async () => {
+  // A listed post's title, caption and recipe are rewritten by the publish
+  // and its cached cards drew the old ones: the feeds expire at once (review
+  // of #918), its pages still refresh in the background.
+  it('has the feeds drawn again at once when a public post is published again', async () => {
     await publish('public', storedPost({}));
 
     expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       postId: 'post-pages',
       arrived: false,
       isNew: false,
+      feedTextChanged: true,
     }));
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
@@ -3315,6 +3319,11 @@ describe('the cached public pages a publish reaches', () => {
       arrived: true,
       isNew: false,
     }));
+    // It had no card to correct: the feeds stay in the background.
+    expect(cacheMocks.invalidateShowcaseFeedAndRefreshPostPages).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ feedTextChanged: true }),
+    );
     expect(cacheMocks.invalidateShowcaseFeedCache).not.toHaveBeenCalled();
   });
 

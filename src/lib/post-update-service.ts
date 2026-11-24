@@ -77,7 +77,7 @@ import {
   isDatabaseRecipeTitleRefusal,
 } from '@/lib/marketplace-trust';
 import { recipeKeepsPromptPrivate, titleForRecipePost, type CreationTitleSource } from '@/lib/creation-post-title';
-import { classifyPostPageChange, postPageStateOfRow, type PostPageChange } from '@/lib/public-page-change';
+import { classifyPostPageChange, editChangesFeedText, isPostListed, postPageStateOfRow, type PostPageChange } from '@/lib/public-page-change';
 import {
   invalidateShowcaseFeedAndRefreshPostPages,
   invalidateShowcaseFeedCache,
@@ -180,6 +180,8 @@ type MutablePostRow = {
   output_url: string | null;
   review_status: 'visible' | 'flagged' | 'hidden' | null;
   is_nsfw?: boolean;
+  /** Read so an edit can tell whether it changed the card's remix button (`editChangesFeedText`). */
+  remixes_allowed?: boolean | null;
 };
 
 type BundleStatusRow = {
@@ -678,7 +680,7 @@ async function loadOwnedPost(
   const { data, error } = await adminSupabase
     .from('posts')
     .select(
-      'id, user_id, generation_id, deleted_generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw, remix_recipe_mode',
+      'id, user_id, generation_id, deleted_generation_id, visibility, title, description, prompt, body, category, post_format, source_tool, source_tool_slug, source_kind, archived_at, tombstoned_at, showcase_asset_path, output_url, review_status, is_nsfw, remix_recipe_mode, remixes_allowed',
     )
     .eq('id', postId)
     .eq('user_id', ownerUserId)
@@ -1373,6 +1375,8 @@ export async function updateOwnerPostForRoute({
   let pageGenerationId: string | null = null;
   // The save deleted media files the post's page drew (a picture replaced or taken out).
   let pageMediaRemoved = false;
+  // The save changed words a cached feed card drew of the post while it was listed.
+  let pageFeedTextChanged = false;
 
   try {
     const post = await loadOwnedPost(adminSupabase, postId, ownerUserId);
@@ -2130,6 +2134,16 @@ export async function updateOwnerPostForRoute({
       });
       pageGenerationId = post.generation_id ?? null;
       pageMediaRemoved = (preparedMedia?.removedStoragePaths.length ?? 0) > 0;
+      // A listed post's title, caption, prompt, recipe or remix button edited:
+      // its cached cards drew the old words, so the feeds expire at once rather
+      // than serve them once more (review of #918). A post that was not listed
+      // had no card; one whose save cannot be told apart counts as edited.
+      pageFeedTextChanged = isPostListed(postBefore) && editChangesFeedText({
+        before: post,
+        patch: updatePayload,
+        recipeBefore: liveBundle ? buildStoredBundleForQualityCheck(liveBundle) : null,
+        ...(hasResourceBundlePayload ? { recipeAfter: resourceBundle ?? null } : {}),
+      });
     } catch (error) {
       if (error instanceof DefinitiveSupabaseMutationRejection) {
         await Promise.all(resourceConsumptionClaims.map((claim) => (
@@ -2351,6 +2365,7 @@ export async function updateOwnerPostForRoute({
           // Its old files are deleted with this save (`finalizePreparedEditedPostMedia`): a stale
           // copy of its own page would show them broken.
           ...(pageMediaRemoved ? { mediaRemoved: true } : {}),
+          ...(pageFeedTextChanged ? { feedTextChanged: true } : {}),
         });
       }
     }

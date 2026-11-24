@@ -59,6 +59,8 @@ function createClient({
   sales = SALES as unknown,
   salesError = null as { message: string } | null,
   referenceReadError = null as { message: string } | null,
+  /** Fails the read of what the profile showed before a save (its photos and name). */
+  storedCardReadError = null as { message: string } | null,
 } = {}) {
   const rows = [...profiles];
   const selectedColumns: string[] = [];
@@ -88,9 +90,11 @@ function createClient({
     const filters: Record<string, unknown> = {};
     let excludedId: string | null = null;
     let orFilter: string | null = null;
+    let queryColumns: string | null = null;
     const query = {
       select(columns?: string) {
         if (columns) selectedColumns.push(columns);
+        queryColumns = columns ?? null;
         return query;
       },
       or(filter: string) {
@@ -125,6 +129,9 @@ function createClient({
         return query;
       },
       async maybeSingle() {
+        if (storedCardReadError && queryColumns?.startsWith('avatar_url, cover_url')) {
+          return { data: null, error: storedCardReadError };
+        }
         const match = rows.find((profile) =>
           Object.entries(filters).every(([key, value]) => (profile as Record<string, unknown>)[key] === value) &&
           (!excludedId || profile.id !== excludedId)
@@ -672,8 +679,48 @@ describe('profile route service', () => {
       },
     });
     expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
-    // A save of words takes nothing out of view: the feeds refresh in the background.
-    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledWith({ handles: ['creator-name'] });
+    // A new handle and name are drawn on every cached card: the feeds expire at once.
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledWith({ handles: ['creator-name'], feedTextChanged: true });
+  });
+
+  describe('what a save does to the cached feeds', () => {
+    const stored = (overrides: Partial<ProfileRow> = {}): ProfileRow => ({ ...storedProfile(), ...overrides });
+    async function saveProfile(profile: ProfileRow, body: Record<string, unknown>, options: { storedCardReadError?: { message: string } } = {}) {
+      const client = createClient({ profiles: [profile], ...options });
+      const invalidate = vi.fn();
+      const result = await updateProfileForRoute({ userId: user.id, body, client: client.client, invalidateShowcaseFeedAndRefreshEveryPage: invalidate });
+      expect(result).toMatchObject({ ok: true });
+      return invalidate;
+    }
+
+    it('expires the feeds at once when the display name changes', async () => {
+      const invalidate = await saveProfile(stored(), { username: 'luna', displayName: 'Luna Real-Name' });
+      expect(invalidate).toHaveBeenCalledWith({ feedTextChanged: true });
+    });
+
+    it('expires the feeds at once when the handle changes', async () => {
+      const invalidate = await saveProfile(stored(), { username: 'luna-two', displayName: 'Luna Dreams' });
+      expect(invalidate).toHaveBeenCalledWith({ handles: ['luna-two'], feedTextChanged: true });
+    });
+
+    it('refreshes the feeds in the background when no word a card draws changes', async () => {
+      const invalidate = await saveProfile(stored(), { username: 'luna', displayName: 'Luna Dreams', bio: 'New bio, on no card.' });
+      expect(invalidate).toHaveBeenCalledWith({});
+    });
+
+    it('refreshes the feeds in the background for a first photo', async () => {
+      const invalidate = await saveProfile(stored(), { username: 'luna', displayName: 'Luna Dreams', avatarUrl: 'https://example.com/first.png' });
+      expect(invalidate).toHaveBeenCalledWith({});
+    });
+
+    it('expires the feeds at once when what the profile showed could not be read', async () => {
+      const invalidate = await saveProfile(
+        stored({ avatar_url: 'https://example.com/old.png' }),
+        { username: 'luna', displayName: 'Luna Dreams', avatarUrl: 'https://example.com/new.png' },
+        { storedCardReadError: { message: 'read failed' } },
+      );
+      expect(invalidate).toHaveBeenCalledWith({ mediaRemoved: true, feedTextChanged: true });
+    });
   });
 
   // The feeds' cards draw the creator's photo: one taken off (or replaced, its

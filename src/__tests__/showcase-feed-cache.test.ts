@@ -162,6 +162,20 @@ describe('showcase feed cache', () => {
       expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(PUBLIC_PAGE_CACHE_TAG, expect.anything());
     });
 
+    // A listed post's words edited (a phone number out of a title): every cached
+    // card draws them, so the feeds are drawn again at once (review of #918).
+    // Its pages still refresh in the background, as before this change.
+    it('expires the feeds at once when the change edited words a feed card draws', async () => {
+      const { client } = remixesClient({ data: [] });
+
+      await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, feedTextChanged: true });
+
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(SHOWCASE_FEED_CACHE_TAG, AT_ONCE);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(SHOWCASE_FEED_REFRESH_TAG, expect.anything());
+      expect(cacheMocks.revalidateTag).toHaveBeenCalledWith(publicPostPageTag('post-1'), IN_THE_BACKGROUND);
+      expect(cacheMocks.revalidateTag).not.toHaveBeenCalledWith(publicPostArrivalTag('post-1'), expect.anything());
+    });
+
     it('refreshes the pages of the remixes that credit the post, and their creators', async () => {
       const { client } = remixesClient({ data: [
         { id: 'remix-1', user_id: 'remixer-1' },
@@ -237,6 +251,17 @@ describe('showcase feed cache', () => {
       ]);
     });
 
+    // A display name or handle changed is drawn on every card of the creator's.
+    it('expires the feeds at once when a profile change edited words a feed card draws', () => {
+      invalidateShowcaseFeedAndRefreshEveryPage({ feedTextChanged: true });
+
+      expect(cacheMocks.revalidateTag.mock.calls).toEqual([
+        [SHOWCASE_FEED_CACHE_TAG, AT_ONCE],
+        [PUBLIC_PAGE_REFRESH_TAG, IN_THE_BACKGROUND],
+        [MARKETPLACE_RESOURCE_LIST_CACHE_TAG, IN_THE_BACKGROUND],
+      ]);
+    });
+
     it('drops at once the not-found of a post brought back and of a handle just taken', () => {
       invalidateShowcaseFeedAndRefreshEveryPage({ postIds: ['post-1'], handles: ['@New.Name', '   '] });
 
@@ -264,6 +289,8 @@ describe('showcase feed cache', () => {
     await invalidateShowcaseFeedAndRefreshPostPages(remixesClient({ error: { message: 'boom' } }).client, { ...post, arrived: false });
     invalidateShowcaseFeedAndRefreshEveryPage({ postIds: ['post-1'], handles: ['someone'] });
     invalidateShowcaseFeedAndRefreshEveryPage({ mediaRemoved: true });
+    invalidateShowcaseFeedAndRefreshEveryPage({ feedTextChanged: true });
+    await invalidateShowcaseFeedAndRefreshPostPages(client, { ...post, arrived: false, feedTextChanged: true });
 
     const profilesByTag = new Map<string, Set<string>>();
     for (const [tag, profile] of cacheMocks.revalidateTag.mock.calls as Array<[string, unknown]>) {

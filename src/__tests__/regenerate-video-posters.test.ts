@@ -174,7 +174,9 @@ describe('regenerateVideoPosters', () => {
     expect(Object.keys(postUpdate?.payload ?? {})).not.toEqual(
       expect.arrayContaining(['width', 'height', 'preview_status', 'preview_attempt_count']),
     );
-    expect(mocks.invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledTimes(1);
+    // The new path has the old poster's public copy pruned at once
+    // (prune_post_media_public_copies): a cached card must not point at it.
+    expect(mocks.invalidateShowcaseFeedAndRefreshEveryPage.mock.calls).toEqual([[{ mediaRemoved: true }]]);
   });
 
   it('leaves a row alone when the first frame hashes to the poster it already has', async () => {

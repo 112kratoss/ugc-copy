@@ -132,6 +132,8 @@ async function releaseSupersededProfileUploads(
 const PROFILE_MEDIA_BUCKET = 'profiles';
 
 type StoredProfileMedia = { avatar_url: string | null; cover_url: string | null };
+/** What the profile showed before a save: its photos, and the name every feed card of theirs draws. */
+type StoredProfileCard = StoredProfileMedia & { display_name: string | null };
 
 /**
  * The photos the profile showed before a save that sends one. Null when they
@@ -141,16 +143,16 @@ type StoredProfileMedia = { avatar_url: string | null; cover_url: string | null 
 async function readStoredProfileMedia(
   client: ProfileRouteClient,
   userId: string,
-): Promise<StoredProfileMedia | null> {
+): Promise<StoredProfileCard | null> {
   try {
     const { data, error } = await client
       .from('profiles')
-      .select('avatar_url, cover_url')
+      .select('avatar_url, cover_url, display_name')
       .eq('id', userId)
       .maybeSingle();
     if (error) throw error;
-    const row = (data ?? {}) as Partial<StoredProfileMedia>;
-    return { avatar_url: row.avatar_url ?? null, cover_url: row.cover_url ?? null };
+    const row = (data ?? {}) as Partial<StoredProfileCard>;
+    return { avatar_url: row.avatar_url ?? null, cover_url: row.cover_url ?? null, display_name: row.display_name ?? null };
   } catch (error) {
     logBackendWarning('failed_to_read_profile_media_before_save', { error });
     return null;
@@ -397,11 +399,13 @@ export async function updateProfileForRoute({
     .filter((media, index, entries) => entries.findIndex((candidate) => (
       candidate.location.filePath === media.location.filePath
     )) === index);
-  // What the profile showed, read when a save sends a photo or takes one off:
-  // the photo a new upload replaces goes once the new one is saved, and a
-  // photo changed has the feeds drawn again at once (their cards draw it).
+  // What the profile showed, read when a save sends a photo or takes one off,
+  // or sends a display name: the photo a new upload replaces goes once the new
+  // one is saved, and a photo taken out or a name changed has the feeds drawn
+  // again at once (their cards draw both).
   const sendsProfilePhoto = data.avatarUrl !== undefined || data.coverUrl !== undefined;
-  const previousMedia = submittedProfileMedia.length > 0 || sendsProfilePhoto
+  const sendsDisplayName = data.displayName !== undefined;
+  const previousMedia = submittedProfileMedia.length > 0 || sendsProfilePhoto || sendsDisplayName
     ? await readStoredProfileMedia(resolvedClient, userId)
     : null;
   // Only a new upload is taken from the request. A file the account's folder
@@ -583,9 +587,16 @@ export async function updateProfileForRoute({
   const photoTakenOut = sendsProfilePhoto && (!previousMedia || (['avatar_url', 'cover_url'] as const).some((column) => (
     previousMedia[column] !== null && (savedMedia[column] ?? null) !== previousMedia[column]
   )));
+  // A display name or handle changed is drawn on every cached card of theirs:
+  // the feeds expire at once rather than serve the old one again (review of
+  // #918). A name that could not be read before the save counts as changed.
+  const savedDisplayName = (updatedProfile as Partial<ProfileRow> | null)?.display_name ?? null;
+  const nameChanged = sendsDisplayName && (!previousMedia || savedDisplayName !== previousMedia.display_name);
+  const handleChanged = savedHandle !== normalizeUsername(validation.existingUsername);
   invalidateShowcaseFeedAndRefreshEveryPage({
     ...(handleTaken ? { handles: [savedHandle] } : {}),
     ...(photoTakenOut ? { mediaRemoved: true } : {}),
+    ...(nameChanged || handleChanged ? { feedTextChanged: true } : {}),
   });
 
   return {

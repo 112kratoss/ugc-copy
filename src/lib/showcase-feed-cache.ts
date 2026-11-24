@@ -53,7 +53,9 @@ export const SHOWCASE_FEED_REFRESH_TAG = 'showcase-feed:refresh:v1';
  * may reach the signed-out `/`, Explore's shared first pages and the shelf one
  * visit late (its own page, where the composers land, drops its not-found at
  * once); anything that takes content out of view still expires at once, as
- * does a change that deleted media a feed card draws (`mediaRemoved`). A sale
+ * does a change that deleted media a feed card draws (`mediaRemoved`) or
+ * edited words one draws (`feedTextChanged`): only new posts, restores and
+ * media-only edits reach the feeds late. A sale
  * or a free unlock refreshes the storefront alone
  * (`invalidateMarketplaceResourceListCache`).
  */
@@ -99,11 +101,14 @@ export function refreshShowcaseFeedsInBackground() {
  * The feeds after a change that takes nothing out of view: in the background,
  * the next visitor of `/` and Explore answered from the cache while they are
  * drawn again (a publish made `/` cold for about 3 s on a phone, speed
- * remeasure 2026-11-24). Unless the change deleted media a card draws: then
- * at once, so no cached card points at a file that is gone.
+ * remeasure 2026-11-24). Unless the change deleted media a card draws, or
+ * edited words a card draws (a title, a prompt, a price, a creator's name or
+ * handle): then at once, so no cached card points at a file that is gone or
+ * shows words its creator took out (review of #918; a `'max'` refresh that
+ * keeps failing would serve them for as long as it fails).
  */
-function refreshShowcaseFeeds({ mediaRemoved }: { mediaRemoved?: boolean }) {
-  if (mediaRemoved) {
+function refreshShowcaseFeeds({ mediaRemoved, feedTextChanged }: { mediaRemoved?: boolean; feedTextChanged?: boolean }) {
+  if (mediaRemoved || feedTextChanged) {
     revalidateTag(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
     return;
   }
@@ -134,6 +139,12 @@ export type PublicPostPageChange = {
   mediaRemoved?: boolean;
   /** Made by this change: no post can credit it as the one it remixed yet. */
   isNew?: boolean;
+  /**
+   * The change edited words a cached feed card draws while the post was
+   * listed (`editChangesFeedText`): the feeds are drawn again at once. A post
+   * that comes into view with the change has no card to correct.
+   */
+  feedTextChanged?: boolean;
 };
 
 /** Past this many remixes, a post's change refreshes every page rather than naming theirs. */
@@ -186,7 +197,7 @@ export async function invalidateShowcaseFeedAndRefreshPostPages(
   adminSupabase: SupabaseClient,
   change: PublicPostPageChange,
 ): Promise<void> {
-  refreshShowcaseFeeds({ mediaRemoved: change.mediaRemoved });
+  refreshShowcaseFeeds({ mediaRemoved: change.mediaRemoved, feedTextChanged: change.feedTextChanged });
 
   const pageIds = [change.postId, change.generationId]
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
@@ -218,14 +229,18 @@ export async function invalidateShowcaseFeedAndRefreshPostPages(
  * page that could only hold a not-found until now is dropped at once: a post
  * a moderator brought back, a handle a profile has just taken. A change that
  * took media out (`mediaRemoved`: a profile photo replaced, its old file
- * deleted, or taken off) expires the feeds at once, as their cards draw it.
+ * deleted, or taken off, or a poster regenerated, its old public copy pruned)
+ * or changed a creator's name or handle (`feedTextChanged`) expires the feeds
+ * at once, as their cards draw it.
  */
 export function invalidateShowcaseFeedAndRefreshEveryPage(arrivals: {
   postIds?: readonly string[];
   handles?: readonly string[];
   mediaRemoved?: boolean;
+  /** A creator's display name or handle changed: every card of theirs draws it. */
+  feedTextChanged?: boolean;
 } = {}) {
-  refreshShowcaseFeeds({ mediaRemoved: arrivals.mediaRemoved });
+  refreshShowcaseFeeds({ mediaRemoved: arrivals.mediaRemoved, feedTextChanged: arrivals.feedTextChanged });
   revalidateTag(PUBLIC_PAGE_REFRESH_TAG, 'max');
   // The storefront's first pages carry the feed tag alone of the two, which
   // this no longer expires (the post-pages refresh names the storefront too).

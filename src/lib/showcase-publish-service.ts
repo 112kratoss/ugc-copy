@@ -70,7 +70,7 @@ import {
 import { sanitizePublicPostContent } from '@/lib/post-public-content';
 import { recipeKeepsPromptPrivate, titleForRecipePost } from '@/lib/creation-post-title';
 import { requestPostEmbedding } from '@/lib/feed-embeddings';
-import { classifyPostPageChange, postPageStateOfRow } from '@/lib/public-page-change';
+import { classifyPostPageChange, isPostListed, postPageStateOfRow } from '@/lib/public-page-change';
 import {
   invalidateShowcaseFeedAndRefreshPostPages,
   invalidateShowcaseFeedCache,
@@ -1362,6 +1362,11 @@ export async function publishGenerationToShowcaseForRoute({
       creatorId: userId,
       arrived: pageChange.arrived,
       isNew: !existingRating.data,
+      // A post already listed is rewritten by the publish (its title, caption,
+      // recipe), which is not compared here: its cached cards drew the old
+      // words, so the feeds expire at once (review of #918). A first publish or
+      // a move to public had no card and stays in the background.
+      ...(isPostListed(postBefore) ? { feedTextChanged: true } : {}),
     });
   }
 

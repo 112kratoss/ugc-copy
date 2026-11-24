@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   classifyPostPageChange,
+  editChangesFeedText,
   isPostListed,
   isPostPageDrawn,
   postPageStateOfRow,
@@ -83,5 +84,58 @@ describe('what a write to a post does to the cached public pages', () => {
     ['brought back by a moderator', heldPost, publicPost],
   ])('takes %s as a change that brings the post onto its page', (_name, before, after) => {
     expect(classifyPostPageChange(before, after)).toEqual({ kind: 'change', arrived: true });
+  });
+});
+
+// A listed post's words are on every cached feed card: an edit of them is
+// served stale by none of those caches (review of #918). Only an edit that
+// provably leaves every drawn word as it was is refreshed in the background.
+describe('whether an edit changes what a feed card draws', () => {
+  const stored = {
+    title: 'My product shot',
+    description: null,
+    prompt: 'a red bottle on sand',
+    body: null,
+    post_format: 'media',
+    category: 'image',
+    source_tool: null,
+    source_tool_slug: null,
+    remixes_allowed: true,
+  };
+  const recipe = { accessMode: 'paid', priceUsdCents: 300, summary: 'The full prompt', previewText: null, resources: { promptText: 'x' } };
+
+  it('leaves a media-only edit, which restates every word, to the background', () => {
+    expect(editChangesFeedText({
+      before: stored,
+      patch: { title: 'My product shot', category: 'image', remixes_allowed: true },
+      recipeBefore: recipe,
+      recipeAfter: { ...recipe },
+    })).toBe(false);
+  });
+
+  it('leaves an edit that names no recipe to the background', () => {
+    expect(editChangesFeedText({ before: stored, patch: { category: 'image' }, recipeBefore: recipe })).toBe(false);
+  });
+
+  it('takes a changed title as a change of what the card draws', () => {
+    expect(editChangesFeedText({ before: stored, patch: { title: 'Call me on 98765 43210' } })).toBe(true);
+  });
+
+  it('takes a changed prompt as a change of what the card draws', () => {
+    expect(editChangesFeedText({ before: stored, patch: { prompt: 'a blue bottle' } })).toBe(true);
+  });
+
+  it.each([
+    ['its price', { ...recipe, priceUsdCents: 500 }],
+    ['its access', { ...recipe, accessMode: 'free', priceUsdCents: null }],
+    ['its removal', null],
+  ])('takes a recipe changed in %s as a change of what the card draws', (_name, recipeAfter) => {
+    expect(editChangesFeedText({ before: stored, patch: {}, recipeBefore: recipe, recipeAfter })).toBe(true);
+  });
+
+  it('takes a column it could not read before the save as changed', () => {
+    const withoutRemixSwitch: Record<string, unknown> = { ...stored };
+    delete withoutRemixSwitch.remixes_allowed;
+    expect(editChangesFeedText({ before: withoutRemixSwitch, patch: { remixes_allowed: true } })).toBe(true);
   });
 });
