@@ -111,6 +111,7 @@ import {
   isPersistedHomeFeedData,
   schedulePersistHomeFeed,
 } from '@/lib/persisted-home-feed';
+import { cancelScheduledPersistHomeShelf, schedulePersistHomeShelf } from '@/lib/persisted-home-shelf';
 import { formatCreditBalance } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
@@ -579,6 +580,15 @@ export function HomeDashboard() {
     staleTime: 5 * 60 * 1000,
   });
   const shelfItems = useMemo(() => readHomeShelfItems(shelfQuery.data), [shelfQuery.data]);
+  // Saved for the next launch under the identity it was asked for, after each
+  // fetch and each card taken off (lib/persisted-home-shelf). A save still
+  // waiting is dropped when the identity changes or Home unmounts: a sign-out
+  // clears the copy, and a save armed under the member must not write it back.
+  useEffect(() => {
+    if (isAuthLoading || !shelfQuery.isSuccess) return;
+    schedulePersistHomeShelf(queryClient, identityUserId);
+    return cancelScheduledPersistHomeShelf;
+  }, [identityUserId, isAuthLoading, queryClient, shelfQuery.dataUpdatedAt, shelfQuery.isSuccess]);
 
   const requestNextPage = () => {
     const now = Date.now();

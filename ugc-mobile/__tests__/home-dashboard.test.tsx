@@ -39,6 +39,8 @@ const queryState = vi.hoisted(() => ({
   otherRefetch: vi.fn(() => Promise.resolve()),
   // The options of every other query the screen made, in render order.
   queries: [] as Array<{ queryKey: readonly unknown[]; queryFn?: () => unknown }>,
+  // Whether the shelf's query reads as loaded (its save effect runs only then).
+  shelfSuccess: false,
   client: {
     getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
     getQueryState: vi.fn((_key: readonly unknown[]) => undefined),
@@ -121,7 +123,13 @@ vi.mock('@tanstack/react-query', () => ({
   }),
   useQuery: (options: { queryKey: readonly unknown[]; queryFn?: () => unknown }) => (
     queryState.queries.push(options),
-    { data: undefined, isPending: false, refetch: queryState.otherRefetch }
+    {
+      data: undefined,
+      isPending: false,
+      isSuccess: queryState.shelfSuccess && options.queryKey[0] === 'home-shelf',
+      dataUpdatedAt: 1,
+      refetch: queryState.otherRefetch,
+    }
   ),
   useQueryClient: () => queryState.client,
 }));
@@ -271,6 +279,11 @@ vi.mock('@/lib/persisted-home-feed', () => ({
   schedulePersistHomeFeed: vi.fn(),
 }));
 
+vi.mock('@/lib/persisted-home-shelf', () => ({
+  cancelScheduledPersistHomeShelf: vi.fn(),
+  schedulePersistHomeShelf: vi.fn(),
+}));
+
 // Explore's read-ahead, scheduled and started as Home asks for it.
 const readAheadMocks = vi.hoisted(() => ({
   schedule: vi.fn((_start: () => void) => vi.fn()),
@@ -385,6 +398,7 @@ import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
+import { cancelScheduledPersistHomeShelf, schedulePersistHomeShelf } from '../lib/persisted-home-shelf';
 import { REMIX_LAUNCH_PARAM, REMIX_UNLOCK_REQUIRED_CODE, findRemixLaunch, type RemixLaunch } from '../lib/remix-start';
 import { dismissRecipeUnlockedNotice, readRecipeUnlockedNotice } from '../lib/recipe-unlocked-notice';
 import {
@@ -906,6 +920,35 @@ describe('Home screen', () => {
     expect(schedulePersistHomeFeed).toHaveBeenCalledWith(queryState.client, 'guest-1');
 
     renderer.act(() => tree.unmount());
+  });
+
+  // A sign-out clears the saved shelf; a save armed under the member's identity
+  // must not fire after it and write their shelf back.
+  it('saves the shelf under the identity, and drops a pending save when the identity changes', () => {
+    queryState.shelfSuccess = true;
+    try {
+      authState.user = { id: 'member-1' };
+      authState.identityUserId = 'member-1';
+      queryState.pages = [page([mediaItem('a', 'delivery-shelf-save-a')])];
+      vi.mocked(schedulePersistHomeShelf).mockClear();
+      vi.mocked(cancelScheduledPersistHomeShelf).mockClear();
+      const { tree } = renderHome();
+
+      expect(schedulePersistHomeShelf).toHaveBeenLastCalledWith(queryState.client, 'member-1');
+      const armedAt = vi.mocked(schedulePersistHomeShelf).mock.invocationCallOrder.at(-1)!;
+
+      authState.user = null;
+      authState.identityUserId = 'guest-2';
+      renderer.act(() => tree.update(<HomeDashboard />));
+
+      const cancels = vi.mocked(cancelScheduledPersistHomeShelf).mock.invocationCallOrder;
+      expect(cancels.some((order) => order > armedAt)).toBe(true);
+      expect(schedulePersistHomeShelf).toHaveBeenLastCalledWith(queryState.client, 'guest-2');
+
+      renderer.act(() => tree.unmount());
+    } finally {
+      queryState.shelfSuccess = false;
+    }
   });
 
   // A guest's Not interested and Hide are kept under its uid (D1), and only its

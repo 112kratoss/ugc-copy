@@ -2,6 +2,16 @@ import type { QueryClient } from '@tanstack/react-query';
 
 import type { HomeShelfResponse } from './types';
 
+// Told when a card is taken off, so the copy saved for the next launch
+// (`persisted-home-shelf.ts`, which registers here) is dropped at once rather
+// than a second later, when Home saves the edited shelf. Kept as a hook so this
+// module stays free of storage and loads anywhere.
+let takenOffListener: (() => void) | null = null;
+
+export function setHomeShelfTakenOffListener(listener: (() => void) | null) {
+  takenOffListener = listener;
+}
+
 /**
  * Home's "Make this" shelf (`['home-shelf', identity]`) after the viewer takes
  * a creator or a post out of what they see: a block, a Hide, a Not interested
@@ -31,6 +41,7 @@ export function takeOffHomeShelf(
       : current
   ));
   void queryClient.invalidateQueries({ queryKey: ['home-shelf'], refetchType: 'none' });
+  takenOffListener?.();
 }
 
 /** A creator unblocked, or a Hide taken back: the shelf may draw them again, so it is asked again. */
