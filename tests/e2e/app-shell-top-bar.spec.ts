@@ -56,10 +56,11 @@ function readTopBar(page: Page): Promise<TopBar> {
 }
 
 test.describe('app shell top bar', () => {
-  // /showcase is styled by globals.css alone. /search also loads
-  // non-public-utilities.css, whose own .hidden comes later in the cascade and
-  // once hid Create ("New creation" then) there at every width.
-  for (const route of ['/showcase', '/search']) {
+  // /showcase and /search are styled by globals.css alone. /create-image also
+  // loads non-public-utilities.css, whose own .hidden comes later in the
+  // cascade and once hid Create ("New creation" then) there at every width;
+  // /search did the same until 2026-11-24, and stays in the list to keep it so.
+  for (const route of ['/showcase', '/search', '/create-image']) {
     test(`fits a signed-out visitor's window on ${route}`, async ({ page }) => {
       await page.setViewportSize({ width: WIDTHS[0], height: 800 });
       await page.goto(route);

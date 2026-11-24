@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
+import IntentLink from '@/components/IntentLink';
 import { notFound } from 'next/navigation';
 import { ArrowRight, CheckCircle2 } from 'lucide-react';
 
@@ -88,7 +88,7 @@ export default async function AlternativePage({ params }: AlternativePageProps) 
                         >
                             {entry.competitor}&apos;s own pricing page
                         </a>{' '}
-                        and <Link href="/pricing" className="ui-focus-ring rounded-lg text-[var(--ui-primary)] hover:underline">ours</Link> for current numbers.
+                        and <IntentLink href="/pricing" className="ui-focus-ring rounded-lg text-[var(--ui-primary)] hover:underline">ours</IntentLink> for current numbers.
                     </Text>
                 </section>
 
@@ -167,14 +167,14 @@ export default async function AlternativePage({ params }: AlternativePageProps) 
                         <SectionHeader eyebrow="Keep comparing" title="Other tools people evaluate" />
                         <div className="grid gap-6 md:grid-cols-3">
                             {others.map((other) => (
-                                <Link
+                                <IntentLink
                                     key={other.slug}
                                     href={`/alternatives/${other.slug}`}
                                     className="ui-card ui-card-interactive ui-focus-ring p-6"
                                 >
                                     <Text as="h3" variant="cardTitle">{other.competitor}</Text>
                                     <Text variant="bodySm" className="mt-3 line-clamp-3">{other.positioning}</Text>
-                                </Link>
+                                </IntentLink>
                             ))}
                         </div>
                     </section>

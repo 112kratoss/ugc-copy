@@ -1936,6 +1936,45 @@ describe('showcase feed', () => {
     expect(Boolean(asked[0])).toBe(expected);
   });
 
+  it.each([
+    ['all', {}, true],
+    ['text', {}, true],
+    ['all with a tool', { tool: 'Some Tool' }, true],
+    ['media', {}, false],
+    ['image', {}, false],
+    ['video', {}, false],
+    ['all with an unlock filter', { unlock: 'with-unlock' }, false],
+    ['all with a resource filter', { resource: 'prompt' }, false],
+  ] as const)('lets the ranking start the top-up early only where it is one read: %s', async (lane, extra, expected) => {
+    postsState = [];
+    generationModelsState = [];
+    resourceBundlesState = [];
+    const asked: Array<boolean | undefined> = [];
+    const personalization = await import('@/lib/showcase-feed-personalization');
+    vi.spyOn(personalization, 'getPersonalizedShowcaseFeedPage').mockImplementation(async (options) => {
+      asked.push(options.fallbackIsOneRead);
+      return {
+        items: [],
+        feedSessionId: null,
+        algorithmVersion: 'test-v1',
+        pageInfo: { hasMore: false, nextOffset: null, nextCursor: null, limit: 12, offset: 0 },
+      };
+    });
+    const { getShowcaseFeedPage } = await import('@/lib/showcase-feed');
+
+    await getShowcaseFeedPage({
+      category: lane.split(' ')[0] as 'all' | 'text' | 'media' | 'image' | 'video',
+      sort: 'for-you',
+      offset: 0,
+      limit: 12,
+      viewerUserId: 'viewer-1',
+      bypassCache: true,
+      ...extra,
+    });
+
+    expect(asked).toEqual([expected]);
+  });
+
   // Home's Notes chip waited 1.9-3.4 s for an empty page (device sweep,
   // 2026-11-03): the ranked pool is retrieved for every category, and each
   // batch of media posts was hydrated in full before the text filter dropped it.

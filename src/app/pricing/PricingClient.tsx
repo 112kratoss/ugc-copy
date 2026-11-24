@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
+import IntentLink from "@/components/IntentLink";
 import { ArrowLeft, ArrowRight, Check, ChevronDown, Crown, Gift, History, Loader2, Sparkles, Wallet, Zap, type LucideIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -391,13 +391,13 @@ export function PricingClient({
             <JsonLd data={[faqSchema, pricingSchema]} />
 
             <div className="studio-shell py-10 sm:py-14">
-                <Link
+                <IntentLink
                     href={returnTo ?? '/'}
                     className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-8"
                 >
                     <ArrowLeft className="w-4 h-4" />
                     {returnLabel ?? 'Back to Home'}
-                </Link>
+                </IntentLink>
 
                 <div className="ui-enter mb-12 mt-6 text-center">
                     <div className="mb-5 inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[0.18em] text-[var(--ui-primary)]">
@@ -506,13 +506,13 @@ export function PricingClient({
                                 </p>
                             </div>
                         </div>
-                        <Link
+                        <IntentLink
                             href="/invite"
                             className="ui-focus-ring inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-full border border-amber-300/25 bg-amber-300 px-5 text-sm font-extrabold text-[#1a0d08] transition hover:bg-amber-200 active:scale-[0.985]"
                         >
                             Invite &amp; Earn
                             <ArrowRight className="h-4 w-4" aria-hidden />
-                        </Link>
+                        </IntentLink>
                     </div>
                 </section>
 
@@ -620,9 +620,9 @@ export function PricingClient({
                                             // credits is offered here: the recipe or the remix they came from, if any.
                                             <>
                                                 {' '}
-                                                <Link href={returnTo ?? '/create'} className="font-bold text-[var(--ui-primary)] underline-offset-2 hover:underline">
+                                                <IntentLink href={returnTo ?? '/create'} className="font-bold text-[var(--ui-primary)] underline-offset-2 hover:underline">
                                                     {returnLabel ?? 'Start creating'}
-                                                </Link>
+                                                </IntentLink>
                                             </>
                                         ) : null}
                                     </span>
@@ -702,14 +702,14 @@ export function PricingClient({
                     </div>
                     <div className="grid gap-6 md:grid-cols-3">
                         {relatedLinks.map((link) => (
-                            <Link
+                            <IntentLink
                                 key={link.href}
                                 href={link.href}
                                 className="ui-focus-ring rounded-3xl border border-white/8 bg-white/[0.03] p-6 transition hover:-translate-y-1 hover:border-[var(--ui-primary)]/40 hover:bg-white/[0.05]"
                             >
                                 <h3 className="text-xl font-semibold text-white">{link.title}</h3>
                                 <p className="mt-3 text-sm leading-6 text-zinc-400">{link.description}</p>
-                            </Link>
+                            </IntentLink>
                         ))}
                     </div>
                 </section>
@@ -717,10 +717,10 @@ export function PricingClient({
                 <div className="mt-16 border-t border-zinc-800 pt-8 text-center text-sm text-zinc-500">
                     <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                     <div className="mt-4 flex justify-center gap-6">
-                        <Link href="/terms" className="transition-colors hover:text-white">Terms of Service</Link>
-                        <Link href="/privacy" className="transition-colors hover:text-white">Privacy Policy</Link>
-                        <Link href="/cancellation" className="transition-colors hover:text-white">Cancellation &amp; Refund</Link>
-                        <Link href="/contact" className="transition-colors hover:text-white">Contact</Link>
+                        <IntentLink href="/terms" className="transition-colors hover:text-white">Terms of Service</IntentLink>
+                        <IntentLink href="/privacy" className="transition-colors hover:text-white">Privacy Policy</IntentLink>
+                        <IntentLink href="/cancellation" className="transition-colors hover:text-white">Cancellation &amp; Refund</IntentLink>
+                        <IntentLink href="/contact" className="transition-colors hover:text-white">Contact</IntentLink>
                     </div>
                 </div>
             </div>

@@ -23,7 +23,7 @@ const emptyPage = { items: [], nextCursor: null };
 const COLD_PAGE = { timeout: 60_000 };
 const WALL = path.join(process.cwd(), 'src/app/login/wall');
 const HOST = 'https://example.supabase.co/storage/v1/object/public/e2e-search';
-const picture = (n: number) => `${HOST}/wall-${String(((n - 1) % 12) + 1).padStart(2, '0')}.jpg`;
+const picture = (n: number) => `${HOST}/wall-${String(((n - 1) % 12) + 1).padStart(2, '0')}.webp`;
 const thumbnail = (n: number) => ({ postId: `post-${n}`, url: picture(n), thumbhash: null, width: 900, height: 1200, mediaKind: 'image' });
 const INVITATION = 'Find creators, posts and recipes';
 
@@ -82,7 +82,7 @@ function suggestions(query: string) {
 async function answer(page: Page, { starterDelayMs = 0, starter = STARTER as unknown, starterStatus = 200 } = {}) {
   await page.route(`${HOST}/**`, (route) => {
     const source = path.join(WALL, path.basename(new URL(route.request().url()).pathname));
-    return fs.existsSync(source) ? route.fulfill({ path: source, contentType: 'image/jpeg' }) : route.fulfill({ status: 404, body: '' });
+    return fs.existsSync(source) ? route.fulfill({ path: source, contentType: 'image/webp' }) : route.fulfill({ status: 404, body: '' });
   });
   await page.route((url) => url.pathname === '/api/search/starter', async (route) => {
     if (starterDelayMs) await new Promise((resolve) => setTimeout(resolve, starterDelayMs));

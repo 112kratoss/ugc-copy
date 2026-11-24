@@ -2366,3 +2366,172 @@ describe('v4 retrieval config', () => {
     expect(normalizeRetrievalConfig({ candidate_rpc: 'v4', semantic_min_similarity: true }).semanticMinSimilarity).toBe(0);
   });
 });
+
+describe('first-page waits (speed round 2, 2026-11-24)', () => {
+  const allFilters = { category: 'all', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' } as const;
+  const algorithmReads = (db: SupabaseClient) => (db.from as unknown as ReturnType<typeof vi.fn>).mock.calls
+    .filter(([table]) => table === 'feed_algorithm_versions').length;
+
+  it('reads the algorithm version once for two first pages served by one instance', async () => {
+    const db = serviceClient(['post-1', 'post-2']);
+    const page = () => getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null, filters: allFilters,
+      hydratePostIds: async (ids) => ids.map((id) => item(id)),
+      fallbackItems: async () => [],
+      limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
+    });
+
+    // Two at once share the read in flight; a third, later, is served from the cache.
+    await Promise.all([page(), page()]);
+    await page();
+
+    expect(algorithmReads(db)).toBe(1);
+  });
+
+  it('reads the algorithm again once the cached copy is older than its time to live', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const db = serviceClient(['post-1']);
+      const page = () => getPersonalizedShowcaseFeedPage({
+        anonymousKeyHash: null, cursor: null, filters: allFilters,
+        hydratePostIds: async (ids) => ids.map((id) => item(id)),
+        fallbackItems: async () => [],
+        limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
+      });
+      await page();
+      vi.advanceTimersByTime(59_000);
+      await page();
+      expect(algorithmReads(db)).toBe(1);
+      vi.advanceTimersByTime(2_000);
+      await page();
+      expect(algorithmReads(db)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps no failed algorithm read: the next page reads it again', async () => {
+    let fail = true;
+    const query = {
+      select: () => query,
+      eq: () => query,
+      maybeSingle: async () => (fail
+        ? { data: null, error: { message: 'connection reset' } }
+        : {
+          data: {
+            id: 'algorithm-1', algorithm_key: 'for-you-rules', version: 3,
+            weights: {}, retrieval_config: { session_item_limit: 60 }, diversity_config: {},
+          },
+          error: null,
+        }),
+    };
+    const db = {
+      rpc: vi.fn(async () => ({ data: [{ post_id: 'post-1', candidate_source: 'recent' }], error: null })),
+      from: vi.fn(() => query),
+    } as unknown as SupabaseClient;
+    const page = () => getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null, filters: allFilters,
+      hydratePostIds: async (ids) => ids.map((id) => item(id)),
+      fallbackItems: async () => [item('recent-1')],
+      limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
+    });
+
+    // A failed read serves the recent fallback, as before, and is not remembered.
+    expect((await page()).algorithmVersion).toBe('recent-fallback-v1');
+    fail = false;
+    expect((await page()).algorithmVersion).toBe('for-you-rules-v3');
+    expect(algorithmReads(db)).toBe(2);
+  });
+
+  it('starts the recent top-up read beside the candidate read on a lane where it is one read', async () => {
+    let releaseCandidates!: () => void;
+    const candidatesReturned = new Promise<void>((resolve) => { releaseCandidates = resolve; });
+    const base = serviceClient([]);
+    const rpc = vi.fn(async () => {
+      await candidatesReturned;
+      return { data: [{ post_id: 'ranked-1', candidate_source: 'interest' }], error: null };
+    });
+    const db = { rpc, from: base.from } as unknown as SupabaseClient;
+    const fallbackItems = vi.fn(async () => [item('recent-1')]);
+    const hydratePostIds = vi.fn(async (ids: string[]) => ids.map((id) => item(id)));
+
+    const pending = getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null, filters: allFilters,
+      hydratePostIds, fallbackItems, fallbackIsOneRead: true,
+      limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
+    });
+    await vi.waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+
+    expect(fallbackItems).toHaveBeenCalledTimes(1);
+    expect(fallbackItems).toHaveBeenCalledWith(60);
+    expect(hydratePostIds).not.toHaveBeenCalled();
+    releaseCandidates();
+    const page = await pending;
+    expect(page.items.map((entry) => entry.id).sort()).toEqual(['ranked-1', 'recent-1']);
+  });
+
+  it('hydrates the ranked pool only once the top-up read has settled, so no post is hydrated twice', async () => {
+    const order: string[] = [];
+    const db = serviceClient(['ranked-1']);
+    await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null, filters: allFilters,
+      hydratePostIds: async (ids) => { order.push('hydrate'); return ids.map((id) => item(id)); },
+      fallbackIsOneRead: true,
+      fallbackItems: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        order.push('fallback');
+        return [item('recent-1')];
+      },
+      limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
+    });
+    expect(order).toEqual(['fallback', 'hydrate']);
+  });
+
+  it('rethrows a failed top-up read only when the page needed it', async () => {
+    const failingFallback = vi.fn(async (): Promise<ShowcaseFeedItem[]> => { throw new Error('recent read failed'); });
+    const needed = getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null, filters: allFilters,
+      hydratePostIds: async (ids) => ids.map((id) => item(id)),
+      fallbackItems: failingFallback, fallbackIsOneRead: true,
+      limit: 12, offset: 0, serviceClient: serviceClient(['ranked-1']), viewerUserId: null,
+    });
+    await expect(needed).rejects.toThrow('recent read failed');
+
+    const postIds = Array.from({ length: 60 }, (_, index) => `ranked-${index}`);
+    const unneeded = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null, filters: allFilters,
+      hydratePostIds: async (ids) => ids.map((id) => item(id)),
+      fallbackItems: failingFallback, fallbackIsOneRead: true,
+      limit: 12, offset: 0, serviceClient: serviceClient(postIds), viewerUserId: null,
+    });
+    expect(unneeded.items).toHaveLength(12);
+  });
+
+  it('never holds a filtered lane\'s hydration behind its top-up scan, nor scans when the pool fills', async () => {
+    // On a filtered lane (image, video, media, an unlock or resource filter)
+    // the top-up is a scan of several round trips: it is read after hydration,
+    // and only for a pool that falls short.
+    const fullPool = Array.from({ length: 60 }, (_, index) => `ranked-${index}`);
+    const scan = vi.fn(async () => [item('recent-1')]);
+    const hydratePostIds = vi.fn(async (ids: string[]) => ids.map((id) => item(id)));
+    const full = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null,
+      filters: { category: 'video', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds, fallbackItems: scan, fallbackIsOneRead: false,
+      limit: 12, offset: 0, serviceClient: serviceClient(fullPool), viewerUserId: null,
+    });
+    expect(full.items).toHaveLength(12);
+    expect(scan).not.toHaveBeenCalled();
+
+    const order: string[] = [];
+    const short = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null,
+      filters: { category: 'video', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds: async (ids) => { order.push('hydrate'); return ids.map((id) => item(id)); },
+      fallbackItems: async () => { order.push('scan'); return [item('recent-1')]; },
+      limit: 12, offset: 0, serviceClient: serviceClient(['ranked-1']), viewerUserId: null,
+    });
+    expect(order).toEqual(['hydrate', 'scan']);
+    expect(short.items.map((entry) => entry.id).sort()).toEqual(['ranked-1', 'recent-1']);
+  });
+});
