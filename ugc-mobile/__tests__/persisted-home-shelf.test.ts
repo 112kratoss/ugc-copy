@@ -138,7 +138,7 @@ describe('the key', () => {
 });
 
 describe('what a saved copy keeps', () => {
-  it('keeps the creations without the cards' prices or "Free to try", and only the offer that names no figure', () => {
+  it('keeps the creations without the card prices or "Free to try", and only the offer that names no figure', () => {
     const items = toSavedShelfItems(shelf().items);
 
     expect(ids(items)).toEqual(['a', 'b', 'action:post', 'c', 'd']);
