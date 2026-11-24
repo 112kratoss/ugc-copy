@@ -221,6 +221,19 @@ export function isSearchStarterEmpty(answer: SearchStarterLists | null | undefin
   return !answer || (answer.entities.length === 0 && answer.creators.length === 0 && answer.searches.length === 0);
 }
 
+/**
+ * How long a client draws an answer it already has without asking again: ten
+ * minutes. The lists are remade hourly, a screen is opened many times in a
+ * visit, and each request counts against the route's limit
+ * (`SEARCH_STARTER_RATE_LIMIT`). The web's top bar keeps one this long
+ * (`src/components/search/use-search-starter.ts`); the app's search screen
+ * too (`ugc-mobile/lib/use-search-starter.ts`), forgetting it as soon as the
+ * account follows, unfollows, blocks or unblocks anyone, which changes the
+ * creators it offers. Never an empty answer or a failure: those are asked
+ * again at the next opening.
+ */
+export const SEARCH_STARTER_KEPT_MS = 10 * 60_000;
+
 // ─── Sections ────────────────────────────────────────────────────────────────
 
 /** The sections, in the order they are drawn (under any recent searches, which stay on top). */

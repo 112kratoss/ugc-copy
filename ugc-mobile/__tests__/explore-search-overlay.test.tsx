@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +10,8 @@ import { SearchTypeaheadList } from '../components/search-typeahead-list';
 import { ApiError, type MagicbookletApiClient } from '../lib/api-client';
 import { searchEntityActionLabel, searchRecipeCardLabel } from '../lib/public-search-policy/public-search-policy';
 import { SEARCH_ENTRANCE } from '../lib/search-entrance';
+import { SEARCH_STARTER_KEPT_MS } from '../lib/public-search-policy/search-starter';
+import { forgetKeptSearchStarters, searchStarterQueryKey } from '../lib/use-search-starter';
 import { themes } from '../lib/theme';
 import { Reveal } from '../components/reveal';
 import { CREATOR_PROFILE_PRESS_DELAY_MS, setCreatorProfilePreparer } from '../lib/creator-profile-opening';
@@ -93,6 +96,17 @@ function pressBack() {
     if (listener()) return true;
   }
   return false;
+}
+
+
+// The starter is kept in the query cache (lib/use-search-starter.ts): each case
+// starts with an empty one, so nothing an earlier case asked is drawn.
+let queryClient = new QueryClient();
+beforeEach(() => {
+  queryClient = new QueryClient();
+});
+function overlay(props: React.ComponentProps<typeof ExploreSearchOverlay>) {
+  return React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(ExploreSearchOverlay, props));
 }
 
 vi.mock('@react-navigation/native', () => ({
@@ -216,14 +230,14 @@ const api = { searchPublicContent, suggestSearch, searchStarter, recordSearchOpe
 async function render(props: { visible: boolean; onClose: () => void }) {
   let tree: renderer.ReactTestRenderer | null = null;
   await act(async () => {
-    tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, ...props }));
+    tree = renderer.create(overlay({ api, ...props }));
   });
   return tree!;
 }
 
 async function update(tree: renderer.ReactTestRenderer, props: { visible: boolean; onClose: () => void }) {
   await act(async () => {
-    tree.update(React.createElement(ExploreSearchOverlay, { api, ...props }));
+    tree.update(overlay({ api, ...props }));
   });
 }
 
@@ -3074,16 +3088,116 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     await act(async () => tree.unmount());
   });
 
-  it('draws no starter of an earlier opening: cleared on close, so a failed request leaves the invitation (review of #794)', async () => {
+  // archive/perf-loop-2026-11-24: every opening asked again, and an empty
+  // start held up to 900 ms for it; each request is also a rate-limit row.
+  it('draws the answer it kept at the next opening at once, asking nothing, for ten minutes', async () => {
+    const onClose = vi.fn();
+    const first = await render({ visible: true, onClose });
+    expect(headers(first)).toContain('Creators to follow');
+    await act(async () => first.unmount());
+
+    // The screen opened again (a new mount, as the route makes one), with a
+    // server that would never answer: what it draws is what it kept.
+    searchStarter.mockImplementation(() => new Promise(() => {}));
+    const second = await render({ visible: true, onClose });
+    expect(headers(second)).toContain('Creators to follow');
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+    // Kept for the time the shared rules say, per account.
+    expect(queryClient.getQueryCache().find({ queryKey: searchStarterQueryKey(null) })?.options).toMatchObject({
+      staleTime: SEARCH_STARTER_KEPT_MS,
+      gcTime: SEARCH_STARTER_KEPT_MS,
+    });
+    expect(SEARCH_STARTER_KEPT_MS).toBe(10 * 60_000);
+    await act(async () => second.unmount());
+  });
+
+  it('draws no older answer than that: asks again, holds, and a failed request leaves the invitation (review of #794)', async () => {
     const onClose = vi.fn();
     const tree = await render({ visible: true, onClose });
     expect(headers(tree)).toContain('Creators to follow');
     await update(tree, { visible: false, onClose });
+    // Kept past its time.
+    queryClient.setQueryData(searchStarterQueryKey(null), STARTER, { updatedAt: Date.now() - SEARCH_STARTER_KEPT_MS - 1 });
     searchStarter.mockRejectedValueOnce(new ApiError('Server error', 500));
     await update(tree, { visible: true, onClose });
     expect(searchStarter).toHaveBeenCalledTimes(2);
     expect(headers(tree)).not.toContain('Creators to follow');
     expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+    await act(async () => tree.unmount());
+  });
+
+  // Review of #920: held, never the older answer meanwhile.
+  it('draws no older answer while the new request is still on its way', async () => {
+    queryClient.setQueryData(searchStarterQueryKey(null), STARTER, { updatedAt: Date.now() - SEARCH_STARTER_KEPT_MS - 1 });
+    searchStarter.mockImplementation(() => new Promise(() => {}));
+    const tree = await render({ visible: true, onClose: vi.fn() });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+    expect(headers(tree)).not.toContain('Creators to follow');
+    expect(tree.root.findAll((node) => node.props.testID === 'search-start-holding').length).toBeGreaterThan(0);
+    await act(async () => tree.unmount());
+  });
+
+  // Review of #920: a request asked before a follow or a block must not land
+  // after it and pass for fresh.
+  it('calls off a starter request a follow or a block overtakes, and asks again for the screen waiting on it', async () => {
+    mocks.user.value = { id: 'account-1' };
+    const before = { ...STARTER, searches: STARTER.searches.slice(0, 1) };
+    const signals: AbortSignal[] = [];
+    let answerOld: ((value: typeof STARTER) => void) | null = null;
+    searchStarter.mockImplementationOnce((signal) => {
+      if (signal) signals.push(signal);
+      return new Promise((resolve) => { answerOld = resolve as never; });
+    });
+    searchStarter.mockImplementationOnce(async () => STARTER);
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await forgetKeptSearchStarters(queryClient); });
+    expect(signals[0]?.aborted).toBe(true);
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    // The overtaken request answering late changes nothing.
+    await act(async () => { answerOld?.(before); });
+    expect(queryClient.getQueryData<{ searches: unknown[] }>(searchStarterQueryKey('account-1'))?.searches).toHaveLength(STARTER.searches.length);
+    expect(queryClient.getQueryState(searchStarterQueryKey('account-1'))?.isInvalidated).toBe(false);
+    // The cache tells the screen on its next tick.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(headers(tree)).toContain('Creators to follow');
+
+    // That answer was asked after the change: kept for the next opening.
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    await act(async () => tree.unmount());
+  });
+
+  it('asks again at the next opening once the account follows or blocks anyone, keeping what this one drew', async () => {
+    mocks.user.value = { id: 'account-1' };
+    const onClose = vi.fn();
+    const tree = await render({ visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+
+    // What the API client reports once a follow or a block is taken (lib/auth.tsx).
+    await act(async () => { await forgetKeptSearchStarters(queryClient); });
+    expect(headers(tree)).toContain('Creators to follow');
+    expect(searchStarter).toHaveBeenCalledTimes(1);
+
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(2);
+    expect(headers(tree)).toContain('Creators to follow');
+
+    // A failure or an empty answer is not kept: the opening after it asks again.
+    searchStarter.mockResolvedValueOnce({ entities: [], creators: [], searches: [] });
+    await act(async () => { await forgetKeptSearchStarters(queryClient); });
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(3);
+    expect(statusTitles(tree)).toEqual([SEARCH_IDLE_TITLE]);
+    await update(tree, { visible: false, onClose });
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(4);
+    expect(headers(tree)).toContain('Creators to follow');
     await act(async () => tree.unmount());
   });
 
@@ -3148,6 +3262,10 @@ describe('ExploreSearchOverlay starting and ending screens', () => {
     mocks.user.value = null;
     await update(tree, { visible: true, onClose });
     expect(searchStarter).toHaveBeenCalledTimes(3);
+    // The first account again, within the time an answer is kept: its own, kept.
+    mocks.user.value = { id: 'account-1' };
+    await update(tree, { visible: true, onClose });
+    expect(searchStarter).toHaveBeenCalledTimes(3);
     await act(async () => tree.unmount());
   });
 });
@@ -3194,7 +3312,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     searchPublicContent.mockImplementation(async ({ query, type }) => searchAnswer(query, type ?? 'top', { posts: [post('p1')] }));
     let tree: renderer.ReactTestRenderer | null = null;
     await act(async () => {
-      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery: 'nano', initialType: 'posts' }));
+      tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn(), initialQuery: 'nano', initialType: 'posts' }));
     });
     expect(searchInput(tree!).props.value).toBe('nano');
     expect(tab(tree!, 'Posts').props.accessibilityState).toMatchObject({ selected: true });
@@ -3210,7 +3328,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
   async function openOnLink(initialQuery: string, initialType: PublicSearchType | null = null, extra: Record<string, unknown> = {}) {
     let tree: renderer.ReactTestRenderer | null = null;
     await act(async () => {
-      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery, initialType, ...extra }));
+      tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn(), initialQuery, initialType, ...extra }));
     });
     return tree!;
   }
@@ -3276,7 +3394,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     mocks.inputFocus.mockClear();
     let tree: renderer.ReactTestRenderer | null = null;
     await act(async () => {
-      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+      tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn() }));
     });
     await act(async () => { vi.advanceTimersByTime(0); });
     expect(mocks.inputFocus).toHaveBeenCalledTimes(1);
@@ -3300,7 +3418,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     it('takes no tap until the field has nearly arrived, so a double tap does nothing', async () => {
       let tree: renderer.ReactTestRenderer | null = null;
       await act(async () => {
-        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
+        tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
       });
       expect(shielded(tree!)).toBe(true);
       await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs - 1); });
@@ -3316,7 +3434,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
       const onClose = vi.fn();
       let tree: renderer.ReactTestRenderer | null = null;
       await act(async () => {
-        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose, entranceFrom: origin }));
+        tree = renderer.create(overlay({ api, visible: true, onClose, entranceFrom: origin }));
       });
       await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs); });
       const close = pressableLabelled(tree!, 'Close search');
@@ -3333,7 +3451,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
       mocks.inputFocus.mockClear();
       let tree: renderer.ReactTestRenderer | null = null;
       await act(async () => {
-        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
+        tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn(), entranceFrom: origin }));
       });
       await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs - 1); });
       expect(mocks.inputFocus).not.toHaveBeenCalled();
@@ -3347,7 +3465,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
       const onClose = vi.fn();
       let tree: renderer.ReactTestRenderer | null = null;
       await act(async () => {
-        tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose, entranceFrom: origin }));
+        tree = renderer.create(overlay({ api, visible: true, onClose, entranceFrom: origin }));
       });
       await act(async () => { vi.advanceTimersByTime(SEARCH_ENTRANCE.touchesAfterMs); });
       await act(async () => { pressableLabelled(tree!, 'Close search').props.onPress(); });
@@ -3362,7 +3480,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     searchStarter.mockImplementation(() => new Promise(() => {}));
     let tree: renderer.ReactTestRenderer | null = null;
     await act(async () => {
-      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+      tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn() }));
     });
     expect(tree!.root.findAll((node) => node.props.testID === 'search-start-holding')).toEqual([]);
     expect(pressableLabelled(tree!, searchRecentAgainLabel('portrait'))).toBeTruthy();
@@ -3376,7 +3494,7 @@ describe('ExploreSearchOverlay opened and left as a screen', () => {
     searchStarter.mockImplementation(() => new Promise(() => {}));
     let tree: renderer.ReactTestRenderer | null = null;
     await act(async () => {
-      tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+      tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn() }));
     });
     expect(statusTitles(tree!)).toEqual([]);
     expect(tree!.root.findAll((node) => node.props.testID === 'search-start-holding').length).toBeGreaterThan(0);
@@ -3636,7 +3754,7 @@ describe('ExploreSearchOverlay search screen, 2026-11-15', () => {
     // at once; they come after the pause a search left alone waits, as the web's do.
     let linked: renderer.ReactTestRenderer | null = null;
     await act(async () => {
-      linked = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn(), initialQuery: 'neon city', initialType: 'posts' }));
+      linked = renderer.create(overlay({ api, visible: true, onClose: vi.fn(), initialQuery: 'neon city', initialType: 'posts' }));
     });
     expect(searchPublicContent.mock.calls.map(([params]) => [params.entry, params.related, params.blend])).toEqual([['link', false, false]]);
     await advance(1600);

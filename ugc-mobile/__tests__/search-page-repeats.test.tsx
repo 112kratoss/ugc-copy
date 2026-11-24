@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -59,6 +60,17 @@ const mocks = vi.hoisted(() => {
     fontScale: { value: 1 },
   };
 });
+
+
+// The starter is kept in the query cache (lib/use-search-starter.ts): each case
+// starts with an empty one, so nothing an earlier case asked is drawn.
+let queryClient = new QueryClient();
+beforeEach(() => {
+  queryClient = new QueryClient();
+});
+function overlay(props: React.ComponentProps<typeof ExploreSearchOverlay>) {
+  return React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(ExploreSearchOverlay, props));
+}
 
 vi.mock('@react-navigation/native', () => ({
   useIsFocused: () => mocks.focused.value,
@@ -167,7 +179,7 @@ type Tree = renderer.ReactTestRenderer;
 async function render() {
   let tree: Tree | null = null;
   await act(async () => {
-    tree = renderer.create(React.createElement(ExploreSearchOverlay, { api, visible: true, onClose: vi.fn() }));
+    tree = renderer.create(overlay({ api, visible: true, onClose: vi.fn() }));
   });
   return tree!;
 }

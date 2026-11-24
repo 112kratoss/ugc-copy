@@ -99,6 +99,7 @@ import {
 } from './supabase-auth-recovery';
 import { probeSupabaseSession } from './supabase-session-probe';
 import type { ProfileResponse } from './types';
+import { forgetKeptSearchStarters } from './use-search-starter';
 import { clearVideoStills } from './video-still-cache';
 import { endWelcomePromise } from './welcome-promise';
 
@@ -719,8 +720,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         apiVersion: 1,
         catalogSchemaVersion: GENERATION_MODEL_CATALOG_SCHEMA_VERSION,
       },
+      // A follow or a block changes the creators search's starter offers.
+      onRelationsChanged: () => { void forgetKeptSearchStarters(queryClient); },
     }),
-    [getAccessToken]
+    [getAccessToken, queryClient]
   );
   useEffect(() => {
     configureFeedEventQueue({
