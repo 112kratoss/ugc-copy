@@ -3,20 +3,20 @@ import type { CSSProperties } from 'react';
 
 import { signInWallColumnOrder } from '@/lib/sign-in-page';
 
-import wall01 from './wall/wall-01.jpg';
-import wall02 from './wall/wall-02.jpg';
-import wall03 from './wall/wall-03.jpg';
-import wall04 from './wall/wall-04.jpg';
-import wall05 from './wall/wall-05.jpg';
-import wall06 from './wall/wall-06.jpg';
-import wall07 from './wall/wall-07.jpg';
-import wall08 from './wall/wall-08.jpg';
-import wall09 from './wall/wall-09.jpg';
-import wall10 from './wall/wall-10.jpg';
-import wall11 from './wall/wall-11.jpg';
-import wall12 from './wall/wall-12.jpg';
+import wall01 from './wall/wall-01.webp';
+import wall02 from './wall/wall-02.webp';
+import wall03 from './wall/wall-03.webp';
+import wall04 from './wall/wall-04.webp';
+import wall05 from './wall/wall-05.webp';
+import wall06 from './wall/wall-06.webp';
+import wall07 from './wall/wall-07.webp';
+import wall08 from './wall/wall-08.webp';
+import wall09 from './wall/wall-09.webp';
+import wall10 from './wall/wall-10.webp';
+import wall11 from './wall/wall-11.webp';
+import wall12 from './wall/wall-12.webp';
 
-/** The app's twelve pictures (`ugc-mobile/assets/images/sign-in-wall/`), the same files. */
+/** The app's twelve pictures (`ugc-mobile/assets/images/sign-in-wall/`), the same pictures, re-encoded for the web (320x569 WebP). */
 const TILES = [wall01, wall02, wall03, wall04, wall05, wall06, wall07, wall08, wall09, wall10, wall11, wall12] as const;
 
 /**
@@ -45,8 +45,8 @@ const PHONE_COLUMNS = 5;
  * (one set) before it starts again. Reduce Motion holds it still.
  *
  * Drawn on the server and handed to the page (`page.tsx`), as plain images, so the 132 tiles are
- * no part of the page's script. The pictures are 360×640 JPEGs of 16 to 56 KB, the size a phone's tile wants at
- * 3×, so they are served as they are: through the optimizer every tile would carry a srcset of a
+ * no part of the page's script. The pictures are 320×569 WebPs of 7 to 35 KB (208 KB in all, where the app's 360×640 JPEGs are 375 KB), enough for a phone tile at
+ * 3× (about 102 px wide), so they are served as they are: through the optimizer every tile would carry a srcset of a
  * dozen widths, about 100 KB more HTML on a page drawn for every request.
  */
 export default function SignInWall({ start }: {

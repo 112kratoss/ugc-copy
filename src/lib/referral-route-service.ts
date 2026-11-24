@@ -4,6 +4,7 @@ import 'server-only';
 import { logBackendError } from '@/lib/backend-logger';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { unstable_cache } from 'next/cache';
 import { NextResponse } from 'next/server';
 
 import { loadAccountIdentityFingerprints } from '@/lib/account-identity-fingerprint';
@@ -99,18 +100,36 @@ async function readActiveReferralProgramTerms(): Promise<ReferralProgramTerms | 
 }
 
 /**
+ * The same read in Next's Data Cache, shared by every instance and kept across
+ * cold starts: the instance cache below is empty on each new one, and the first
+ * `/pricing` view it served (production 2026-11-24: HTML end 904 ms against
+ * about 330 ms after) waited on a Supabase round trip. The terms are the same
+ * for every viewer, so nothing per-viewer (country, invite cookie, session) is
+ * read here. A throwing read is not stored by `unstable_cache`. Terms change by
+ * an operator's migration, so five minutes (as the instance cache) is the only
+ * freshness the page has ever promised.
+ */
+export const REFERRAL_PROGRAM_TERMS_CACHE_TAG = 'referral-program-terms:v1';
+const readActiveReferralProgramTermsFromDataCache = unstable_cache(
+  readActiveReferralProgramTerms,
+  ['referral-program-terms'],
+  { revalidate: REFERRAL_PROGRAM_TERMS_CACHE_TTL_MS / 1000, tags: [REFERRAL_PROGRAM_TERMS_CACHE_TAG] },
+);
+
+/**
  * The terms `/api/referrals/me` carries as `program`, for surfaces that show them
  * to someone without an account: the referral landing (on the visit answer) and
  * the pricing banner. `null` while no program is active or when the terms cannot
  * be read, and the surface then leaves the numbers out. Cached for five minutes
- * per server instance; a failed read is not cached.
+ * per server instance, over the Data Cache's copy shared by all of them; a failed
+ * read is not cached.
  */
 export async function loadReferralProgramTerms(): Promise<ReferralProgramTerms | null> {
   if (cachedReferralProgramTerms && cachedReferralProgramTerms.expiresAt > Date.now()) {
     return cachedReferralProgramTerms.terms;
   }
   if (!pendingReferralProgramTerms) {
-    pendingReferralProgramTerms = readActiveReferralProgramTerms()
+    pendingReferralProgramTerms = readActiveReferralProgramTermsFromDataCache()
       .then((terms) => {
         cachedReferralProgramTerms = { expiresAt: Date.now() + REFERRAL_PROGRAM_TERMS_CACHE_TTL_MS, terms };
         return terms;

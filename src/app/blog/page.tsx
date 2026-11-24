@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import IntentLink from '@/components/IntentLink';
 import { getSortedPostsData } from '@/lib/blog';
 import { Metadata } from 'next';
 import { ArrowLeft, ArrowRight, Calendar } from 'lucide-react';
@@ -48,9 +48,9 @@ export default function BlogIndex() {
             />
             <div className="max-w-4xl mx-auto space-y-12">
                 <div className="space-y-4">
-                    <Link href="/" className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-4">
+                    <IntentLink href="/" className="inline-flex items-center gap-2 text-zinc-400 hover:text-white transition-colors mb-4">
                         <ArrowLeft className="w-4 h-4" /> Back to Home
-                    </Link>
+                    </IntentLink>
                     <h1 className="text-4xl md:text-5xl font-bold tracking-tight">Blog & Resources</h1>
                     <p className="text-xl text-zinc-400">Insights, tutorials, and strategies for creating high-converting UGC.</p>
                     <p className="max-w-2xl leading-relaxed text-zinc-400">
@@ -62,13 +62,13 @@ export default function BlogIndex() {
                     <div className="flex flex-wrap items-center gap-2 pt-2">
                         <span className="text-sm text-zinc-500">Topics:</span>
                         {TOPIC_LINKS.map((topic) => (
-                            <Link
+                            <IntentLink
                                 key={topic.href}
                                 href={topic.href}
                                 className="ui-focus-ring rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-3 py-1 text-sm text-zinc-300 transition-colors hover:border-[var(--ui-primary)]/40 hover:text-white"
                             >
                                 {topic.label}
-                            </Link>
+                            </IntentLink>
                         ))}
                     </div>
                 </div>
@@ -89,9 +89,9 @@ export default function BlogIndex() {
                                 <time dateTime={post.date}>{new Date(post.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</time>
                             </div>
                             <h2 className="mb-3 text-2xl font-semibold transition-colors group-hover:text-[var(--ui-primary-strong)]">
-                                <Link href={`/blog/${post.slug}`} className="outline-none after:absolute after:inset-0 after:rounded-3xl">
+                                <IntentLink href={`/blog/${post.slug}`} className="outline-none after:absolute after:inset-0 after:rounded-3xl">
                                     {post.title}
-                                </Link>
+                                </IntentLink>
                             </h2>
                             <p className="text-zinc-400 leading-relaxed max-w-2xl mb-6">{post.excerpt}</p>
                             {/* The card's press, which the title's link already names to a screen reader. */}

@@ -33,7 +33,7 @@ async function shot(page: Page, name: string) {
 
 const WALL = path.join(process.cwd(), 'src/app/login/wall');
 const PICTURE_HOST = 'https://example.supabase.co/storage/v1/object/public/e2e-search';
-const picture = (n: number) => `${PICTURE_HOST}/wall-${String(((n - 1) % 12) + 1).padStart(2, '0')}.jpg`;
+const picture = (n: number) => `${PICTURE_HOST}/wall-${String(((n - 1) % 12) + 1).padStart(2, '0')}.webp`;
 const thumbnail = (n: number) => ({ postId: `post-${n}`, url: picture(n), thumbhash: null, width: 900, height: 1200, mediaKind: 'image' });
 
 const STARTER = {
@@ -87,7 +87,7 @@ async function answer(page: Page, { suggestDelayMs = 0, recents = [] as string[]
   const asked: Asked = { starter: 0, suggests: [], searches: [] };
   await page.route(`${PICTURE_HOST}/**`, (route) => {
     const source = path.join(WALL, path.basename(new URL(route.request().url()).pathname));
-    return fs.existsSync(source) ? route.fulfill({ path: source, contentType: 'image/jpeg' }) : route.fulfill({ status: 404, body: '' });
+    return fs.existsSync(source) ? route.fulfill({ path: source, contentType: 'image/webp' }) : route.fulfill({ status: 404, body: '' });
   });
   await page.route(STARTER_API, (route) => {
     asked.starter += 1;
