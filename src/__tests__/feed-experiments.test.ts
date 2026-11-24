@@ -257,3 +257,60 @@ describe('resolveFeedExperimentAssignment', () => {
     })).resolves.toBeNull();
   });
 });
+
+describe('running experiment read (cached per instance, speed round 2)', () => {
+  const experimentReads = (client: SupabaseClient) => (client.from as unknown as ReturnType<typeof vi.fn>).mock.calls
+    .filter(([table]) => table === 'feed_experiments').length;
+
+  it('reads the running experiment once for many viewers, and still reads each viewer its own arm', async () => {
+    const db = createClient({ experimentRow: runningExperimentRow, existingAssignment: { id: 12, variant_id: 'variant-treatment' } });
+    const resolve = (viewerUserId: string) => resolveFeedExperimentAssignment({
+      anonymousKeyHash: null, serviceClient: db.client, viewerUserId,
+    });
+
+    await Promise.all([resolve('viewer-1'), resolve('viewer-2')]);
+    await resolve('viewer-3');
+
+    expect(experimentReads(db.client)).toBe(1);
+    // The arm is never cached: every viewer's own assignment is read (and written when new) each time.
+    const assignmentCalls = (db.client.from as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([table]) => table === 'feed_experiment_assignments').length;
+    expect(assignmentCalls).toBeGreaterThanOrEqual(3);
+  });
+
+  it('remembers that no experiment is running', async () => {
+    const db = createClient({ experimentRow: null });
+    for (let index = 0; index < 3; index += 1) {
+      await resolveFeedExperimentAssignment({ anonymousKeyHash: null, serviceClient: db.client, viewerUserId: 'viewer-1' });
+    }
+    expect(experimentReads(db.client)).toBe(1);
+  });
+
+  it('keeps no failed read', async () => {
+    const query: Record<string, unknown> = {};
+    for (const method of ['select', 'eq', 'or', 'order', 'limit']) query[method] = vi.fn(() => query);
+    query.maybeSingle = vi.fn(async () => ({ data: null, error: { message: 'timeout' } }));
+    const client = { from: vi.fn(() => query) } as unknown as SupabaseClient;
+    await resolveFeedExperimentAssignment({ anonymousKeyHash: null, serviceClient: client, viewerUserId: 'viewer-1' });
+    await resolveFeedExperimentAssignment({ anonymousKeyHash: null, serviceClient: client, viewerUserId: 'viewer-1' });
+    expect(experimentReads(client)).toBe(2);
+  });
+
+  it('stops enrolling at the cached experiment\'s end, without waiting for the cache to expire', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-24T10:00:00.000Z'));
+      const db = createClient({
+        experimentRow: { ...runningExperimentRow, ends_at: '2026-11-24T10:00:30.000Z' },
+        existingAssignment: { id: 12, variant_id: 'variant-treatment' },
+      });
+      const resolve = () => resolveFeedExperimentAssignment({ anonymousKeyHash: null, serviceClient: db.client, viewerUserId: 'viewer-1' });
+      await expect(resolve()).resolves.not.toBeNull();
+      vi.setSystemTime(new Date('2026-11-24T10:00:31.000Z'));
+      await expect(resolve()).resolves.toBeNull();
+      expect(experimentReads(db.client)).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
