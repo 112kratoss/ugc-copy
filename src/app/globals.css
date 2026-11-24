@@ -31,6 +31,7 @@
 @source "./pricing";
 @source "./privacy";
 @source "./r";
+@source "./search";
 @source "./templates";
 @source "./terms";
 /* Files of signed-in route folders that a public page draws, one by one: the
@@ -87,6 +88,14 @@
 @source "../components/ReelOpeningCover.tsx";
 @source "../components/ResourceMediaPreview.tsx";
 @source "../components/RouteAuthBoundary.tsx";
+@source "../components/search/CreatorSearchResult.tsx";
+@source "../components/search/SearchField.tsx";
+@source "../components/search/SearchFollowButton.tsx";
+@source "../components/search/SearchPostWall.tsx";
+@source "../components/search/SearchResultsPlaceholder.tsx";
+@source "../components/search/SearchStarter.tsx";
+@source "../components/search/SearchStateBlock.tsx";
+@source "../components/search/search-open-report.ts";
 @source "../components/search/search-entrance.ts";
 @source "../components/search/SearchEntrancePart.tsx";
 @source "../components/search/search-field-handoff.ts";

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import IntentLink from "@/components/IntentLink";
 import { LifeBuoy, Mail, MapPin, MessageSquare, Phone } from "lucide-react";
 import { siteConfig } from "@/lib/seo";
 import { ContactForm } from "./ContactForm";
@@ -38,13 +38,12 @@ export default function Contact() {
                                     </div>
                                     <div>
                                         <h3 className="font-medium mb-1">Message support</h3>
-                                        <Link
+                                        <IntentLink
                                             href="/support"
-                                            prefetch={false}
                                             className="text-[var(--ui-primary)] hover:text-[var(--ui-primary-strong)]"
                                         >
                                             Write to us from your account
-                                        </Link>
+                                        </IntentLink>
                                         <p className="text-sm text-zinc-500 mt-1">The answer comes to your account, with a notification</p>
                                     </div>
                                 </div>
@@ -117,35 +116,35 @@ export default function Contact() {
                             <h3 className="font-semibold mb-3">Quick Links</h3>
                             <ul className="space-y-3 text-zinc-400">
                                 <li>
-                                    <Link href="/pricing" className="hover:text-white transition-colors">
+                                    <IntentLink href="/pricing" className="hover:text-white transition-colors">
                                         → View Pricing Plans
-                                    </Link>
+                                    </IntentLink>
                                 </li>
                                 <li>
-                                    <Link href="/cancellation" className="hover:text-white transition-colors">
+                                    <IntentLink href="/cancellation" className="hover:text-white transition-colors">
                                         → Cancellation &amp; Refund Policy
-                                    </Link>
+                                    </IntentLink>
                                 </li>
                                 <li>
-                                    <Link href="/terms" className="hover:text-white transition-colors">
+                                    <IntentLink href="/terms" className="hover:text-white transition-colors">
                                         → Terms of Service
-                                    </Link>
+                                    </IntentLink>
                                 </li>
                                 <li>
-                                    <Link href="/privacy" className="hover:text-white transition-colors">
+                                    <IntentLink href="/privacy" className="hover:text-white transition-colors">
                                         → Privacy Policy
-                                    </Link>
+                                    </IntentLink>
                                 </li>
                                 {/* The shell's only help entry leads here; the app's Settings lists these two beside the policies. */}
                                 <li>
-                                    <Link href="/child-safety" className="hover:text-white transition-colors">
+                                    <IntentLink href="/child-safety" className="hover:text-white transition-colors">
                                         → Child Safety Standards
-                                    </Link>
+                                    </IntentLink>
                                 </li>
                                 <li>
-                                    <Link href="/delete-account" className="hover:text-white transition-colors">
+                                    <IntentLink href="/delete-account" className="hover:text-white transition-colors">
                                         → Delete Your Account
-                                    </Link>
+                                    </IntentLink>
                                 </li>
                             </ul>
                         </div>
@@ -160,9 +159,9 @@ export default function Contact() {
                 <div className="mt-16 pt-8 border-t border-zinc-800 text-center text-zinc-500 text-sm">
                     <p>© 2026 {siteConfig.name}. All rights reserved.</p>
                     <div className="flex justify-center gap-6 mt-4">
-                        <Link href="/terms" className="-my-0.5 py-0.5 hover:text-white transition-colors">Terms of Service</Link>
-                        <Link href="/privacy" className="-my-0.5 py-0.5 hover:text-white transition-colors">Privacy Policy</Link>
-                        <Link href="/pricing" className="-my-0.5 py-0.5 hover:text-white transition-colors">Pricing</Link>
+                        <IntentLink href="/terms" className="-my-0.5 py-0.5 hover:text-white transition-colors">Terms of Service</IntentLink>
+                        <IntentLink href="/privacy" className="-my-0.5 py-0.5 hover:text-white transition-colors">Privacy Policy</IntentLink>
+                        <IntentLink href="/pricing" className="-my-0.5 py-0.5 hover:text-white transition-colors">Pricing</IntentLink>
                     </div>
                 </div>
             </div>

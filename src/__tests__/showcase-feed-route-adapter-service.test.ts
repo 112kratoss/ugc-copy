@@ -4,6 +4,7 @@ import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { mockRequestIdPassthrough } from '@/__tests__/fixtures/request-id-passthrough';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { BackendRateLimitError } from '@/lib/backend-rate-limit';
 import { getShowcaseFeedRouteResponse, startShowcaseFeedReadLimit } from '@/lib/showcase-feed-route-adapter-service';
 import type { getShowcaseFeedPage, prepareShowcaseFeedReadAhead } from '@/lib/showcase-feed';
@@ -711,6 +712,8 @@ describe('showcase feed route adapter service', () => {
         tool: null,
         unlock: 'all',
         resource: 'all',
+        // Its phases are kept for the sampled production log (`showcase_feed_phase_timing`).
+        onPhaseTiming: expect.any(Function),
       });
       expect(dependencies.getShowcaseFeedPage).not.toHaveBeenCalled();
       // Counted against the ranked lane's own budget, like the read it replaces.
@@ -1026,5 +1029,202 @@ describe('showcase feed route adapter service', () => {
       expect(response.headers.get('Server-Timing')).toMatch(/(^|, )rate-limit;dur=\d/u);
       expect(response.headers.get('Server-Timing')).toMatch(/(^|, )rate-limit-wait;dur=\d/u);
     });
+  });
+});
+
+describe('sampled production log of a signed-in For you read\'s phases', () => {
+  const USER_ID = 'user-4f1c2a';
+  const TOKEN = 'secret-user-token-value';
+  const IP = '203.0.113.9';
+  const READ_AHEAD_TOKEN = '1e2d3c4b-5a69-4788-9a0b-c1d2e3f40516';
+
+  function signedInRead(query: string, options: {
+    random?: number;
+    receivedAt?: number;
+    page?: typeof getShowcaseFeedPage;
+  } = {}) {
+    return getShowcaseFeedRouteResponse({
+      request: new Request(`http://localhost/api/showcase/feed?${query}`, {
+        headers: { Authorization: `Bearer ${TOKEN}`, 'x-forwarded-for': IP, 'x-real-ip': IP },
+      }),
+      ...(options.receivedAt === undefined ? {} : { receivedAt: options.receivedAt }),
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: vi.fn(() => createUserClient(USER_ID)),
+        enforceBackendRateLimit: vi.fn(),
+        random: () => options.random ?? 0.05,
+        getShowcaseFeedPage: options.page ?? (vi.fn(async (pageOptions) => {
+          pageOptions.onPhaseTiming?.('algorithm', 0.4);
+          pageOptions.onPhaseTiming?.('candidate_rpc', 401.6);
+          pageOptions.onPhaseTiming?.('hydration', 120.2);
+          return createFeedPage();
+        }) as unknown as typeof getShowcaseFeedPage),
+        prepareShowcaseFeedReadAhead: vi.fn(async (readAheadOptions) => {
+          readAheadOptions.onPhaseTiming?.('candidate_rpc', 77);
+          return { token: READ_AHEAD_TOKEN, expiresInMs: 120_000 };
+        }) as unknown as typeof prepareShowcaseFeedReadAhead,
+        recordShowcaseFeedReadAheadEvent: vi.fn(async () => undefined),
+        runAfterResponse: vi.fn(),
+      },
+    });
+  }
+
+  function captureLogs() {
+    const records: BackendLogRecord[] = [];
+    const restore = setBackendLogSink((record) => { records.push(record); });
+    const timings = () => records.filter((record) => record.msg === 'showcase_feed_phase_timing');
+    return { records, restore, timings };
+  }
+
+  it('logs about one read in ten with its phases and kind, and nothing that identifies the reader', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const log = captureLogs();
+    try {
+      const response = await signedInRead('sort=for-you&category=media&tool=some-tool&seedBucket=123');
+      expect(response.status).toBe(200);
+      expect(log.timings()).toHaveLength(1);
+      const [record] = log.timings();
+      expect(record).toMatchObject({
+        level: 'info',
+        reason: 'sampled',
+        outcome: 'ok',
+        status: 200,
+        firstPage: true,
+        cursorPage: false,
+        offsetPage: false,
+        readAhead: false,
+        readAheadClaim: null,
+        fresh: false,
+        phases: { algorithm: 0, candidate_rpc: 402, hydration: 120 },
+      });
+      expect(record.phases).toHaveProperty('auth');
+      expect(record.phases).toHaveProperty('rate_limit');
+      expect(record.phases).toHaveProperty('feed_total');
+      expect(typeof record.totalMs).toBe('number');
+      const line = JSON.stringify(record);
+      for (const identifying of [USER_ID, TOKEN, IP, 'some-tool', 'seedBucket', 'category', '?']) {
+        expect(line).not.toContain(identifying);
+      }
+    } finally {
+      log.restore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('leaves the other nine in ten unlogged, but logs every read slower than two seconds', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const log = captureLogs();
+    try {
+      await signedInRead('sort=for-you', { random: 0.5 });
+      expect(log.timings()).toHaveLength(0);
+
+      await signedInRead('sort=for-you', { random: 0.5, receivedAt: performance.now() - 2_500 });
+      expect(log.timings()).toHaveLength(1);
+      expect(log.timings()[0]).toMatchObject({ reason: 'slow' });
+      expect(log.timings()[0].totalMs).toBeGreaterThanOrEqual(2_500);
+      expect(typeof log.timings()[0].admissionMs).toBe('number');
+    } finally {
+      log.restore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('says whether the read was a read-ahead, a claim of one, or a cursor page', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const log = captureLogs();
+    try {
+      await signedInRead('sort=for-you&readAhead=1');
+      await signedInRead(`sort=for-you&readAheadToken=${READ_AHEAD_TOKEN}`, {
+        page: vi.fn(async (pageOptions) => {
+          pageOptions.onReadAheadClaim?.(true);
+          return createFeedPage();
+        }) as unknown as typeof getShowcaseFeedPage,
+      });
+      await signedInRead('sort=for-you&cursor=abc');
+      await signedInRead('sort=for-you&offset=12');
+      expect(log.timings().map(({ readAhead, readAheadClaim, firstPage, cursorPage, offsetPage }) => (
+        { readAhead, readAheadClaim, firstPage, cursorPage, offsetPage }
+      ))).toEqual([
+        { readAhead: true, readAheadClaim: null, firstPage: true, cursorPage: false, offsetPage: false },
+        { readAhead: false, readAheadClaim: 'claim', firstPage: true, cursorPage: false, offsetPage: false },
+        { readAhead: false, readAheadClaim: null, firstPage: false, cursorPage: true, offsetPage: false },
+        { readAhead: false, readAheadClaim: null, firstPage: false, cursorPage: false, offsetPage: true },
+      ]);
+      expect(log.timings()[0].phases).toMatchObject({ candidate_rpc: 77 });
+      expect(JSON.stringify(log.records)).not.toContain(READ_AHEAD_TOKEN);
+    } finally {
+      log.restore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('logs a refused or failed read too, with its outcome, and still nothing that identifies the reader', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const log = captureLogs();
+    try {
+      const failed = await signedInRead('sort=for-you', {
+        receivedAt: performance.now() - 2_500,
+        page: vi.fn(async () => { throw new Error(`feed read failed for ${USER_ID}`); }) as unknown as typeof getShowcaseFeedPage,
+      });
+      expect(failed.status).toBe(500);
+
+      const limited = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you', {
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        }),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(() => createUserClient(USER_ID)),
+          enforceBackendRateLimit: vi.fn(async () => {
+            throw new BackendRateLimitError({
+              allowed: false, limit: 60, remaining: 0, retryAfterSeconds: 30,
+              resetAt: new Date(Date.now() + 60_000).toISOString(),
+            });
+          }),
+          random: () => 0,
+          getShowcaseFeedPage: vi.fn() as unknown as typeof getShowcaseFeedPage,
+          logError: vi.fn(),
+        },
+      });
+      expect(limited.status).toBe(429);
+
+      expect(log.timings().map(({ outcome, status, reason }) => ({ outcome, status, reason }))).toEqual([
+        { outcome: 'error', status: 500, reason: 'slow' },
+        { outcome: 'rate_limited', status: 429, reason: 'sampled' },
+      ]);
+      const lines = JSON.stringify(log.timings());
+      for (const identifying of [USER_ID, TOKEN, IP]) expect(lines).not.toContain(identifying);
+    } finally {
+      log.restore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('logs nothing outside production, for a reader without an account, or for another lane', async () => {
+    const log = captureLogs();
+    try {
+      await signedInRead('sort=for-you');
+      vi.stubEnv('VERCEL_ENV', 'production');
+      await signedInRead('sort=recent');
+      await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you'),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          enforceBackendRateLimit: vi.fn(),
+          getFeedNetworkKeyHash: vi.fn(() => 'network-hash'),
+          resolveFeedAnonymousIdentity: vi.fn(() => ({
+            anonymousKeyHash: 'anonymous-feed-hash',
+            cookieValueToSet: null,
+            source: 'web-cookie' as const,
+          })),
+          random: () => 0,
+          getShowcaseFeedPage: vi.fn(async () => createFeedPage()) as unknown as typeof getShowcaseFeedPage,
+        },
+      });
+      expect(log.timings()).toHaveLength(0);
+    } finally {
+      log.restore();
+      vi.unstubAllEnvs();
+    }
   });
 });

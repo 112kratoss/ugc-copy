@@ -70,9 +70,9 @@ test('a signed-out full load of Alerts carries globals.css alone', async ({ page
   await settled(page);
   expect(await supplementInDocument(page), SHEET_IN_DOCUMENT).toBe(false);
 
-  // Positive control: Search, which a signed-out visitor opens too, keeps the
-  // sheet its layout links.
-  await page.goto('/search');
+  // Positive control: the image creator, which a signed-out visitor opens too,
+  // keeps the sheet its layout links (Search stopped linking it on 2026-11-24).
+  await page.goto('/create-image');
   await expect.poll(() => supplementInDocument(page), POSITIVE_CONTROL).toBe(true);
 });
 
@@ -99,7 +99,7 @@ test('a signed-out click on the Alerts tab leaves the signed-in sheet out of the
   expect(await page.evaluate(() => (window as unknown as { openedOnTerms?: boolean }).openedOnTerms === true)).toBe(true);
 
   // Positive control: a client navigation to a route that links the sheet brings it.
-  await push(page, '/search');
-  await expect(page).toHaveURL(/\/search$/, COLD_PAGE);
+  await push(page, '/create-image');
+  await expect(page).toHaveURL(/\/create-image$/, COLD_PAGE);
   await expect.poll(() => supplementInDocument(page), POSITIVE_CONTROL).toBe(true);
 });
