@@ -80,18 +80,26 @@ export function showcaseFeedLaneQueryOptions(
       // on every try, so a retry of a failed read asks again, and spent once
       // a read that asked is answered (`lib/feed-fresh-ranking.ts`).
       const fresh = firstPage && isFreshRankingRequested(filters, identityUserId);
-      // The read that draws Explore's first page claims the ranking read
-      // ahead for it, which the server persists and marks served only now.
-      const readAheadToken = firstPage
-        ? await takeExploreReadAheadToken({ filters, identityUserId })
-        : null;
       // A For you page one ranked now can be a new session, whose seen check
       // reads the impressions recorded by then: the queued ones go first (1.5 s
       // at most). Not for a ranking read ahead, ranked already, nor for a sort
       // with no seen check. A refresh, a lane switch and a first load alike.
-      if (firstPage && !readAheadToken && normalizeShowcaseFeedLane(filters).sort === 'for-you') {
-        await drainBeforeRankedFirstPage();
-      }
+      const rankedFirstPage = firstPage && normalizeShowcaseFeedLane(filters).sort === 'for-you';
+      let drain: Promise<void> | undefined;
+      const drainQueuedEvents = () => (drain ??= drainBeforeRankedFirstPage());
+      // The read that draws Explore's first page claims the ranking read
+      // ahead for it, which the server persists and marks served only now.
+      // While a read-ahead is still being ranked the queued events are sent
+      // alongside the wait, so a wait that ends with no token is not then
+      // followed by the drain; one that ends with a token does not wait for it.
+      const readAheadToken = firstPage
+        ? await takeExploreReadAheadToken({
+          filters,
+          identityUserId,
+          ...(rankedFirstPage ? { whileWaiting: () => void drainQueuedEvents() } : {}),
+        })
+        : null;
+      if (rankedFirstPage && !readAheadToken) await drainQueuedEvents();
       const page = await api.getShowcaseFeed(getShowcaseFeedPageParams({
         ...filters,
         ...pageParam,

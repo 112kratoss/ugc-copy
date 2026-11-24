@@ -6,6 +6,7 @@ import {
   EXPLORE_READ_AHEAD_FILTERS,
   EXPLORE_READ_AHEAD_MAX_AGE_MS,
   EXPLORE_READ_AHEAD_WAIT_MS,
+  noteExploreOpening,
   noteShowcaseFeedReadAheadSupport,
   resetExploreReadAheadForTests,
   scheduleExploreReadAhead,
@@ -120,8 +121,7 @@ describe("Explore's read-ahead", () => {
     })).resolves.toBeNull();
   });
 
-  it('waits for a read-ahead still under way rather than ranking the page twice, but not for long', async () => {
-    vi.useFakeTimers();
+  it('waits for a read-ahead still under way rather than ranking the page twice', async () => {
     supported();
     let answer: (value: ShowcaseFeedReadAheadResponse) => void = () => {};
     startExploreReadAhead({
@@ -134,18 +134,85 @@ describe("Explore's read-ahead", () => {
     const waiting = takeExploreReadAheadToken({ filters: EXPLORE_READ_AHEAD_FILTERS, identityUserId: 'user-1', now: () => NOW });
     answer(heldAnswer());
     await expect(waiting).resolves.toBe(TOKEN);
+  });
 
+  // A stalled read-ahead (a network switch, a hung instance) settles only at
+  // the API client's 30 s; Explore must not draw its skeleton for that long.
+  it("gives up on a read-ahead 12 s after the read-ahead started, however late Explore opened", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    supported();
+    startExploreReadAhead({ api: api(() => new Promise(() => {})), identityUserId: 'user-1', queryClient });
+    // Explore opens 11 s into the read-ahead: it is waited for 1 s only.
+    await vi.advanceTimersByTimeAsync(11_000);
+    const whileWaiting = vi.fn();
+    const stuck = takeExploreReadAheadToken({ filters: EXPLORE_READ_AHEAD_FILTERS, identityUserId: 'user-1', whileWaiting });
+    let settled = false;
+    void stuck.then(() => { settled = true; });
+    expect(whileWaiting).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(stuck).resolves.toBeNull();
+    expect(EXPLORE_READ_AHEAD_WAIT_MS).toBe(12_000);
+
+    // One already past its 12 s is not waited for at all.
     resetExploreReadAheadForTests();
     supported();
+    startExploreReadAhead({ api: api(() => new Promise(() => {})), identityUserId: 'user-1', queryClient });
+    await vi.advanceTimersByTimeAsync(12_000);
+    const late = vi.fn();
+    await expect(takeExploreReadAheadToken({ filters: EXPLORE_READ_AHEAD_FILTERS, identityUserId: 'user-1', whileWaiting: late }))
+      .resolves.toBeNull();
+    expect(late).not.toHaveBeenCalled();
+  });
+
+  // On the emulator (2026-11-24), Explore opened 1 s into a 6 s read-ahead
+  // gave up at 4 s and ranked the page a second time.
+  it.each([4_500, 6_000])("hands Explore's first read a read-ahead that answers after %i ms, so the page is ranked once", async (answerMs) => {
+    vi.useFakeTimers();
+    supported();
     startExploreReadAhead({
-      api: api(() => new Promise(() => {})),
+      api: api(() => new Promise((resolve) => { setTimeout(() => resolve(heldAnswer()), answerMs); })),
       identityUserId: 'user-1',
       queryClient,
-      now: () => NOW,
     });
-    const stuck = takeExploreReadAheadToken({ filters: EXPLORE_READ_AHEAD_FILTERS, identityUserId: 'user-1', now: () => NOW });
-    await vi.advanceTimersByTimeAsync(EXPLORE_READ_AHEAD_WAIT_MS);
-    await expect(stuck).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const feed = { getShowcaseFeed: vi.fn(async () => ({ ...servedPage(), readAheadSupported: true })) };
+
+    const reading = showcaseFeedLaneQueryOptions(feed as never, EXPLORE_READ_AHEAD_FILTERS, 'user-1')
+      .queryFn({ pageParam: { offset: 0 } });
+    await vi.advanceTimersByTimeAsync(answerMs - 1_000);
+    await reading;
+
+    expect(feed.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed).toHaveBeenCalledWith(expect.objectContaining({ readAheadToken: TOKEN }));
+  });
+
+  it("keeps a read-ahead to its identity when the identity changes while Explore waits on it", async () => {
+    vi.useFakeTimers();
+    supported();
+    startExploreReadAhead({
+      api: api(() => new Promise((resolve) => { setTimeout(() => resolve(heldAnswer()), 3_000); })),
+      identityUserId: 'user-1',
+      queryClient,
+    });
+    const feed = { getShowcaseFeed: vi.fn(async () => ({ ...servedPage(), readAheadSupported: true })) };
+    const firstLane = showcaseFeedLaneQueryOptions(feed as never, EXPLORE_READ_AHEAD_FILTERS, 'user-1');
+    const secondLane = showcaseFeedLaneQueryOptions(feed as never, EXPLORE_READ_AHEAD_FILTERS, 'user-2');
+
+    // user-1's Explore read waits on the read-ahead; then a sign-in brings
+    // user-2, whose lane reads at once and neither waits nor takes the token.
+    const firstRead = firstLane.queryFn({ pageParam: { offset: 0 } });
+    await vi.advanceTimersByTimeAsync(500);
+    await secondLane.queryFn({ pageParam: { offset: 0 } });
+    expect(feed.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed.mock.calls[0]).not.toEqual([expect.objectContaining({ readAheadToken: expect.anything() })]);
+
+    await vi.advanceTimersByTimeAsync(2_500);
+    await firstRead;
+    expect(feed.getShowcaseFeed).toHaveBeenCalledTimes(2);
+    expect(feed.getShowcaseFeed).toHaveBeenLastCalledWith(expect.objectContaining({ readAheadToken: TOKEN }));
   });
 
   it.each([
@@ -168,6 +235,44 @@ describe("Explore's read-ahead", () => {
 
     // An identity that arrives later in the launch (a sign-in) has its own.
     expect(startExploreReadAhead({ api: client, identityUserId: 'user-2', queryClient, now: () => now })).toBe(true);
+  });
+
+  // A guard: `startExploreReadAhead` sees Explore's lane only once its query
+  // reads, after the screen's first commit. On the emulator nothing ran in
+  // between, but nothing promises that it never will.
+  it('starts none once Explore is opening for that identity, though its lane has not begun to read', () => {
+    supported();
+    const client = api();
+
+    noteExploreOpening('user-1');
+    // Explore's lane is still empty and idle: its query subscribes after the
+    // screen's first commit, which is when an idle callback could run.
+    expect(queryClient.getQueryState(createShowcaseFeedQueryKey(EXPLORE_READ_AHEAD_FILTERS, 'user-1'))).toBeUndefined();
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-1', queryClient })).toBe(false);
+    expect(client.prepareShowcaseFeedReadAhead).not.toHaveBeenCalled();
+
+    // Another identity of the same launch (a sign-in before Explore saw it) still may.
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-2', queryClient })).toBe(true);
+  });
+
+  it('lets Explore opening join a read-ahead already under way, so the page is ranked once', async () => {
+    vi.useFakeTimers();
+    supported();
+    const client = api(() => new Promise((resolve) => { setTimeout(() => resolve(heldAnswer()), 2_000); }));
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-1', queryClient })).toBe(true);
+    noteExploreOpening('user-1');
+    const feed = { getShowcaseFeed: vi.fn(async () => ({ ...servedPage(), readAheadSupported: true })) };
+
+    const reading = showcaseFeedLaneQueryOptions(feed as never, EXPLORE_READ_AHEAD_FILTERS, 'user-1')
+      .queryFn({ pageParam: { offset: 0 } });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(feed.getShowcaseFeed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await reading;
+
+    expect(client.prepareShowcaseFeedReadAhead).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed).toHaveBeenCalledWith(expect.objectContaining({ readAheadToken: TOKEN }));
   });
 
   it('reads ahead for a guest identity too: new people meet the skeleton first', () => {

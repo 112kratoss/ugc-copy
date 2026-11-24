@@ -183,6 +183,16 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
       .slice(-FEED_EVENT_QUEUE_MAX_ENTRIES);
   }
 
+  /**
+   * The body this queue last handed to storage, or read from it. A persist of
+   * the same body writes nothing: every ranked first page waits on a flush
+   * (`lib/feed-ranked-page-drain.ts`), and a flush that sends nothing used to
+   * rewrite the queue unchanged. Set before the write, so a change made while
+   * it is under way is never mistaken for what storage holds, and forgotten
+   * when that write fails, so the next persist tries again.
+   */
+  let storedBody: string | null = null;
+
   async function persist() {
     const body: PersistedFeedEventQueue = {
       version: QUEUE_VERSION,
@@ -197,9 +207,14 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
         committed: value.committed,
       })),
     };
+    const serialized = JSON.stringify(body);
+    if (serialized === storedBody) return;
+    storedBody = serialized;
     await dependencies.storage
-      .setItem(FEED_EVENT_QUEUE_STORAGE_KEY, JSON.stringify(body))
-      .catch(() => undefined);
+      .setItem(FEED_EVENT_QUEUE_STORAGE_KEY, serialized)
+      .catch(() => {
+        if (storedBody === serialized) storedBody = null;
+      });
   }
 
   function cancelTimer() {
@@ -266,6 +281,7 @@ export function createFeedEventQueue(dependencies: FeedEventQueueDependencies) {
       restorePromise = (async () => {
         try {
           const raw = await dependencies.storage.getItem(FEED_EVENT_QUEUE_STORAGE_KEY);
+          storedBody = raw;
           const parsed: unknown = raw ? JSON.parse(raw) : null;
           entries = isRecord(parsed)
             && parsed.version === QUEUE_VERSION

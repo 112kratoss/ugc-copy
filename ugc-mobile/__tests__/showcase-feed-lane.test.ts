@@ -143,6 +143,9 @@ describe('the lane query', () => {
           identityUserId: 'user-1',
           queryClient: new QueryClient(),
         });
+        // Answered before Explore opens: nothing to wait for, and no drain started.
+        await Promise.resolve();
+        await Promise.resolve();
         const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
         await showcaseFeedLaneQueryOptions(api, EXPLORE_READ_AHEAD_FILTERS, 'user-1').queryFn({ pageParam: { offset: 0 } });
 
@@ -151,6 +154,75 @@ describe('the lane query', () => {
       } finally {
         resetExploreReadAheadForTests();
         installRankedFirstPageDrain(null);
+      }
+    });
+
+    function readAheadAnsweringAfter(ms: number, answer: { readAhead: { token: string; expiresInMs: number } | null }) {
+      noteShowcaseFeedReadAheadSupport({ sort: 'for-you' }, { readAheadSupported: true });
+      startExploreReadAhead({
+        api: {
+          prepareShowcaseFeedReadAhead: vi.fn(() => new Promise<typeof answer>((resolve) => {
+            setTimeout(() => resolve(answer), ms);
+          })),
+        },
+        identityUserId: 'user-1',
+        queryClient: new QueryClient(),
+      });
+    }
+
+    it('is not waited for when a read-ahead still under way comes back with its token, however late', async () => {
+      vi.useFakeTimers();
+      const { release } = heldDrain();
+      try {
+        readAheadAnsweringAfter(4_500, { readAhead: { token: 'read-ahead-1', expiresInMs: 60_000 } });
+        const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+        void showcaseFeedLaneQueryOptions(api, EXPLORE_READ_AHEAD_FILTERS, 'user-1').queryFn({ pageParam: { offset: 0 } });
+
+        await vi.advanceTimersByTimeAsync(4_500);
+
+        // The queued events are still being sent; the claim does not wait for them.
+        expect(api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+        expect(api.getShowcaseFeed).toHaveBeenCalledWith(expect.objectContaining({ readAheadToken: 'read-ahead-1' }));
+      } finally {
+        release();
+        resetExploreReadAheadForTests();
+        installRankedFirstPageDrain(null);
+        vi.useRealTimers();
+      }
+    });
+
+    it('runs alongside the wait for a read-ahead, so a wait that ends with no token is not then followed by it', async () => {
+      vi.useFakeTimers();
+      const drain = vi.fn(() => new Promise<void>((resolve) => { setTimeout(resolve, 1_500); }));
+      installRankedFirstPageDrain(drain);
+      try {
+        // The read-ahead outlasts the drain: the page is asked for the moment it answers.
+        readAheadAnsweringAfter(3_000, { readAhead: null });
+        const api = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+        void showcaseFeedLaneQueryOptions(api, EXPLORE_READ_AHEAD_FILTERS, 'user-1').queryFn({ pageParam: { offset: 0 } });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(drain).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(2_999);
+        expect(api.getShowcaseFeed).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+        expect(api.getShowcaseFeed.mock.calls[0]).not.toEqual([expect.objectContaining({ readAheadToken: expect.anything() })]);
+
+        // The drain outlasts the read-ahead: the fresh ranking still waits for the queued events.
+        resetExploreReadAheadForTests();
+        drain.mockClear();
+        readAheadAnsweringAfter(500, { readAhead: null });
+        const again = { getShowcaseFeed: vi.fn(async () => ({ items: [] })) };
+        void showcaseFeedLaneQueryOptions(again, EXPLORE_READ_AHEAD_FILTERS, 'user-1').queryFn({ pageParam: { offset: 0 } });
+        await vi.advanceTimersByTimeAsync(1_499);
+        expect(drain).toHaveBeenCalledTimes(1);
+        expect(again.getShowcaseFeed).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(again.getShowcaseFeed).toHaveBeenCalledTimes(1);
+      } finally {
+        resetExploreReadAheadForTests();
+        installRankedFirstPageDrain(null);
+        vi.useRealTimers();
       }
     });
 

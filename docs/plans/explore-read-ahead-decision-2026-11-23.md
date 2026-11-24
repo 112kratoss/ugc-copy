@@ -32,11 +32,26 @@ written by the feed route after its answer
   read within the reuse window, or a changed algorithm or experiment arm.
 
 A hold that is neither claimed nor missed never came back at all. Either
-Explore did not open, or the app dropped the token before using it: it waits
-at most 4 s for a read-ahead still under way (`EXPLORE_READ_AHEAD_WAIT_MS`),
-it forgets the token on a sign-out or a change of identity, and it stops
-offering one 100 s after the hold (`EXPLORE_READ_AHEAD_MAX_AGE_MS`). That is
-why the rule below divides claims by holds, not by claims plus misses.
+Explore did not open, or the app did not hand the token back: it gives it only
+to Explore's first read for the identity it was read ahead for (after a
+sign-out or a sign-in, the other identity's read ranks its own page), and it
+stops offering one 100 s after the hold (`EXPLORE_READ_AHEAD_MAX_AGE_MS`).
+That is why the rule below divides claims by holds, not by claims plus misses.
+
+**2026-11-24: claims before the wait fix undercount.** Until the app update
+that carries branch `perf/explore-read-ahead-wait` (PR #921), Explore waited at
+most 4 s for a read-ahead still under way, then dropped its token and ranked
+the page again. On the emulator, with a read-ahead held to 6 s and Explore
+opened 1 s into it, that is what happened: the hold was counted, never claimed
+or missed, and the page was ranked twice. Production's two holds that day are
+not explained by it: the first went unused because Explore opened about 4
+minutes later, past the 100 s offer; the second started 34 ms from another
+ranked read, a pair one launch of the app does not produce on the emulator, so
+where it came from is not known. The app now waits for a read-ahead under way
+until 12 s after it started. On 2026-12-01, read the claim rate from that
+update's publish time (its OTA record, `releases/ota/<sha>/` in the folder
+above `ugc-app/`), or report the two windows apart; a low rate from before it
+is not evidence against the read-ahead.
 
 ## When to read
 
