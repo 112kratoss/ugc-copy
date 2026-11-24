@@ -6,6 +6,11 @@ import { ContactForm } from '@/app/contact/ContactForm';
 import Contact from '@/app/contact/page';
 import { TYPED_BEFORE_HYDRATION_CAPTURE } from '@/lib/typed-before-hydration';
 
+// The page's links prefetch on intent (`IntentLink`), which reads the router.
+vi.mock('next/navigation', () => ({
+    useRouter: () => ({ prefetch: vi.fn(), push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
+}));
+
 describe('the contact page', () => {
     // A signed-in visitor's only help entry is "Help & feedback", which opens
     // this page; child safety and account deletion were linked nowhere they could see.

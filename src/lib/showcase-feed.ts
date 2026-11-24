@@ -1056,6 +1056,32 @@ async function getShowcaseFeedPageBase(
 }
 
 /**
+ * Whether `buildShowcaseFeedPage` fills a page by scanning batches of rows and
+ * keeping those that match once hydrated (`collectFilteredFeedItems`: as many
+ * round trips as it takes to find enough), rather than with one ranged read.
+ */
+function showcaseFeedPageNeedsFilteredScan({
+  category,
+  sort,
+  unlockFilter,
+  resourceFilter,
+  mediaRowsOnly,
+}: {
+  category: ShowcaseCategory;
+  sort: ShowcaseSort;
+  unlockFilter: ShowcaseUnlockFilter;
+  resourceFilter: ShowcaseResourceFilter;
+  mediaRowsOnly: boolean;
+}) {
+  return sort === 'top-sales'
+    || unlockFilter !== 'all'
+    || resourceFilter !== 'all'
+    || (category === 'media' && !mediaRowsOnly)
+    || category === 'image'
+    || category === 'video';
+}
+
+/**
  * A page as its posts and recipes store them, nothing counted from creations'
  * inputs. `forYouPool` is set only when For you fills its candidate pool from
  * this page.
@@ -1100,13 +1126,13 @@ async function buildShowcaseFeedPage(
     && resourceFilter === 'all'
     && !toolSlug;
 
-  const needsFilteredScan =
-    sort === 'top-sales' ||
-    unlockFilter !== 'all' ||
-    resourceFilter !== 'all' ||
-    (category === 'media' && !mediaRowsOnly) ||
-    category === 'image' ||
-    category === 'video';
+  const needsFilteredScan = showcaseFeedPageNeedsFilteredScan({
+    category,
+    sort,
+    unlockFilter,
+    resourceFilter,
+    mediaRowsOnly,
+  });
 
   if (needsFilteredScan) {
     const filteredPage = await collectFilteredFeedItems({
@@ -1414,6 +1440,18 @@ function createForYouCandidateSources(
       );
       return fallbackPage.items.filter((item) => !item.isNsfw);
     },
+    // The recent top-up is one ranged read only on a lane with nothing to
+    // filter after hydration (For you's pool never takes the media rows-only
+    // read, so `media` scans too). Only there may the ranking start it before
+    // it knows the pool falls short: a scan it then threw away would hold the
+    // pool's hydration behind several round trips.
+    fallbackIsOneRead: !showcaseFeedPageNeedsFilteredScan({
+      category: params.category,
+      sort: 'recent',
+      unlockFilter: params.unlockFilter,
+      resourceFilter: params.resourceFilter,
+      mediaRowsOnly: false,
+    }),
   };
 }
 
@@ -1481,7 +1519,7 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
   onPageItems?: (items: ShowcaseFeedItem[]) => void;
 }): Promise<ShowcaseFeedPage> {
   const adminSupabase = params.adminSupabase ?? createServiceClient();
-  const { filters, hydratePostIds, fallbackItems } = createForYouCandidateSources(params, adminSupabase);
+  const { filters, hydratePostIds, fallbackItems, fallbackIsOneRead } = createForYouCandidateSources(params, adminSupabase);
   // Ranked and cut first, then its recipe teasers counted once (B3): the
   // hydrated pool holds what recipes store, which is what its filters read.
   const referenceCounts = createPageItemsRead(
@@ -1500,6 +1538,7 @@ async function getShowcaseForYouFeedPage(params: ShowcaseForYouLaneParams & {
     cursor: params.cursor,
     filters,
     hydratePostIds,
+    fallbackIsOneRead,
     fallbackItems,
     limit: params.limit,
     offset: params.offset,
@@ -1536,7 +1575,7 @@ export async function prepareShowcaseFeedReadAhead(options: {
   onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<{ token: string; expiresInMs: number } | null> {
   const adminSupabase = createServiceClient();
-  const { filters, hydratePostIds, fallbackItems } = createForYouCandidateSources({
+  const { filters, hydratePostIds, fallbackItems, fallbackIsOneRead } = createForYouCandidateSources({
     category: options.category,
     toolSlug: slugifySourceTool(options.tool),
     unlockFilter: options.unlock ?? 'all',
@@ -1545,6 +1584,7 @@ export async function prepareShowcaseFeedReadAhead(options: {
   }, adminSupabase);
   const prepared = await prepareRankedShowcaseFeedSession({
     anonymousKeyHash: options.anonymousKeyHash ?? null,
+    fallbackIsOneRead,
     fallbackItems,
     filters,
     hydratePostIds,

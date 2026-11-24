@@ -4,6 +4,8 @@ import { createHash } from 'node:crypto';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { createFeedConfigCache } from '@/lib/feed-config-cache';
+
 export const FEED_EXPERIMENT_BASIS_POINTS = 10_000;
 const FEED_EXPERIMENT_ASSIGNMENT_TTL_DAYS = 90;
 
@@ -104,9 +106,18 @@ function normalizeExperiment(row: Record<string, unknown>): FeedExperimentDefini
   return { id, experimentKey, assignmentSalt, trafficBasisPoints, variants };
 }
 
-async function loadRunningExperiment(
-  serviceClient: SupabaseClient,
-): Promise<FeedExperimentDefinition | null> {
+type CachedRunningExperiment = { experiment: FeedExperimentDefinition; endsAtMs: number | null } | null;
+
+/**
+ * The running experiment, per instance for `FEED_CONFIG_CACHE_TTL_MS`: the
+ * definition only, never a viewer's arm, which is read from (and written to)
+ * `feed_experiment_assignments` on every request below. So an experiment
+ * started or stopped reaches new sessions within a minute of the change; one
+ * that reaches its `ends_at` stops enrolling at that moment, checked here.
+ */
+const runningExperimentCache = createFeedConfigCache<CachedRunningExperiment>();
+
+async function readRunningExperiment(serviceClient: SupabaseClient): Promise<CachedRunningExperiment> {
   const now = new Date().toISOString();
   const { data, error } = await serviceClient
     .from('feed_experiments')
@@ -117,8 +128,28 @@ async function loadRunningExperiment(
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
-  if (error || !data) return null;
-  return normalizeExperiment(data as Record<string, unknown>);
+  // A failed read is not an answer: thrown, so the cache keeps nothing of it.
+  if (error) throw error;
+  if (!data) return null;
+  const row = data as Record<string, unknown>;
+  const experiment = normalizeExperiment(row);
+  if (!experiment) return null;
+  const endsAtMs = typeof row.ends_at === 'string' ? Date.parse(row.ends_at) : NaN;
+  return { experiment, endsAtMs: Number.isFinite(endsAtMs) ? endsAtMs : null };
+}
+
+async function loadRunningExperiment(
+  serviceClient: SupabaseClient,
+): Promise<FeedExperimentDefinition | null> {
+  let cached: CachedRunningExperiment;
+  try {
+    cached = await runningExperimentCache.read(serviceClient, 'running', () => readRunningExperiment(serviceClient));
+  } catch {
+    return null;
+  }
+  if (!cached) return null;
+  if (cached.endsAtMs !== null && cached.endsAtMs < Date.now()) return null;
+  return cached.experiment;
 }
 
 /**
