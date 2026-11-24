@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 import { POST_VIEWS_MAX_BATCH, type PostViewSurface } from '@/lib/post-views-service';
 
@@ -234,13 +234,12 @@ export function usePostViewOnScreen({
   surface: PostViewSurface;
   accessToken: string | null;
   enabled: boolean;
-}): (element: Element | null) => void {
-  const [target, setTarget] = useState<Element | null>(null);
+}): (element: Element | null) => (() => void) | undefined {
   // What a view is sent with, kept current for the timer below without
   // watching the post again. Written after render, read only by it.
-  const contextRef = useRef({ postId, surface, accessToken, enabled });
+  const contextRef = useRef({ surface, accessToken, enabled });
   useEffect(() => {
-    contextRef.current = { postId, surface, accessToken, enabled };
+    contextRef.current = { surface, accessToken, enabled };
   });
   // The post whose look qualified while views could not be sent yet.
   const heldPostIdRef = useRef<string | null>(null);
@@ -251,8 +250,12 @@ export function usePostViewOnScreen({
     reportPostView({ postId, surface, accessToken });
   }, [accessToken, enabled, postId, surface]);
 
-  useEffect(() => {
-    if (!target || typeof IntersectionObserver === 'undefined') return;
+  // The element is watched from its ref, which React 19 cleans up when the
+  // element goes or the post changes, and calls again for an element drawn
+  // afresh. No state: setting it as the post mounts would draw the page that
+  // holds it (the post page's whole body) a second time.
+  return useCallback((target: Element | null) => {
+    if (!target || typeof IntersectionObserver === 'undefined') return undefined;
 
     let halfOnScreen = false;
     let acrossMiddle = false;
@@ -274,9 +277,9 @@ export function usePostViewOnScreen({
         lookReported = true;
         const context = contextRef.current;
         if (context.enabled) {
-          reportPostView({ postId: context.postId, surface: context.surface, accessToken: context.accessToken });
+          reportPostView({ postId, surface: context.surface, accessToken: context.accessToken });
         } else {
-          heldPostIdRef.current = context.postId;
+          heldPostIdRef.current = postId;
         }
       }, POST_VIEW_QUALIFY_MS);
     };
@@ -301,7 +304,5 @@ export function usePostViewOnScreen({
       middleObserver.disconnect();
       document.removeEventListener('visibilitychange', update);
     };
-  }, [postId, target]);
-
-  return setTarget;
+  }, [postId]);
 }

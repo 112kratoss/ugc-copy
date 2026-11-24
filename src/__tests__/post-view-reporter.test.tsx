@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { Profiler, useState, type ReactNode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -294,6 +294,15 @@ describe('usePostViewOnScreen', () => {
     render(<PostPage />);
     expect(watching('half').observer.options?.threshold).toEqual([0, 0.5]);
     expect(watching('middle').observer.options).toEqual(expect.objectContaining({ rootMargin: '-50% 0px -49% 0px' }));
+  });
+
+  // The hook's page is the post page's whole body: state set as its post mounts would draw all of it twice.
+  it('watches the post without drawing the page around it a second time', () => {
+    const commits = vi.fn();
+    render(<Profiler id="post-page" onRender={commits}><PostPage /></Profiler>);
+    watching('half');
+    watching('middle');
+    expect(commits).toHaveBeenCalledTimes(1);
   });
 
   it('reports the post after a second half on screen, and not a moment before', async () => {

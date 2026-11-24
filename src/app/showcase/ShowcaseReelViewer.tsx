@@ -1914,8 +1914,10 @@ export default function ShowcaseReelViewer({
         </section>
 
         {/*
-          * The rail scrolls where its tiles do not fit (a phone's row with Recipe and Remix, a
-          * laptop's column under about 650px tall). A scroll container at every width, it has no
+          * A phone's tiles are 56px wide, so its fullest row (Save, Comment, Share, Recipe and
+          * Remix) fits a 360px phone; at 64px Remix lost a third of itself there. The rail scrolls
+          * where its tiles still do not fit (a phone under 360px, a laptop's column under about
+          * 650px tall). A scroll container at every width, it has no
           * minimum height of its own, so its row of the grid stays the window's and the media and
           * details keep their room (`lg:overflow-visible` let the column's tiles stretch that row
           * past the window). The tiles sit in a box centred with auto margins, which give way to
@@ -1962,7 +1964,7 @@ export default function ShowcaseReelViewer({
               onClick={() => void onToggleSave(item.id)}
               aria-pressed={isSaved}
               aria-label={`${isSaved ? 'Remove save from' : 'Save'} ${item.title}`}
-              className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
+              className={`inline-flex h-14 w-14 max-w-14 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition sm:w-16 sm:max-w-16 lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
                 isSaved
                   ? 'border-[var(--ui-primary)]/35 bg-[var(--ui-primary-soft)] text-[var(--ui-primary-strong)]'
                   : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
@@ -1989,7 +1991,7 @@ export default function ShowcaseReelViewer({
                 aria-expanded={commentsAreOpen}
                 aria-controls={commentsAreOpen ? 'showcase-reel-comments' : undefined}
                 aria-label={`${commentsAreOpen ? 'Hide' : 'Show'} comments on ${item.title} (${commentCount})`}
-                className={`inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
+                className={`inline-flex h-14 w-14 max-w-14 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border text-xs font-semibold transition sm:w-16 sm:max-w-16 lg:h-[70px] lg:w-[70px] lg:max-w-[70px] ${
                   commentsAreOpen
                     ? 'border-white/25 bg-white/[0.12] text-white'
                     : 'border-white/10 bg-white/[0.05] text-zinc-100 hover:bg-white/[0.08]'
@@ -2005,7 +2007,7 @@ export default function ShowcaseReelViewer({
                 says it there). */}
             <PostViewCount
               labels={postViewCountLabels(item)}
-              className="hidden h-14 w-16 max-w-16 shrink-0 flex-none items-center justify-center text-xs font-semibold text-zinc-300 sm:inline-flex lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              className="hidden h-14 w-14 max-w-14 shrink-0 flex-none items-center justify-center text-xs font-semibold text-zinc-300 sm:inline-flex sm:w-16 sm:max-w-16 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
               figureClassName="flex flex-col items-center justify-center gap-1"
               iconClassName="h-5 w-5 shrink-0"
             />
@@ -2028,7 +2030,7 @@ export default function ShowcaseReelViewer({
                 }).catch(() => undefined);
               }}
               label="Share"
-              className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+              className="inline-flex h-14 w-14 max-w-14 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-white/10 bg-white/[0.05] text-xs font-semibold text-zinc-100 transition hover:bg-white/[0.08] sm:w-16 sm:max-w-16 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
             />
 
             {item.asset ? (
@@ -2047,7 +2049,7 @@ export default function ShowcaseReelViewer({
                 }}
                 disabled={unlockWorkingAction !== null}
                 aria-label={reelRecipeActionLabel ?? 'Open recipe'}
-                className="inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+                className="inline-flex h-14 w-14 max-w-14 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-emerald-300/25 bg-emerald-500/12 text-xs font-semibold text-emerald-100 transition hover:border-emerald-300/45 hover:bg-emerald-500/18 disabled:cursor-not-allowed disabled:opacity-60 sm:w-16 sm:max-w-16 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
               >
                 {unlockWorkingAction === 'free'
                   ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />
@@ -2110,7 +2112,7 @@ export default function ShowcaseReelViewer({
                 // The creator's own Remix waits for their session: a press while it is read would be
                 // taken as a visitor's (the creator page sends one to sign in).
                 disabled={remixWorkingItemId !== null || (remixIsLocked && unlockWorkingAction !== null) || ownerChecking}
-                className="ui-focus-ring inline-flex h-14 w-16 max-w-16 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
+                className="ui-focus-ring inline-flex h-14 w-14 max-w-14 shrink-0 flex-none flex-col items-center justify-center gap-1 rounded-2xl border border-[rgba(255,122,89,0.3)] bg-[var(--ui-primary)] text-xs font-extrabold text-[var(--ui-primary-on)] transition hover:bg-[var(--ui-primary-strong)] disabled:cursor-not-allowed disabled:opacity-60 sm:w-16 sm:max-w-16 lg:h-[70px] lg:w-[70px] lg:max-w-[70px]"
               >
                 {remixWorkingItemId === item.id
                   ? <Loader2 size={20} className="h-5 w-5 shrink-0 animate-spin" />

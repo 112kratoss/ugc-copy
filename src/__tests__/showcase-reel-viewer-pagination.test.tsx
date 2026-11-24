@@ -463,7 +463,8 @@ describe('ShowcaseReelViewer pagination', () => {
     ];
 
     for (const action of reelActions) {
-      expect(action).toHaveClass('h-14', 'w-16', 'max-w-16', 'flex-none', 'lg:h-[70px]', 'lg:w-[70px]');
+      // 56px wide on a phone, so its fullest row of five fits 360px; 64px from `sm`.
+      expect(action).toHaveClass('h-14', 'w-14', 'max-w-14', 'sm:w-16', 'sm:max-w-16', 'flex-none', 'lg:h-[70px]', 'lg:w-[70px]');
       expect(action).not.toHaveClass('flex-1');
     }
 
