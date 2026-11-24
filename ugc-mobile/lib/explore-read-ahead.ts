@@ -1,6 +1,6 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
-import { DEFAULT_API_REQUEST_TIMEOUT_MS, type MagicbookletApiClient } from './api-client';
+import type { MagicbookletApiClient } from './api-client';
 import {
   createShowcaseFeedQueryKey,
   getShowcaseFeedPageParams,
@@ -26,9 +26,13 @@ import type { ShowcaseFeedReadAheadResponse, ShowcaseFeedResponse } from './type
 //
 // Explore opened while the read-ahead is still being ranked waits for it: it
 // was asked first, so it lands before a second ranking would. Until
-// 2026-11-24 Explore gave up after 4 s, which on a cold server threw the held
-// ranking away and then ranked again (4 s, the queued events, and a whole
-// ranking: the owner's slow first Explore that day, and holds with no claims).
+// 2026-11-24 Explore gave up after 4 s. On the emulator, with a read-ahead
+// held to 6 s and Explore opened 1 s into it, that dropped the held ranking
+// and ranked the page again: two rankings and 6.5-6.6 s to the first page,
+// against one ranking and 5.6 s when Explore waits. The wait still ends 12 s
+// after the read-ahead started (EXPLORE_READ_AHEAD_WAIT_MS), so a request that
+// stalls (a network switch, a hung instance) costs Explore at most that before
+// it ranks the page itself.
 //
 // Only a server that has said it holds read-aheads is asked
 // (`readAheadSupported` on its For you pages, which Home's lane reads first):
@@ -52,17 +56,18 @@ export const EXPLORE_READ_AHEAD_DELAY_MS = 1_500;
 /** Under the server's two minutes, for the time the claim takes to arrive. */
 export const EXPLORE_READ_AHEAD_MAX_AGE_MS = 100_000;
 /**
- * How long Explore waits on a read-ahead still under way before reading the
- * page itself: only a safety cap. The API client gives up on the request at
- * its own deadline, which settles the wait with no token; this covers a
- * request that never settles at all.
+ * How long after a read-ahead started Explore still waits for it, counted from
+ * the read-ahead's start, not from Explore opening: a read-ahead that is
+ * already 11 s old is waited for 1 s more. Twice the ~6 s a production
+ * read-ahead took on 2026-11-24, and well under the API client's own 30 s, so
+ * a stalled request costs at most this before Explore ranks the page itself.
  */
-export const EXPLORE_READ_AHEAD_WAIT_MS = DEFAULT_API_REQUEST_TIMEOUT_MS + 2_000;
+export const EXPLORE_READ_AHEAD_WAIT_MS = 12_000;
 
 type HeldToken = { token: string; expiresAt: number };
 
 type Entry =
-  | { identity: string; state: 'pending'; request: Promise<HeldToken | null> }
+  | { identity: string; state: 'pending'; startedAt: number; request: Promise<HeldToken | null> }
   | ({ identity: string; state: 'ready' } & HeldToken);
 
 type ExploreLaneData = InfiniteData<ShowcaseFeedResponse, ShowcaseFeedPageParam>;
@@ -159,17 +164,18 @@ export function startExploreReadAhead({
     return null;
   });
   readAheadIdentities.add(identity);
-  entry = { identity, state: 'pending', request };
+  entry = { identity, state: 'pending', startedAt, request };
   return true;
 }
 
 /**
  * The token for the read that is about to draw Explore's first page: once,
  * for the identity it was read ahead for, while it is good. A read-ahead still
- * under way is waited for until it settles (EXPLORE_READ_AHEAD_WAIT_MS at the
- * most) rather than ranking the page a second time, and `whileWaiting` runs as
- * that wait begins, so the caller can get its fallback ready alongside. Null
- * for any other lane or page.
+ * under way is waited for rather than ranking the page a second time, until
+ * EXPLORE_READ_AHEAD_WAIT_MS after it started, and `whileWaiting` runs as that
+ * wait begins, so the caller can get its fallback ready alongside. Null for
+ * any other identity, lane or page: another identity's read neither takes the
+ * token nor waits on its request.
  */
 export async function takeExploreReadAheadToken({
   filters,
@@ -189,19 +195,22 @@ export async function takeExploreReadAheadToken({
   // Spent now, whatever comes of it: a retry of this read ranks afresh.
   entry = null;
 
-  let token: HeldToken | null;
+  let token: HeldToken | null = null;
   if (held.state === 'ready') {
     token = held;
   } else {
-    whileWaiting?.();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    token = await Promise.race([
-      held.request,
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), EXPLORE_READ_AHEAD_WAIT_MS);
-      }),
-    ]);
-    clearTimeout(timer);
+    const waitMs = held.startedAt + EXPLORE_READ_AHEAD_WAIT_MS - now();
+    if (waitMs > 0) {
+      whileWaiting?.();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      token = await Promise.race([
+        held.request,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), waitMs);
+        }),
+      ]);
+      clearTimeout(timer);
+    }
   }
   return token && token.expiresAt > now() ? token.token : null;
 }
@@ -212,8 +221,9 @@ export async function takeExploreReadAheadToken({
  * The lane check in `startExploreReadAhead` sees Explore only once its query
  * has begun to read, in the passive effects after the screen's first commit;
  * an idle callback that ran before them would rank the page a second time
- * beside Explore's own read. Explore calls this from a layout effect, which
- * runs inside that commit.
+ * beside Explore's own read. On the emulator nothing ran in between (2026-11-24):
+ * this is a guard that keeps it so. Explore calls it from a layout effect,
+ * which runs inside that commit.
  */
 export function noteExploreOpening(identityUserId: string | null | undefined) {
   const identity = identityUserId?.trim();
@@ -250,11 +260,6 @@ export function scheduleExploreReadAhead(start: () => void, delayMs = EXPLORE_RE
       globalThis.cancelIdleCallback(idleHandle);
     }
   };
-}
-
-/** Forgets a held read-ahead, as a sign-out does to everything ranked for the person leaving. */
-export function clearExploreReadAhead() {
-  entry = null;
 }
 
 /** Test-only: back to a launch that has heard nothing from the server. */

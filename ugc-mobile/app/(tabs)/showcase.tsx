@@ -499,7 +499,8 @@ export default function ShowcaseScreen() {
   // (`lib/explore-read-ahead.ts`): the lane's first read claims it, or joins
   // the read-ahead still under way. From this screen's first commit no new one
   // starts for this identity: the lane begins to read only in the passive
-  // effects after it, and one started in between would rank the page twice.
+  // effects after it, and one started in between would rank the page twice
+  // (a guard: nothing ran in between on the emulator).
   useLayoutEffect(() => {
     noteExploreOpening(identityUserId);
   }, [identityUserId]);

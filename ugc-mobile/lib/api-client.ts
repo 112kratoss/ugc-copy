@@ -561,8 +561,7 @@ export type ModerationReportSourceSurface =
   | 'comments';
 
 const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
-/** Every request's deadline unless it names its own; the app's client keeps this one. */
-export const DEFAULT_API_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_API_REQUEST_TIMEOUT_MS = 30_000;
 /**
  * A start answers only after it has measured each priced reference (up to 20 s each),
  * created the provider task (up to 30 s) and copied every input across, so a video with
