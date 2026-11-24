@@ -1437,7 +1437,6 @@ describe('a reel a link opened', () => {
     pageInfo: { hasMore: false, nextOffset: null },
   });
   const listProps = (tree: renderer.ReactTestRenderer) => tree.root.findByType('flat-list' as never).props as {
-    onScrollBeginDrag?: () => void;
     ListFooterComponent: React.ReactElement<{ state: string; onRetry: () => void }> | null;
   };
   const footerState = (tree: renderer.ReactTestRenderer) => listProps(tree).ListFooterComponent?.props.state ?? null;
@@ -1447,11 +1446,9 @@ describe('a reel a link opened', () => {
     queryClient.setQueryData(['showcase-post', item.id, 'viewer-1'], { success: true, item });
   }
 
-  async function startSwipe(tree: renderer.ReactTestRenderer) {
-    await act(async () => {
-      listProps(tree).onScrollBeginDrag?.();
-    });
-    await settle();
+  /** A swipe that comes back to rest on the post (too short to leave it). */
+  async function swipeAndRest(tree: renderer.ReactTestRenderer) {
+    await swipeTo(tree, 0);
   }
 
   it('draws the post the post page read at once, and asks the server for nothing', async () => {
@@ -1466,13 +1463,17 @@ describe('a reel a link opened', () => {
     expect(footerState(tree)).toBe('loading');
   });
 
-  it('asks for one For you page once the reader starts to swipe, and keeps the post first', async () => {
+  // Asked once the swipe is at rest, never as it starts: a request made, or
+  // answered, while the list still moved cost Android its snap, and the first
+  // swipe sprang back to the post (Pixel_9a, 2026-11-24).
+  it("asks for one For you page once the reader's first swipe comes to rest, and keeps the post first", async () => {
     seedPostPageRead();
     authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([feedItem('post-a', maya, 'delivery-a'), feedItem('post-d', nova, 'delivery-d')]));
     const tree = await renderReel('post-link', LINK_ROUTE);
+    expect(tree.root.findByType('flat-list' as never).props.onScrollBeginDrag).toBeUndefined();
 
-    await startSwipe(tree);
-    await startSwipe(tree);
+    await swipeAndRest(tree);
+    await swipeAndRest(tree);
 
     expect(authState.api.getShowcaseFeed.mock.calls).toEqual([[{ limit: 12, sort: 'for-you' }]]);
     expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
@@ -1492,7 +1493,6 @@ describe('a reel a link opened', () => {
     authState.api.getShowcaseFeed.mockReturnValue(page.promise);
     const tree = await renderReel('post-link', LINK_ROUTE);
 
-    // A swipe that never reported its start (a screen reader's scroll) still asks.
     await swipeTo(tree, 1);
     expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
     expect(footerState(tree)).toBe('loading');
@@ -1512,10 +1512,10 @@ describe('a reel a link opened', () => {
     authState.api.getShowcaseFeed.mockResolvedValueOnce(forYouPage([feedItem('post-a', maya, 'delivery-a')]));
     const tree = await renderReel('post-link', LINK_ROUTE);
 
-    await startSwipe(tree);
+    await swipeTo(tree, 1);
     expect(footerState(tree)).toBe('error');
     // A later swipe does not ask again by itself: the page offers its own retry.
-    await startSwipe(tree);
+    await swipeAndRest(tree);
     expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -1532,7 +1532,7 @@ describe('a reel a link opened', () => {
     authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([{ ...linkedPost(), recommendation: { deliveryId: 'delivery-link', position: 0, algorithmVersion: 'for-you-rules-v4' } } as ShowcaseFeedItem]));
     const tree = await renderReel('post-link', LINK_ROUTE);
 
-    await startSwipe(tree);
+    await swipeAndRest(tree);
 
     expect(reelIds(tree)).toEqual(['post-link']);
     expect(footerState(tree)).toBe('end');
@@ -1550,7 +1550,8 @@ describe('a reel a link opened', () => {
   it('keeps a reel opened from a lane to its lane, with no loading page of its own', async () => {
     seedLane('viewer-1', lanePosts());
     const tree = await renderReel('post-b');
-    expect(listProps(tree).onScrollBeginDrag).toBeUndefined();
+    await swipeTo(tree, 2);
+    expect(activeId()).toBe('post-c');
     expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
   });
 });
@@ -1607,10 +1608,7 @@ describe('a recipe opened from search', () => {
     expect(activeItem().details?.unlock).toMatchObject({ resourceId: 'bundle-1', postId: 'post-recipe' });
     expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
 
-    await act(async () => {
-      (tree.root.findByType('flat-list' as never).props as { onScrollBeginDrag: () => void }).onScrollBeginDrag();
-    });
-    await settle();
+    await swipeTo(tree, 0);
     expect(reelIds(tree)).toEqual(['post-recipe', 'post-a']);
     expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
     expect(slideProps(tree, 'post-a').initialSection).toBeUndefined();

@@ -459,7 +459,7 @@ function ImmersivePreviewViewer() {
   // push or a deep link (through the post page), or a recipe from search. It
   // draws the post from the read that found it (the post page's, through the
   // snapshot below) and asks for the For you page it swipes on into only once
-  // the reader starts to swipe (`loadShowcaseReelNeighbours` says why).
+  // the reader's first swipe comes to rest (`loadShowcaseReelNeighbours` says why).
   const linkOpened = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;
   const neighbours = useMutation({
     mutationFn: async ({ selected, key }: { selected: ShowcaseFeedItem; key: typeof sourceQueryKey }) => {
@@ -489,7 +489,11 @@ function ImmersivePreviewViewer() {
   const linkedPost = linkOpened
     ? loaderQuery.data?.showcaseItems?.find((item) => item.id === initialId) ?? null
     : null;
-  // At the start of a swipe, so the page is on its way while the list is still moving.
+  // Once the reader's first swipe has come to rest, on the page under the
+  // post or back on it. Not as the swipe starts: a request then, or its
+  // answer, landing while the list was still moving cost Android its snap,
+  // and the first swipe sprang back to the post instead of reaching the page
+  // below (Pixel_9a, 2026-11-24).
   const askForNeighbours = () => {
     if (!linkedPost || !neighbours.isIdle) return;
     neighbours.mutate({ selected: linkedPost, key: sourceQueryKey });
@@ -1705,12 +1709,12 @@ function ImmersivePreviewViewer() {
         maxToRenderPerBatch={IMMERSIVE_VERTICAL_LIST_TUNING.maxToRenderPerBatch}
         onMomentumScrollEnd={(event) => {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
+          // Under a post a link opened: the list is at rest, so its For you
+          // page is asked for now, whichever page the swipe came to rest on.
+          askForNeighbours();
           if (endSlide && nextIndex >= items.length) {
             // The closing slide. The last post stays the active one underneath,
-            // paused, and the alignment effect has nothing to correct. Under a
-            // post a link opened it is where the neighbours land: a scroll that
-            // reported no start (a screen reader's) asks for them here.
-            askForNeighbours();
+            // paused, and the alignment effect has nothing to correct.
             if (endSlidePage === null) haptic.soft();
             nativeRowRef.current = { index: activeIndex, height };
             playbackHandoff.handoff({ from: items[handoffPageRef.current ?? activeIndex]?.id, to: null });
@@ -1758,9 +1762,6 @@ function ImmersivePreviewViewer() {
           if (!library.isFetchingNextPage) void library.fetchNextPage();
         } : undefined}
         onEndReachedThreshold={2}
-        // A reel a link opened asks for the For you page it goes on into as
-        // the reader's first swipe starts.
-        onScrollBeginDrag={linkedPost ? askForNeighbours : undefined}
         ListFooterComponent={endSlide ? (
           <ReelEndSlide
             state={endSlide}

@@ -241,7 +241,7 @@ function readForYouPage(api: Pick<ImmersivePreviewApi, 'getShowcaseFeed'>, media
 
 /**
  * The For you page a reel opened on one post swipes on into, asked for once
- * the reader starts to swipe (`app/viewer.tsx`), with the post they are on
+ * the reader's first swipe comes to rest (`app/viewer.tsx`), with the post they are on
  * kept first: the page's own copy when the page served it too (it carries
  * that delivery), else the post as it was read.
  *

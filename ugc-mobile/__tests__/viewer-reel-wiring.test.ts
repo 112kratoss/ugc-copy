@@ -41,8 +41,10 @@ describe('the reel reads the lane it was opened from', () => {
   it('reads the For you page under a post a link opened only once the reader swipes on', () => {
     expect(viewer).toContain("const linkOpened = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;");
     expect(viewer).toContain('withNeighbours: !linkOpened || neighbours.isSuccess');
-    expect(viewer).toContain('onScrollBeginDrag={linkedPost ? askForNeighbours : undefined}');
-    expect(slice('if (endSlide && nextIndex >= items.length) {', 'return;')).toContain('askForNeighbours();');
+    // At rest only: a request or its answer mid-swipe cost Android its snap (Pixel_9a, 2026-11-24).
+    expect(slice('onMomentumScrollEnd={(event) => {', 'if (endSlide && nextIndex >= items.length) {')).toContain('askForNeighbours();');
+    expect(viewer).not.toContain('askForNeighbours} ');
+    expect(viewer).not.toMatch(/onScrollBeginDrag=\{[^}]*Neighbours/);
   });
 
   it("keeps a lane's posts when the lane's refresh leaves them out, and never refreshes it twice", () => {
