@@ -105,9 +105,15 @@ async function readActiveReferralProgramTerms(): Promise<ReferralProgramTerms | 
  * `/pricing` view it served (production 2026-11-24: HTML end 904 ms against
  * about 330 ms after) waited on a Supabase round trip. The terms are the same
  * for every viewer, so nothing per-viewer (country, invite cookie, session) is
- * read here. A throwing read is not stored by `unstable_cache`. Terms change by
- * an operator's migration, so five minutes (as the instance cache) is the only
- * freshness the page has ever promised.
+ * read here. A throwing read is not stored by `unstable_cache`.
+ *
+ * Only the printed text is cached; rewards are settled from the database. How
+ * stale the text can be: an entry is served stale while it refreshes behind
+ * the request once its 300 s are up, it survives deploys, and the instance
+ * cache holds what it read for 300 s more, so after a change to the program the
+ * banner can show the old terms for about ten minutes, and longer on a page
+ * nobody opens. Nothing calls `revalidateTag` with the tag below: it only names
+ * the entry, and there is no operator lever to expire it.
  */
 export const REFERRAL_PROGRAM_TERMS_CACHE_TAG = 'referral-program-terms:v1';
 const readActiveReferralProgramTermsFromDataCache = unstable_cache(

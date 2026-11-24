@@ -206,7 +206,7 @@ export default async function ModelPage({ params }: ModelPageProps) {
                     ) : null}
 
                     <div className="flex flex-col gap-4 pt-2 sm:flex-row">
-                        <Button href={`${createPath}?model=${encodeURIComponent(model.id)}`} variant="primary" icon={ArrowRight} className="min-h-12 px-7">
+                        <Button href={`${createPath}?model=${encodeURIComponent(model.id)}`} prefetch={false} variant="primary" icon={ArrowRight} className="min-h-12 px-7">
                             Generate with {model.displayName}
                         </Button>
                         <Button href="/pricing" prefetch={false} variant="secondary" className="min-h-12 px-7">

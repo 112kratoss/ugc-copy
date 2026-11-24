@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import BlogIndex from '@/app/blog/page';
 import Contact from '@/app/contact/page';
+import ModelPage from '@/app/models/[slug]/page';
 
 // Public pages whose links drew with Next's default prefetch (production, 2026-11-24): the blog
 // list fetched 13-15 route payloads (about 120 KB) a view, `/contact` 11, and a link to `/pricing`
@@ -47,5 +48,13 @@ describe('public pages prefetch their links on intent', () => {
     expect(articles.length).toBeGreaterThan(3);
     expect(linkProps.filter((link) => link.prefetch !== false)).toEqual([]);
     expect(router.prefetch).not.toHaveBeenCalled();
+  });
+
+  // Its Generate and See credit packs buttons open a creator and /pricing, both drawn per request.
+  it('a model page draws its page links, Generate and credit packs included, with prefetch off', async () => {
+    render(await ModelPage({ params: Promise.resolve({ slug: 'nano-banana-pro' }) }));
+    const internal = linkProps.filter((link) => typeof link.href === 'string' && link.href.startsWith('/'));
+    expect(internal.map((link) => link.href)).toEqual(expect.arrayContaining(['/pricing', '/models']));
+    expect(internal.filter((link) => link.prefetch !== false)).toEqual([]);
   });
 });
