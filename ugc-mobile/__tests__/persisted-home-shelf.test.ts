@@ -203,6 +203,20 @@ describe('restorePersistedHomeShelf', () => {
     expect(storage.values.has(PERSISTED_HOME_SHELF_STORAGE_KEY)).toBe(false);
   });
 
+  it('is written back by the save Home makes once it draws it, so a failed refetch still leaves a copy', async () => {
+    const storage = await storageHolding(shelf(), 'user-1');
+    const client = new QueryClient();
+    await restorePersistedHomeShelf(client, environment(storage));
+    expect(storage.values.has(PERSISTED_HOME_SHELF_STORAGE_KEY)).toBe(false);
+
+    // The restored answer is a success with data: Home's save effect writes it again.
+    await persistHomeShelf(client, 'user-1', environment(storage));
+
+    expect(saved(storage)).toMatchObject({ viewerUserId: 'user-1', dataUpdatedAt: FETCHED_AT });
+    const next = new QueryClient();
+    await expect(restorePersistedHomeShelf(next, environment(storage))).resolves.toBe(true);
+  });
+
   it('never under another identity, or none: another identity draws bones', async () => {
     const storage = await storageHolding(shelf(), 'guest-1');
     const client = new QueryClient();
