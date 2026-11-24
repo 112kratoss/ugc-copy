@@ -16,8 +16,9 @@ import {
 const NOW = 1_800_000_000_000;
 
 function deps(overrides: Partial<RootRemountReloadDeps> = {}) {
-  const written: number[] = [];
+  const written: (number | null)[] = [];
   const reloads: string[] = [];
+  const pending: (() => void)[] = [];
   const value: RootRemountReloadDeps = {
     platform: 'android',
     dev: false,
@@ -29,9 +30,14 @@ function deps(overrides: Partial<RootRemountReloadDeps> = {}) {
     reload: async (reason) => {
       reloads.push(reason);
     },
+    later: (run) => {
+      pending.push(run);
+    },
     ...overrides,
   };
-  return { value, written, reloads };
+  /** Runs what was left for later, as a runtime that outlived its reload call would. */
+  const runLater = () => pending.splice(0).forEach((run) => run());
+  return { value, written, reloads, runLater };
 }
 
 describe('shouldReloadOnRootMount', () => {
@@ -66,8 +72,8 @@ describe('shouldReloadOnRootMount', () => {
     expect(shouldReloadOnRootMount({ ...base, lastReloadAt: NOW - ROOT_REMOUNT_RELOAD_GUARD_MS })).toBe(true);
   });
 
-  it('treats a stored time in the future (a clock set back) as inside the window', () => {
-    expect(shouldReloadOnRootMount({ ...base, lastReloadAt: NOW + 60_000 })).toBe(false);
+  it('treats a stored time in the future (a clock set back) as stale', () => {
+    expect(shouldReloadOnRootMount({ ...base, lastReloadAt: NOW + 60_000 })).toBe(true);
   });
 });
 
@@ -177,6 +183,90 @@ describe('noteRootMount', () => {
     const d = deps();
     await expect(destroyFirst(d.value)).resolves.toBe('reload-under-way');
     expect(d.reloads).toEqual([]);
+  });
+
+  it('stands down when another root mounts while the time is being written, then reloads once it goes', async () => {
+    let releaseWrite = () => {};
+    const previous = NOW - 60_000;
+    const d = deps({ readLastReloadAt: async () => previous });
+    const writes: (number | null)[] = [];
+    let holdNext = true;
+    d.value.writeLastReloadAt = (at) => {
+      writes.push(at);
+      if (!holdNext) return Promise.resolve();
+      holdNext = false;
+      return new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    };
+    await noteRootMount(d.value);
+    await noteRootUnmount(d.value);
+    const deciding = noteRootMount(d.value);
+    await Promise.resolve();
+    await Promise.resolve();
+    // A second activity is built while the write is under way.
+    await expect(noteRootMount(d.value)).resolves.toBe('decided');
+    releaseWrite();
+    await expect(deciding).resolves.toBe('waiting');
+    expect(d.reloads).toEqual([]);
+    // The stored time is put back, so the guard does not hold off the real reload.
+    expect(writes).toEqual([NOW, previous]);
+    expect(claimAppReload()).toBe(true);
+    releaseAppReload();
+    await expect(noteRootUnmount(d.value)).resolves.toBe('reloaded');
+    expect(d.reloads).toHaveLength(1);
+  });
+
+  it('clears the stored time on that stand-down when there was none before', async () => {
+    let releaseWrite = () => {};
+    const d = deps();
+    const writes: (number | null)[] = [];
+    let holdNext = true;
+    d.value.writeLastReloadAt = (at) => {
+      writes.push(at);
+      if (!holdNext) return Promise.resolve();
+      holdNext = false;
+      return new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    };
+    await noteRootMount(d.value);
+    await noteRootUnmount(d.value);
+    const deciding = noteRootMount(d.value);
+    await Promise.resolve();
+    await Promise.resolve();
+    await noteRootMount(d.value);
+    releaseWrite();
+    await expect(deciding).resolves.toBe('waiting');
+    expect(writes).toEqual([NOW, null]);
+  });
+
+  it('gives the claim back when a reload call returns and the runtime is still alive later', async () => {
+    const d = deps();
+    await expect(destroyFirst(d.value)).resolves.toBe('reloaded');
+    expect(d.reloads).toHaveLength(1);
+    // Nothing reloaded: the OTA gate could not reload either, until the give-up.
+    expect(claimAppReload()).toBe(false);
+    d.runLater();
+    expect(claimAppReload()).toBe(true);
+    releaseAppReload();
+    // And a later rebuild in this runtime is decided again (outside the window it reloads).
+    const clock = NOW + ROOT_REMOUNT_RELOAD_GUARD_MS;
+    d.value.now = () => clock;
+    d.value.readLastReloadAt = async () => NOW;
+    await noteRootUnmount(d.value);
+    await expect(noteRootMount(d.value)).resolves.toBe('reloaded');
+    expect(d.reloads).toHaveLength(2);
+  });
+
+  it('decides again after standing down for an OTA reload that then failed', async () => {
+    expect(claimAppReload()).toBe(true);
+    const d = deps();
+    await expect(destroyFirst(d.value)).resolves.toBe('reload-under-way');
+    // The OTA gate's reload fails and gives the claim back.
+    releaseAppReload();
+    await noteRootUnmount(d.value);
+    await expect(noteRootMount(d.value)).resolves.toBe('reloaded');
   });
 
   it('gives the claim back when its reload fails, so the OTA gate can still reload', async () => {

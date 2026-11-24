@@ -27,8 +27,13 @@ const deps: RootRemountReloadDeps = {
     const at = stored === null ? null : Number(stored);
     return at !== null && Number.isFinite(at) ? at : null;
   },
-  writeLastReloadAt: (at) => AsyncStorage.setItem(ROOT_REMOUNT_RELOAD_STORAGE_KEY, String(at)),
+  writeLastReloadAt: (at) => (at === null
+    ? AsyncStorage.removeItem(ROOT_REMOUNT_RELOAD_STORAGE_KEY)
+    : AsyncStorage.setItem(ROOT_REMOUNT_RELOAD_STORAGE_KEY, String(at))),
   reload: (reason) => reloadAppAsync(reason),
+  later: (run, ms) => {
+    setTimeout(run, ms);
+  },
 };
 
 /**

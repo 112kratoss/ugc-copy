@@ -22,10 +22,21 @@
  * `archive/perf-loop-2026-11-24/activity-recreate-freeze/`.
  *
  * A fresh process is known to work, so a second root mount in one runtime
- * reloads the JS (a new JS runtime and new worklet runtimes) once. The person
- * sees the launch splash again. Guarded on disk, because the count of mounts
- * does not survive the reload it causes; a storage error means no reload, never
- * a loop.
+ * reloads the JS (a new JS runtime and new worklet runtimes) once. What the
+ * person sees (a clear-task rebuild on the Pixel 9a emulator, filmed at 10 fps):
+ * the splash icon of the new activity for about 0.4 s, the new root's Home for
+ * about 0.3 s, then the bare window background for about 0.4 s while the host
+ * reloads (a host reload builds no activity, so expo-splash-screen's native
+ * splash, which registers in `Activity.onCreate`, does not come back), then the
+ * app's own launch splash (`components/launch-splash.tsx`, the icon and its
+ * animated sting) for about 1 s, and Home again about 2.6 s after the rebuild.
+ * Guarded on disk, because the count of mounts does not survive the reload it
+ * causes; a storage error means no reload, never a loop.
+ *
+ * What it costs: a reload drops any JS work in flight in the old tree (an
+ * upload, a run's start request) that a plain remount kept. The realistic
+ * triggers today are a font-size, display-size or language change while such
+ * work is under way.
  *
  * This file has no React Native in it; `lib/root-remount-reload-native.ts`
  * supplies the platform, the storage and the reload.
@@ -49,9 +60,20 @@ export interface RootRemountReloadDeps {
   now: () => number;
   /** The time of the last reload by this rule, or null for none; throws when storage cannot be read. */
   readLastReloadAt: () => Promise<number | null>;
-  writeLastReloadAt: (at: number) => Promise<void>;
+  /** Stores that time; null removes it. */
+  writeLastReloadAt: (at: number | null) => Promise<void>;
   reload: (reason: string) => Promise<void>;
+  /** Runs `run` after `ms`, if this runtime is still alive then. */
+  later: (run: () => void, ms: number) => void;
 }
+
+/**
+ * A reload call that returned and left this runtime running past this long did
+ * not reload (no React activity, no delegate, no `globalThis.expo`): the claim
+ * is given back, so the OTA gate and a later rebuild can still reload. A real
+ * reload ends the runtime within a few hundred milliseconds.
+ */
+export const ROOT_REMOUNT_RELOAD_GIVE_UP_MS = 10_000;
 
 export function shouldReloadOnRootMount({
   platform,
@@ -79,8 +101,11 @@ export function shouldReloadOnRootMount({
   // second later, once its activity is destroyed; the reload waits for that.
   if (liveRoots !== 1) return false;
   if (lastReloadAt === null) return true;
-  // A stored time ahead of the clock (the clock was set back) counts as recent.
   const since = now - lastReloadAt;
+  // A stored time ahead of the clock (the clock was set back) is stale, not
+  // recent: counted as recent it would switch this off until real time passed
+  // it. Every reload writes the current time, so this cannot loop.
+  if (since < 0) return true;
   return since >= ROOT_REMOUNT_RELOAD_GUARD_MS;
 }
 
@@ -140,7 +165,11 @@ async function decide(deps: RootRemountReloadDeps): Promise<RootMountOutcome> {
     return 'kept';
   }
   // An update the OTA gate is reloading into gives the fresh runtime already.
-  if (!claimAppReload()) return 'reload-under-way';
+  // Should that reload fail, this runtime decides again at the next rebuild.
+  if (!claimAppReload()) {
+    busy = false;
+    return 'reload-under-way';
+  }
   // Written before the reload, so that the root the reload mounts — or any
   // rebuild right after it — finds it and stands down.
   try {
@@ -150,9 +179,28 @@ async function decide(deps: RootRemountReloadDeps): Promise<RootMountOutcome> {
     busy = false;
     return 'storage-failed';
   }
+  // Another activity may have been built while the time was written: a reload
+  // now would restart two surfaces (see `shouldReloadOnRootMount`). Stand down,
+  // put the stored time back as it was so the guard does not hold off the
+  // reload that comes when that root unmounts, and decide again then.
+  if (liveRoots !== 1) {
+    releaseAppReload();
+    try {
+      await deps.writeLastReloadAt(lastReloadAt);
+    } catch {
+      // Left at `now`: the next reload by this rule waits out the window.
+    }
+    busy = false;
+    return 'waiting';
+  }
   try {
     await deps.reload('The app root mounted again in one JS runtime (Android activity rebuilt)');
-    // The runtime is going; nothing after this decides anything.
+    // The runtime is going, and nothing after this decides anything, unless
+    // it is still here well after the call: then the call did nothing.
+    deps.later(() => {
+      releaseAppReload();
+      busy = false;
+    }, ROOT_REMOUNT_RELOAD_GIVE_UP_MS);
     return 'reloaded';
   } catch {
     releaseAppReload();
