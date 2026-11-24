@@ -45,6 +45,7 @@ import {
 } from '@/app/showcase/ShowcaseFeedInteraction';
 import { feedNewestCategoryFor, newestCreatedAtOf, useNewPostsProbe, type NewPostsProbeLane } from '@/lib/feed-newest-probe';
 import { onHomeFeedRefresh } from '@/lib/home-feed-refresh';
+import { checkMediaAvailability } from '@/lib/media-availability-client';
 import { removeFromHomeShelf } from '@/lib/home-shelf-removals';
 import { buildShowcaseDetailPath, getCurrentInternalPath } from '@/lib/share';
 import { REMIX_UNLOCK_REQUIRED_CODE, requestShowcaseRemix, ShowcaseRemixRequestError } from '@/lib/showcase-remix-client';
@@ -105,11 +106,29 @@ type LaneCacheEntry = {
 
 type FeedbackNotice = { tone: 'success' | 'error'; message: string } | null;
 
-type HiddenFromLane = { postIds: Set<string>; creatorIds: Set<string> };
+type HiddenFromLane = {
+    postIds: Set<string>;
+    creatorIds: Set<string>;
+    /**
+     * Media addresses found gone when they failed to load. The address, not
+     * the post: a post edited with new media comes back with that media, and
+     * one archived keeps the address a cached page still names.
+     */
+    goneMediaUrls: Set<string>;
+};
 
-/** A post the viewer removed this visit: not interested, hidden, reported or blocked. */
+function emptyHiddenFromLane(): HiddenFromLane {
+    return { postIds: new Set(), creatorIds: new Set(), goneMediaUrls: new Set() };
+}
+
+/**
+ * A post the viewer removed this visit (not interested, hidden, reported or
+ * blocked), or one that still holds media found gone when it failed to load.
+ */
 function isHiddenFromLane(hidden: HiddenFromLane, item: ShowcaseFeedItem) {
-    return hidden.postIds.has(item.id) || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id));
+    return hidden.postIds.has(item.id)
+        || Boolean(item.creator.id && hidden.creatorIds.has(item.creator.id))
+        || Boolean(hidden.goneMediaUrls.size && item.mediaItems?.some((media) => hidden.goneMediaUrls.has(media.url)));
 }
 
 /**
@@ -123,11 +142,11 @@ const removedThisVisit = new Map<string, HiddenFromLane>();
 function getRemovedThisVisit(viewerId: string | null): HiddenFromLane {
     // The server renders the feed for every visitor; only a browser has a
     // visit, and a server-wide map would keep one entry per viewer for good.
-    if (typeof window === 'undefined') return { postIds: new Set(), creatorIds: new Set() };
+    if (typeof window === 'undefined') return emptyHiddenFromLane();
     const key = viewerId ?? 'signed-out';
     let removed = removedThisVisit.get(key);
     if (!removed) {
-        removed = { postIds: new Set(), creatorIds: new Set() };
+        removed = emptyHiddenFromLane();
         removedThisVisit.set(key, removed);
     }
     return removed;
@@ -1066,6 +1085,21 @@ export default function FeedClient({
             return open && predicate(open) ? null : current;
         });
     }, [setItems]);
+    // A card whose media failed: when its media is gone for this viewer, the
+    // post having left public reading since the lane loaded (archived, made
+    // private, hidden, marked NSFW, deleted), the card goes quietly, as a feed
+    // drops a post that is no longer there; otherwise the card offers a retry
+    // (`media-availability-client.ts`).
+    const handleMediaUnavailable = useCallback(async (
+        postId: string,
+        mediaItem: ShowcaseMediaItem,
+    ): Promise<'removed' | 'retry'> => {
+        if (await checkMediaAvailability(mediaItem.url) !== 'gone') return 'retry';
+        removedForViewer.goneMediaUrls.add(mediaItem.url);
+        removeFromLane((item) => item.id === postId);
+        removeFromHomeShelf({ postId });
+        return 'removed';
+    }, [removeFromLane, removedForViewer]);
     const clearNotice = useCallback(() => setFeedbackNotice(null), []);
     const showOutcome = useCallback((outcome: FeedSafetyOutcome) => {
         if (outcome.status === 'cancelled') return;
@@ -1300,6 +1334,7 @@ export default function FeedClient({
                                     onShared={handleShared}
                                     onCommentCountChange={applyCommentCount}
                                     onOpenMedia={handleOpenMedia}
+                                    onMediaUnavailable={handleMediaUnavailable}
                                     onOpenPost={handleOpenPost}
                                     onRecordOpen={recordOpen}
                                     onPrefetchPost={handlePrefetchPost}

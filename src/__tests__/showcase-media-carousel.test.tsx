@@ -703,6 +703,165 @@ describe('ShowcaseMediaCarousel', () => {
     expect(onOpen).not.toHaveBeenCalled();
   });
 
+  describe('a feed whose post may have left public view', () => {
+    const imageItem: ShowcaseMediaItem = {
+      id: 'image-1',
+      url: 'https://example.com/original.jpg',
+      previewUrl: 'https://example.com/preview.webp',
+      mediaKind: 'image',
+      contentType: 'image/jpeg',
+      originalName: 'original.jpg',
+      width: 1080,
+      height: 1350,
+      durationSeconds: null,
+      sortOrder: 0,
+    };
+
+    // The preview fails, then its original fallback: only then has the image failed.
+    function failImage() {
+      fireEvent.error(screen.getByRole('img', { name: 'Campaign still' }));
+      fireEvent.error(screen.getByRole('img', { name: 'Campaign still' }));
+    }
+
+    function deferredAnswer() {
+      let answer!: (value: 'removed' | 'retry') => void;
+      const promise = new Promise<'removed' | 'retry'>((resolve) => {
+        answer = resolve;
+      });
+      return { promise, answer };
+    }
+
+    it('keeps a failed feed image on its placeholder when the feed asks nothing (Explore, profiles)', () => {
+      const onMediaError = vi.fn();
+      render(<ShowcaseMediaCarousel title="Campaign still" mediaItems={[imageItem]} onMediaError={onMediaError} />);
+
+      failImage();
+
+      expect(onMediaError).not.toHaveBeenCalled();
+      expect(screen.queryByRole('button', { name: 'Retry image' })).not.toBeInTheDocument();
+    });
+
+    it('asks about the failed image and keeps the placeholder, with no retry, until the answer', async () => {
+      const { promise, answer } = deferredAnswer();
+      const onMediaUnavailable = vi.fn(() => promise);
+      render(
+        <ShowcaseMediaCarousel title="Campaign still" mediaItems={[imageItem]} onMediaUnavailable={onMediaUnavailable} />
+      );
+
+      failImage();
+
+      expect(onMediaUnavailable).toHaveBeenCalledTimes(1);
+      expect(onMediaUnavailable).toHaveBeenCalledWith(imageItem);
+      expect(screen.queryByRole('button', { name: 'Retry image' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        answer('retry');
+        await promise;
+      });
+
+      expect(screen.getByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+    });
+
+    it('never offers a retry for media the feed removed', async () => {
+      const { promise, answer } = deferredAnswer();
+      render(
+        <ShowcaseMediaCarousel title="Campaign still" mediaItems={[imageItem]} onMediaUnavailable={() => promise} />
+      );
+
+      failImage();
+      await act(async () => {
+        answer('removed');
+        await promise;
+      });
+
+      expect(screen.queryByRole('button', { name: 'Retry image' })).not.toBeInTheDocument();
+    });
+
+    it('offers the retry when the question itself fails', async () => {
+      render(
+        <ShowcaseMediaCarousel
+          title="Campaign still"
+          mediaItems={[imageItem]}
+          onMediaUnavailable={() => Promise.reject(new Error('offline'))}
+        />
+      );
+
+      failImage();
+
+      expect(await screen.findByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+    });
+
+    it('asks again when the retried image fails too', async () => {
+      const onMediaUnavailable = vi.fn(async () => 'retry' as const);
+      render(
+        <ShowcaseMediaCarousel title="Campaign still" mediaItems={[imageItem]} onMediaUnavailable={onMediaUnavailable} />
+      );
+
+      failImage();
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry image' }));
+      failImage();
+
+      await waitFor(() => expect(onMediaUnavailable).toHaveBeenCalledTimes(2));
+      expect(await screen.findByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+    });
+
+    it('holds each failed slide until its own answer, when the reader swipes between them', async () => {
+      const answers = new Map<string, ReturnType<typeof deferredAnswer>>();
+      const onMediaUnavailable = vi.fn((item: ShowcaseMediaItem) => {
+        const pending = deferredAnswer();
+        answers.set(item.id, pending);
+        return pending.promise;
+      });
+      const secondItem = { ...imageItem, id: 'image-2', url: 'https://example.com/second.jpg', previewUrl: 'https://example.com/second.webp', sortOrder: 1 };
+      render(
+        <ShowcaseMediaCarousel
+          title="Campaign still"
+          mediaItems={[imageItem, secondItem]}
+          onMediaUnavailable={onMediaUnavailable}
+        />
+      );
+
+      failImage();
+      fireEvent.click(screen.getByRole('button', { name: 'Next media' }));
+      failImage();
+      expect(onMediaUnavailable).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        answers.get('image-2')!.answer('retry');
+        await answers.get('image-2')!.promise;
+      });
+      expect(screen.getByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+
+      // The first slide's question is still out: no retry there yet.
+      fireEvent.click(screen.getByRole('button', { name: 'Previous media' }));
+      expect(screen.queryByRole('button', { name: 'Retry image' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        answers.get('image-1')!.answer('retry');
+        await answers.get('image-1')!.promise;
+      });
+      expect(screen.getByRole('button', { name: 'Retry image' })).toBeInTheDocument();
+    });
+
+    it('asks about a failed feed video the same way', async () => {
+      const { promise, answer } = deferredAnswer();
+      const mediaItem = createVideoItem();
+      const { container } = render(
+        <ShowcaseMediaCarousel title="Campaign clip" mediaItems={[mediaItem]} onMediaUnavailable={() => promise} />
+      );
+
+      fireEvent.error(container.querySelector('video')!);
+      expect(screen.queryByRole('button', { name: 'Retry video' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        answer('retry');
+        await promise;
+      });
+
+      expect(screen.getByRole('button', { name: 'Retry video' })).toBeInTheDocument();
+    });
+  });
+
   it('turns a reel video that never becomes ready into a bounded, retryable error', () => {
     vi.useFakeTimers();
     const onMediaError = vi.fn();
