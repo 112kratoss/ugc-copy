@@ -17,8 +17,19 @@ const mocks = vi.hoisted(() => {
     getUserById: vi.fn(),
     programQuery,
     rpc: vi.fn(),
+    // What the module handed unstable_cache when it loaded.
+    dataCacheCalls: [] as { keyParts: unknown; options: unknown }[],
   };
 });
+
+// Outside Next there is no Data Cache: the read runs straight through, and the
+// test sees what was asked of the cache.
+vi.mock('next/cache', () => ({
+  unstable_cache: (read: () => unknown, keyParts: unknown, options: unknown) => {
+    mocks.dataCacheCalls.push({ keyParts, options });
+    return read;
+  },
+}));
 
 vi.mock('@/lib/backend-rate-limit', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/backend-rate-limit')>(),
@@ -430,6 +441,15 @@ describe('referral API route service', () => {
       body: JSON.stringify({ code: 'K7P2QX', source: 'mobile', kind: 'invite' }),
     }));
     await expect(kept.json()).resolves.toMatchObject({ code: 'b1c2d3e4f5a6', shortCode: 'M8N9PQ', preserved: true });
+  });
+
+  // /pricing's first view on a cold instance waited on this read (2026-11-24):
+  // the terms are the same for every viewer, so the Data Cache holds them for
+  // all instances, tagged so an operator can expire them.
+  it('reads the terms through the Data Cache for five minutes, tagged', () => {
+    expect(mocks.dataCacheCalls).toEqual([
+      { keyParts: ['referral-program-terms'], options: { revalidate: 300, tags: ['referral-program-terms:v1'] } },
+    ]);
   });
 
   it('reads the terms of the program a new visit binds to, and keeps them for five minutes', async () => {

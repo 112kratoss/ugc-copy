@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import Link from 'next/link';
+import IntentLink from '@/components/IntentLink';
 import { notFound } from 'next/navigation';
 import { ArrowRight, CheckCircle2 } from 'lucide-react';
 
@@ -206,10 +206,10 @@ export default async function ModelPage({ params }: ModelPageProps) {
                     ) : null}
 
                     <div className="flex flex-col gap-4 pt-2 sm:flex-row">
-                        <Button href={`${createPath}?model=${encodeURIComponent(model.id)}`} variant="primary" icon={ArrowRight} className="min-h-12 px-7">
+                        <Button href={`${createPath}?model=${encodeURIComponent(model.id)}`} prefetch={false} variant="primary" icon={ArrowRight} className="min-h-12 px-7">
                             Generate with {model.displayName}
                         </Button>
-                        <Button href="/pricing" variant="secondary" className="min-h-12 px-7">
+                        <Button href="/pricing" prefetch={false} variant="secondary" className="min-h-12 px-7">
                             See credit packs
                         </Button>
                     </div>
@@ -324,12 +324,12 @@ export default async function ModelPage({ params }: ModelPageProps) {
                                 {cheaperAlternatives.map((peer, index) => (
                                     <span key={peer.model.id}>
                                         {index > 0 ? ', ' : ''}
-                                        <Link
+                                        <IntentLink
                                             href={`/models/${toModelSlug(peer.model.id)}`}
                                             className="ui-focus-ring rounded-lg text-[var(--ui-primary)] hover:underline"
                                         >
                                             {peer.model.displayName}
-                                        </Link>
+                                        </IntentLink>
                                         {` (${peer.cost!.credits} cr)`}
                                     </span>
                                 ))}
@@ -389,24 +389,24 @@ export default async function ModelPage({ params }: ModelPageProps) {
                 <section className="space-y-6">
                     <SectionHeader eyebrow="Keep exploring" title="Where this model fits" />
                     <div className="grid gap-6 md:grid-cols-3">
-                        <Link href={featurePath} className="ui-card ui-card-interactive ui-focus-ring group p-6">
+                        <IntentLink href={featurePath} className="ui-card ui-card-interactive ui-focus-ring group p-6">
                             <Text as="h3" variant="cardTitle">{kindLabel}</Text>
                             <Text variant="bodySm" className="mt-3">
                                 How this kind of generation fits into an ad production workflow.
                             </Text>
-                        </Link>
-                        <Link href="/models" className="ui-card ui-card-interactive ui-focus-ring group p-6">
+                        </IntentLink>
+                        <IntentLink href="/models" className="ui-card ui-card-interactive ui-focus-ring group p-6">
                             <Text as="h3" variant="cardTitle">Compare every model</Text>
                             <Text variant="bodySm" className="mt-3">
                                 Per-generation cost for every model in one table.
                             </Text>
-                        </Link>
-                        <Link href="/showcase" className="ui-card ui-card-interactive ui-focus-ring group p-6">
+                        </IntentLink>
+                        <IntentLink href="/showcase" className="ui-card ui-card-interactive ui-focus-ring group p-6">
                             <Text as="h3" variant="cardTitle">See real output</Text>
                             <Text variant="bodySm" className="mt-3">
                                 Public creations from people using these models in production.
                             </Text>
-                        </Link>
+                        </IntentLink>
                     </div>
                 </section>
             </div>
