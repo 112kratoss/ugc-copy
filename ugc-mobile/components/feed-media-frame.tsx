@@ -42,6 +42,8 @@ type FeedImageFrameProps = FeedMediaFrameBaseProps & {
   onImageDisplay?: ImageProps['onDisplay'];
   onImageError?: () => void;
   onImageLoad?: ImageProps['onLoad'];
+  /** Where the contained picture lands in this frame, when its shape is known; see `StableMediaImage`. */
+  placeholderFrame?: { x: number; y: number; width: number; height: number } | null;
   transition?: number;
   url: string;
 };
@@ -114,6 +116,7 @@ export function FeedMediaFrame(props: FeedMediaFrameProps) {
             watchdog={props.watchdog}
             diagnosticsSurface={props.diagnosticsSurface}
             loadingSketch={props.loadingSketch ?? true}
+            placeholderFrame={props.placeholderFrame}
             style={[absoluteFill, { backgroundColor: 'transparent' }]}
           />
         </>

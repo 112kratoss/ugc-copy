@@ -2613,11 +2613,13 @@ export function MediaZoomFlightLayer({
  * Pixel 9a emulator a creation opened from Profile still had Publish and
  * Details missing, and Recreate half covered, 2.5 s after the tap (2026-11-03).
  *
- * Over the slide's picture, not under it: until that picture has loaded, its
- * frame draws the post's thumbhash, a blur that would hide the sharp copy
- * beneath. Nor can the blur be left out only while the copy is up, because
- * expo-image starts a load over when its placeholder changes (Android's
- * `rerenderIfNeeded`), and the slide's picture would load twice.
+ * Over the slide's picture, not under it: until that picture has loaded, the
+ * slide draws the post's thumbhash in the picture's place (`StableMediaImage`'s
+ * `placeholderFrame`, or the image's own placeholder when the media's size is
+ * not known), a blur that would hide the sharp copy beneath. Nor can the blur
+ * be left out only while the copy is up, because expo-image starts a load over
+ * when its placeholder changes (Android's `rerenderIfNeeded`), and the slide's
+ * picture would load twice.
  */
 export function MediaZoomCarriedPicture({ itemId }: { itemId: string }) {
   const context = useContext(MediaZoomCarriedContext);

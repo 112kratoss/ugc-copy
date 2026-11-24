@@ -851,3 +851,108 @@ describe('a clip with a poster (01-9)', () => {
     renderer.act(() => tree.unmount());
   });
 });
+
+// A thumbhash keeps a picture's shape only in steps of sevenths, so it decodes
+// to a slightly different shape: a 3:4 picture's comes out 23×32 (0.719). Fitted
+// `contain` across the reel's page it stood about 12pt taller than the picture
+// itself, and the blur showed above and below the sharp copy until the picture
+// loaded (owner's recording, 2026-11-25). Where the picture will land is known
+// from the post's own size, so the blur is drawn in that box, cropped to it.
+describe('StableMediaImage with the picture’s place known', () => {
+  const FRAME = { x: 0, y: 169, width: 402, height: 536 };
+  const mount = (element: React.ReactElement) => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => { tree = renderer.create(element); });
+    return tree;
+  };
+  const loading = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAllByType('image')
+    .filter((node) => node.props.source !== undefined);
+  // The blur in the picture's box, told from the failure plate's own blur by
+  // its place: the plate's fills the frame.
+  const blurs = (tree: renderer.ReactTestRenderer) => tree.root
+    .findAllByType('image')
+    .filter((node) => node.props.source === undefined
+      && node.props.placeholder?.thumbhash === 'thumbhash-base64'
+      && node.props.style?.top !== undefined);
+
+  it('draws the thumbhash in the picture’s own box, cropped to it, under the picture', () => {
+    const tree = mount(
+      <StableMediaImage
+        url="https://cdn.example.com/display.webp"
+        cacheKey="display"
+        thumbhash="thumbhash-base64"
+        contentFit="contain"
+        placeholderFrame={FRAME}
+      />
+    );
+
+    expect(loading(tree)).toHaveLength(1);
+    expect(loading(tree)[0].props.placeholder).toBeUndefined();
+    expect(blurs(tree)).toHaveLength(1);
+    expect(blurs(tree)[0].props).toEqual(expect.objectContaining({ placeholderContentFit: 'cover', pointerEvents: 'none' }));
+    expect(blurs(tree)[0].props.style).toEqual({ position: 'absolute', left: 0, top: 169, width: 402, height: 536 });
+    const order = tree.root.findAllByType('image');
+    expect(order.indexOf(blurs(tree)[0])).toBeLessThan(order.indexOf(loading(tree)[0]));
+    renderer.act(() => tree.unmount());
+  });
+
+  it('takes the blur away once the picture is on screen', () => {
+    const tree = mount(
+      <StableMediaImage url="https://cdn.example.com/display.webp" cacheKey="display" thumbhash="thumbhash-base64" contentFit="contain" placeholderFrame={FRAME} />
+    );
+
+    renderer.act(() => { (loading(tree)[0].props.onDisplay as () => void)(); });
+
+    expect(blurs(tree)).toHaveLength(0);
+    expect(loading(tree)).toHaveLength(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('leaves the failure plate to draw its own blur, and draws this one again for a retry', () => {
+    vi.useFakeTimers();
+    try {
+      const tree = mount(
+        <StableMediaImage url="https://cdn.example.com/display.webp" cacheKey="display" thumbhash="thumbhash-base64" contentFit="contain" placeholderFrame={FRAME} />
+      );
+
+      exhaustImageLoad(tree);
+
+      expect(blurs(tree)).toHaveLength(0);
+      const plate = tree.root.findAll((node) => String(node.type) === 'pressable' && node.props.accessibilityLabel === 'Retry loading media');
+      expect(plate).toHaveLength(1);
+
+      renderer.act(() => { (plate[0].props.onPress as () => void)(); });
+
+      expect(loading(tree)).toHaveLength(1);
+      expect(loading(tree)[0].props.placeholder).toBeUndefined();
+      expect(blurs(tree)).toHaveLength(1);
+      renderer.act(() => tree.unmount());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps to how it began when a box arrives later, so the picture does not load again', () => {
+    const element = (frame: typeof FRAME | null) => (
+      <StableMediaImage url="https://cdn.example.com/display.webp" cacheKey="display" thumbhash="thumbhash-base64" contentFit="contain" placeholderFrame={frame} />
+    );
+    const tree = mount(element(null));
+
+    renderer.act(() => { tree.update(element(FRAME)); });
+
+    expect(loading(tree)[0].props.placeholder).toEqual({ thumbhash: 'thumbhash-base64' });
+    expect(blurs(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('keeps the image’s own placeholder when the place is not known', () => {
+    const tree = mount(
+      <StableMediaImage url="https://cdn.example.com/display.webp" cacheKey="display" thumbhash="thumbhash-base64" contentFit="contain" placeholderFrame={null} />
+    );
+
+    expect(loading(tree)[0].props.placeholder).toEqual({ thumbhash: 'thumbhash-base64' });
+    expect(blurs(tree)).toHaveLength(0);
+    renderer.act(() => tree.unmount());
+  });
+});
