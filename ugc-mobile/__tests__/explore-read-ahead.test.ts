@@ -2,10 +2,12 @@ import { QueryClient } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { DEFAULT_API_REQUEST_TIMEOUT_MS } from '@/lib/api-client';
 import {
   EXPLORE_READ_AHEAD_FILTERS,
   EXPLORE_READ_AHEAD_MAX_AGE_MS,
   EXPLORE_READ_AHEAD_WAIT_MS,
+  noteExploreOpening,
   noteShowcaseFeedReadAheadSupport,
   resetExploreReadAheadForTests,
   scheduleExploreReadAhead,
@@ -120,7 +122,7 @@ describe("Explore's read-ahead", () => {
     })).resolves.toBeNull();
   });
 
-  it('waits for a read-ahead still under way rather than ranking the page twice, but not for long', async () => {
+  it('waits for a read-ahead still under way rather than ranking the page twice, giving up only on one that never settles', async () => {
     vi.useFakeTimers();
     supported();
     let answer: (value: ShowcaseFeedReadAheadResponse) => void = () => {};
@@ -144,8 +146,37 @@ describe("Explore's read-ahead", () => {
       now: () => NOW,
     });
     const stuck = takeExploreReadAheadToken({ filters: EXPLORE_READ_AHEAD_FILTERS, identityUserId: 'user-1', now: () => NOW });
-    await vi.advanceTimersByTimeAsync(EXPLORE_READ_AHEAD_WAIT_MS);
+    let settled = false;
+    void stuck.then(() => { settled = true; });
+    // Only a request that never settles is given up on, and only once the API
+    // client would have given up on it itself.
+    expect(EXPLORE_READ_AHEAD_WAIT_MS).toBeGreaterThan(DEFAULT_API_REQUEST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(DEFAULT_API_REQUEST_TIMEOUT_MS);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(EXPLORE_READ_AHEAD_WAIT_MS - DEFAULT_API_REQUEST_TIMEOUT_MS);
     await expect(stuck).resolves.toBeNull();
+  });
+
+  // 2026-11-24: the owner's first Explore open after a cold launch waited ~4 s,
+  // threw away the ranking held for it, and ranked the page again; the
+  // counters showed holds and no claims.
+  it("hands Explore's first read a read-ahead that answers after 4.5 s, so the page is ranked once", async () => {
+    vi.useFakeTimers();
+    supported();
+    startExploreReadAhead({
+      api: api(() => new Promise((resolve) => { setTimeout(() => resolve(heldAnswer()), 4_500); })),
+      identityUserId: 'user-1',
+      queryClient,
+    });
+    const feed = { getShowcaseFeed: vi.fn(async () => ({ ...servedPage(), readAheadSupported: true })) };
+
+    const reading = showcaseFeedLaneQueryOptions(feed as never, EXPLORE_READ_AHEAD_FILTERS, 'user-1')
+      .queryFn({ pageParam: { offset: 0 } });
+    await vi.advanceTimersByTimeAsync(4_500);
+    await reading;
+
+    expect(feed.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed).toHaveBeenCalledWith(expect.objectContaining({ readAheadToken: TOKEN }));
   });
 
   it.each([
@@ -168,6 +199,43 @@ describe("Explore's read-ahead", () => {
 
     // An identity that arrives later in the launch (a sign-in) has its own.
     expect(startExploreReadAhead({ api: client, identityUserId: 'user-2', queryClient, now: () => now })).toBe(true);
+  });
+
+  // 2026-11-24 (production): a read-ahead and an ordinary ranked read of the
+  // same viewer started 34 ms apart and ranked side by side.
+  it('starts none once Explore is opening for that identity, though its lane has not begun to read', () => {
+    supported();
+    const client = api();
+
+    noteExploreOpening('user-1');
+    // Explore's lane is still empty and idle: its query subscribes after the
+    // screen's first commit, which is when an idle callback could run.
+    expect(queryClient.getQueryState(createShowcaseFeedQueryKey(EXPLORE_READ_AHEAD_FILTERS, 'user-1'))).toBeUndefined();
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-1', queryClient })).toBe(false);
+    expect(client.prepareShowcaseFeedReadAhead).not.toHaveBeenCalled();
+
+    // Another identity of the same launch (a sign-in before Explore saw it) still may.
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-2', queryClient })).toBe(true);
+  });
+
+  it('lets Explore opening join a read-ahead already under way, so the page is ranked once', async () => {
+    vi.useFakeTimers();
+    supported();
+    const client = api(() => new Promise((resolve) => { setTimeout(() => resolve(heldAnswer()), 2_000); }));
+    expect(startExploreReadAhead({ api: client, identityUserId: 'user-1', queryClient })).toBe(true);
+    noteExploreOpening('user-1');
+    const feed = { getShowcaseFeed: vi.fn(async () => ({ ...servedPage(), readAheadSupported: true })) };
+
+    const reading = showcaseFeedLaneQueryOptions(feed as never, EXPLORE_READ_AHEAD_FILTERS, 'user-1')
+      .queryFn({ pageParam: { offset: 0 } });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(feed.getShowcaseFeed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await reading;
+
+    expect(client.prepareShowcaseFeedReadAhead).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(feed.getShowcaseFeed).toHaveBeenCalledWith(expect.objectContaining({ readAheadToken: TOKEN }));
   });
 
   it('reads ahead for a guest identity too: new people meet the skeleton first', () => {

@@ -679,4 +679,29 @@ describe('feed event queue', () => {
     await expect(queue.enqueue(event(1))).resolves.toBe(true);
     await expect(queue.flush()).resolves.toBeUndefined();
   });
+
+  // 2026-11-24: every ranked first page (Explore's included) waits on a flush
+  // first, and a flush of an empty queue rewrote the same body to storage.
+  it('writes nothing to storage when a flush leaves the queue as it was', async () => {
+    const harness = createHarness();
+    const writes = vi.spyOn(harness.storage, 'setItem');
+    await harness.queue.enqueue(event(1));
+    await harness.queue.flush();
+    expect(harness.sendBatch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(harness.storage.value ?? 'null')).toMatchObject({ entries: [] });
+    writes.mockClear();
+
+    await harness.queue.flush();
+    await harness.queue.flush();
+    expect(writes).not.toHaveBeenCalled();
+
+    // A change is still written at once, and a write that failed is tried again.
+    writes.mockImplementationOnce(async () => { throw new Error('write failed'); });
+    await harness.queue.enqueue(event(2));
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(harness.storage.value ?? 'null')).toMatchObject({ entries: [] });
+    await harness.queue.flush();
+    expect(harness.storage.value).not.toBeNull();
+    expect(writes.mock.calls.length).toBeGreaterThan(1);
+  });
 });

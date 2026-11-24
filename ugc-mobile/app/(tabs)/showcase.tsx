@@ -3,7 +3,7 @@ import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/r
 import { router, useLocalSearchParams } from 'expo-router';
 import { MoreVertical, RefreshCw, Search, X } from 'lucide-react-native';
 import { useIsFocused, useScrollToTop } from '@react-navigation/native';
-import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AccessibilityInfo,
@@ -69,6 +69,7 @@ import {
   type ShowcaseFeedFilters,
 } from '@/lib/showcase-feed-query';
 import { runLaneRefresh, type LaneRefreshInFlight } from '@/lib/feed-fresh-ranking';
+import { noteExploreOpening } from '@/lib/explore-read-ahead';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import {
   SHOWCASE_ONSCREEN_VIEWABILITY,
@@ -494,13 +495,14 @@ export default function ShowcaseScreen() {
   // Keyed by identity like Home's lane: the first request waits for the stored
   // session, or a cold start ranks the lane twice (see home-dashboard).
   //
-  // Not read ahead from Home, though a first visit draws the skeleton for ~2 s
-  // (device sweep, 2026-11-03): a ranked lane's first page opens a feed session
-  // and stamps its deliveries served (`persist_ranked_feed_session`), and the
-  // next ranking reads those back as `served_recently`, so posts read ahead and
-  // never seen would be pushed down for this reader and counted as shown.
-  // Reading ahead needs a page the server ranks without marking it served until
-  // the app draws it.
+  // Its first page may have been ranked ahead from Home and held unserved
+  // (`lib/explore-read-ahead.ts`): the lane's first read claims it, or joins
+  // the read-ahead still under way. From this screen's first commit no new one
+  // starts for this identity: the lane begins to read only in the passive
+  // effects after it, and one started in between would rank the page twice.
+  useLayoutEffect(() => {
+    noteExploreOpening(identityUserId);
+  }, [identityUserId]);
   const showcaseQuery = useInfiniteQuery({ ...laneQueryOptions, enabled: !isAuthLoading });
   const feedSession = useMemo(
     () => getShowcaseFeedSessionContext(showcaseQuery.data?.pages),

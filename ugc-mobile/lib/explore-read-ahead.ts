@@ -1,6 +1,6 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 
-import type { MagicbookletApiClient } from './api-client';
+import { DEFAULT_API_REQUEST_TIMEOUT_MS, type MagicbookletApiClient } from './api-client';
 import {
   createShowcaseFeedQueryKey,
   getShowcaseFeedPageParams,
@@ -21,8 +21,14 @@ import type { ShowcaseFeedReadAheadResponse, ShowcaseFeedResponse } from './type
 // which writes nothing, and keeps only the token it gets back. The read Explore
 // makes when it draws the lane hands the token over (`readAheadToken`): the
 // server then persists that ranking and marks page one served, at the moment
-// it is shown, and answers in the time a reused session takes. A token that is
-// late, spent or unknown just ranks afresh, as Explore always did.
+// it is shown, and answers in the time a reused session takes. A token past its
+// time, spent or unknown just ranks afresh, as Explore always did.
+//
+// Explore opened while the read-ahead is still being ranked waits for it: it
+// was asked first, so it lands before a second ranking would. Until
+// 2026-11-24 Explore gave up after 4 s, which on a cold server threw the held
+// ranking away and then ranked again (4 s, the queued events, and a whole
+// ranking: the owner's slow first Explore that day, and holds with no claims).
 //
 // Only a server that has said it holds read-aheads is asked
 // (`readAheadSupported` on its For you pages, which Home's lane reads first):
@@ -45,8 +51,13 @@ export const EXPLORE_READ_AHEAD_FILTERS: ShowcaseFeedFilters = { category: 'medi
 export const EXPLORE_READ_AHEAD_DELAY_MS = 1_500;
 /** Under the server's two minutes, for the time the claim takes to arrive. */
 export const EXPLORE_READ_AHEAD_MAX_AGE_MS = 100_000;
-/** How long Explore waits on a read-ahead still under way before reading the page itself. */
-export const EXPLORE_READ_AHEAD_WAIT_MS = 4_000;
+/**
+ * How long Explore waits on a read-ahead still under way before reading the
+ * page itself: only a safety cap. The API client gives up on the request at
+ * its own deadline, which settles the wait with no token; this covers a
+ * request that never settles at all.
+ */
+export const EXPLORE_READ_AHEAD_WAIT_MS = DEFAULT_API_REQUEST_TIMEOUT_MS + 2_000;
 
 type HeldToken = { token: string; expiresAt: number };
 
@@ -60,6 +71,8 @@ let serverHoldsReadAheads = false;
 let entry: Entry | null = null;
 /** The identities this launch has read ahead for: one each, never a second. */
 const readAheadIdentities = new Set<string>();
+/** The identities Explore has opened for in this launch: none is read ahead for after that. */
+const exploreOpenedIdentities = new Set<string>();
 
 function laneOf(filters: ShowcaseFeedFilters | undefined) {
   return JSON.stringify(createShowcaseFeedQueryKey(filters, null).at(-1));
@@ -110,7 +123,7 @@ export function startExploreReadAhead({
   // The server holds one for any identity with a bearer token, a guest's
   // included (see the note at the top), and for no device without one.
   if (!serverHoldsReadAheads || !identity) return false;
-  if (readAheadIdentities.has(identity)) return false;
+  if (readAheadIdentities.has(identity) || exploreOpenedIdentities.has(identity)) return false;
   const startedAt = now();
   const laneKey = createShowcaseFeedQueryKey(EXPLORE_READ_AHEAD_FILTERS, identity);
   const lane = queryClient.getQueryState(laneKey);
@@ -153,16 +166,20 @@ export function startExploreReadAhead({
 /**
  * The token for the read that is about to draw Explore's first page: once,
  * for the identity it was read ahead for, while it is good. A read-ahead still
- * under way is waited for, up to EXPLORE_READ_AHEAD_WAIT_MS, rather than
- * ranking the page a second time. Null for any other lane or page.
+ * under way is waited for until it settles (EXPLORE_READ_AHEAD_WAIT_MS at the
+ * most) rather than ranking the page a second time, and `whileWaiting` runs as
+ * that wait begins, so the caller can get its fallback ready alongside. Null
+ * for any other lane or page.
  */
 export async function takeExploreReadAheadToken({
   filters,
   identityUserId,
+  whileWaiting,
   now = Date.now,
 }: {
   filters: ShowcaseFeedFilters | undefined;
   identityUserId: string | null | undefined;
+  whileWaiting?: () => void;
   now?: () => number;
 }): Promise<string | null> {
   const identity = identityUserId?.trim();
@@ -176,6 +193,7 @@ export async function takeExploreReadAheadToken({
   if (held.state === 'ready') {
     token = held;
   } else {
+    whileWaiting?.();
     let timer: ReturnType<typeof setTimeout> | undefined;
     token = await Promise.race([
       held.request,
@@ -186,6 +204,20 @@ export async function takeExploreReadAheadToken({
     clearTimeout(timer);
   }
   return token && token.expiresAt > now() ? token.token : null;
+}
+
+/**
+ * Explore is opening for this identity: from here its own read ranks the page,
+ * or joins a read-ahead already under way, and no read-ahead starts for it.
+ * The lane check in `startExploreReadAhead` sees Explore only once its query
+ * has begun to read, in the passive effects after the screen's first commit;
+ * an idle callback that ran before them would rank the page a second time
+ * beside Explore's own read. Explore calls this from a layout effect, which
+ * runs inside that commit.
+ */
+export function noteExploreOpening(identityUserId: string | null | undefined) {
+  const identity = identityUserId?.trim();
+  if (identity) exploreOpenedIdentities.add(identity);
 }
 
 /**
@@ -230,4 +262,5 @@ export function resetExploreReadAheadForTests() {
   serverHoldsReadAheads = false;
   entry = null;
   readAheadIdentities.clear();
+  exploreOpenedIdentities.clear();
 }
