@@ -3,6 +3,7 @@ import { ActivityIndicator, View, type LayoutChangeEvent } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
+  ReduceMotion,
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
@@ -20,17 +21,13 @@ import {
   mediaSparkleLook,
   mediaSparkleTrioScale,
   sparklePath,
+  type MediaSparkleState,
 } from '@/lib/media-loading-sparkle';
 import { useReducedMotion } from '@/lib/motion';
 import { mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
-/**
- * Where the wait stands: still waiting (`loading`), over because the media is
- * ready (`ready`: the sparkles fade as it comes in), or over any other way, a
- * failure or the screen going (`gone`: they go at once).
- */
-export type MediaSparkleState = 'loading' | 'ready' | 'gone';
+export type { MediaSparkleState } from '@/lib/media-loading-sparkle';
 
 type Phase = 'idle' | 'waiting' | 'shown' | 'leaving';
 
@@ -40,30 +37,38 @@ const TRIO_COLORS = [mediaColors.sparkleViolet, mediaColors.sparkleCream];
 const fill = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 } as const;
 
 /**
- * When sparkles last went away while they were showing, their wait not over:
- * the viewer's "Loading preview" screen gives way to the post's page, whose
- * clip is still on its way. Sparkles that start within
- * `MEDIA_SPARKLE_HANDOFF_MS` of that carry straight on, rather than leaving the
- * screen bare for their own wait (filmed on the Pixel 9a emulator, 2026-11-23).
+ * When sparkles of each hand-off (`handoff`) last went away while they were
+ * showing, their wait not over: the viewer's "Loading preview" screen gives
+ * way to the post's page, whose clip is still on its way. Sparkles of the same
+ * hand-off that start within `MEDIA_SPARKLE_HANDOFF_MS` of that carry straight
+ * on, rather than leaving the screen bare for their own wait (filmed on the
+ * Pixel 9a emulator, 2026-11-23). Only the first to start takes it over, and a
+ * player of another surface never does: a lightbox closed mid-wait must not
+ * hurry the next clip's sparkles on.
  */
-let sparklesCutShortAt = Number.NEGATIVE_INFINITY;
+const cutShortAt = new Map<string, number>();
 
 /**
  * Three of the logo's sparkles twinkling on a black screen while a clip or a
  * post is on its way (`lib/media-loading-sparkle.ts`), in place of the
  * spinner. Mount it for as long as the wait can last and say how it stands
- * with `state`: the sparkles show once the wait passes `delayMs`, and fade
- * after `ready`. Read to a screen reader as `label` while it waits, as the
- * spinner was. Fills and centres in its parent, and never takes a touch.
+ * with `state` (`mediaSparkleStateFor` reads it from a player's status): the
+ * sparkles show once the wait passes `delayMs`, and fade after `ready`. Read
+ * to a screen reader as `label` while it waits, as the spinner was, from a
+ * small view at the centre that covers nothing else. Fills its parent and
+ * never takes a touch.
  */
 export function MediaLoadingSparkle({
   state,
   label,
   delayMs = MEDIA_SPARKLE_DELAY_MS,
+  handoff,
 }: {
   state: MediaSparkleState;
   label: string;
   delayMs?: number;
+  /** A name shared by the loaders that hand over to one another, as the viewer's black screen does to its post's page. */
+  handoff?: string;
 }) {
   const reducedMotion = useReducedMotion();
   // Unknown until the box is measured; `null` for a box that keeps the spinner.
@@ -74,7 +79,8 @@ export function MediaLoadingSparkle({
 
   useEffect(() => {
     if (state === 'loading') {
-      setPhase((current) => (current === 'shown' ? current : 'waiting'));
+      // Waiting again during the fade: they carry on, rather than vanish for the delay and come back.
+      setPhase((current) => (current === 'shown' || current === 'leaving' ? 'shown' : 'waiting'));
       return;
     }
     setPhase((current) => (current === 'shown' && state === 'ready' && fades ? 'leaving' : 'idle'));
@@ -83,21 +89,26 @@ export function MediaLoadingSparkle({
   useEffect(() => {
     if (phase !== 'waiting' && phase !== 'leaving') return undefined;
     const next: Phase = phase === 'waiting' ? 'shown' : 'idle';
-    const sinceCutShort = Date.now() - sparklesCutShortAt;
-    const carriesOn = sinceCutShort >= 0 && sinceCutShort < MEDIA_SPARKLE_HANDOFF_MS;
-    const wait = phase === 'leaving' ? MEDIA_SPARKLE_FADE_MS : carriesOn ? 0 : Math.max(0, delayMs);
+    let wait = phase === 'leaving' ? MEDIA_SPARKLE_FADE_MS : Math.max(0, delayMs);
+    if (phase === 'waiting' && handoff) {
+      const since = Date.now() - (cutShortAt.get(handoff) ?? Number.NEGATIVE_INFINITY);
+      if (since >= 0 && since < MEDIA_SPARKLE_HANDOFF_MS) {
+        cutShortAt.delete(handoff);
+        wait = 0;
+      }
+    }
     const timer = setTimeout(() => setPhase((current) => (current === phase ? next : current)), wait);
     return () => clearTimeout(timer);
-  }, [phase, delayMs]);
+  }, [phase, delayMs, handoff]);
 
-  // Gone while showing and still waiting: the next sparkles carry on from these.
+  // Gone while showing and still waiting: the next sparkles of the hand-off carry on from these.
   const showing = useRef(false);
   useEffect(() => {
     showing.current = phase === 'shown' && state === 'loading';
   }, [phase, state]);
   useEffect(() => () => {
-    if (showing.current) sparklesCutShortAt = Date.now();
-  }, []);
+    if (handoff && showing.current) cutShortAt.set(handoff, Date.now());
+  }, [handoff]);
 
   const waiting = state === 'loading';
   // Known in the render that sees `ready`, so the drawing stays mounted into its fade.
@@ -115,28 +126,46 @@ export function MediaLoadingSparkle({
   return (
     <View
       pointerEvents="none"
+      importantForAccessibility="no"
       onLayout={measure}
-      {...(waiting
-        ? { accessible: true, accessibilityRole: 'progressbar' as const, accessibilityLabel: label }
-        : { accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const })}
       style={{ ...fill, alignItems: 'center', justifyContent: 'center' }}
     >
-      {!drawn ? null : scale === null ? <SpinnerInstead /> : (
-        <SparkleTrio scale={scale} leaving={leaving} reducedMotion={reducedMotion} />
-      )}
+      {/* The screen reader's element: small and centred, so a reader touching the screen's
+          own controls (Back, Mute, a slide's play) finds them, not this. */}
+      <View
+        {...(waiting
+          ? { accessible: true, accessibilityRole: 'progressbar' as const, accessibilityLabel: label }
+          : { accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const })}
+        style={{ minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' }}
+      >
+        {!drawn ? null : scale === null ? <SpinnerInstead /> : (
+          <SparkleTrio scale={scale} leaving={leaving} reducedMotion={reducedMotion} />
+        )}
+      </View>
     </View>
   );
 }
 
-/** A clock in milliseconds for the twinkle, started as the sparkles mount. */
+/**
+ * A clock in milliseconds for the twinkle, started as the sparkles mount. It
+ * runs whatever the phone's Reduce Motion says (Reanimated's default would
+ * jump it to its end and stop it there, every sparkle dim): under Reduce
+ * Motion the sparkles still brighten and dim, they only do not grow.
+ */
 function useSparkleClock() {
   const time = useSharedValue(0);
   useEffect(() => {
     time.value = 0;
     time.value = withRepeat(
-      withTiming(MEDIA_SPARKLE_CLOCK_SPAN_MS, { duration: MEDIA_SPARKLE_CLOCK_SPAN_MS, easing: Easing.linear }),
+      withTiming(MEDIA_SPARKLE_CLOCK_SPAN_MS, {
+        duration: MEDIA_SPARKLE_CLOCK_SPAN_MS,
+        easing: Easing.linear,
+        reduceMotion: ReduceMotion.Never,
+      }),
       -1,
       false,
+      undefined,
+      ReduceMotion.Never,
     );
     return () => cancelAnimation(time);
   }, [time]);

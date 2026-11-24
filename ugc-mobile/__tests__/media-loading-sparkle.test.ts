@@ -7,6 +7,7 @@ import {
   MEDIA_SPARKLE_FULL_BOX,
   MEDIA_SPARKLE_TRIO,
   mediaSparkleLook,
+  mediaSparkleStateFor,
   mediaSparkleTrioScale,
   mediaSparkleTwinkle,
   sparklePath,
@@ -75,6 +76,19 @@ describe('loading sparkle rules', () => {
     expect(still.scale).toBe(1);
     expect(mediaSparkleLook(peak, 0, MEDIA_SPARKLE_FADE_MS / 2, false).opacity).toBeCloseTo(0.5);
     expect(mediaSparkleLook(peak, 0, MEDIA_SPARKLE_FADE_MS, false).opacity).toBe(0);
+  });
+
+  it('reads a player\'s wait from its status: waiting while it loads, ready to fade when it can play, gone otherwise', () => {
+    expect(mediaSparkleStateFor('idle')).toBe('loading');
+    expect(mediaSparkleStateFor('loading')).toBe('loading');
+    expect(mediaSparkleStateFor('readyToPlay')).toBe('ready');
+    expect(mediaSparkleStateFor('error')).toBe('gone');
+    // The reel's zoom has not landed: nothing yet, and a clip ready by then needs no fade.
+    expect(mediaSparkleStateFor('loading', { shown: false })).toBe('gone');
+    expect(mediaSparkleStateFor('readyToPlay', { shown: false })).toBe('ready');
+    // A player that has failed or given up waiting ends it, whatever its status still says.
+    expect(mediaSparkleStateFor('loading', { failed: true })).toBe('gone');
+    expect(mediaSparkleStateFor('readyToPlay', { failed: true })).toBe('gone');
   });
 
   it('runs on a clock whose loop has no seam', () => {

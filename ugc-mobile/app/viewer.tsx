@@ -38,6 +38,7 @@ import { isRemovedFromViewer, reconcileViewerSessionItems, removeViewerSessionIt
 import { isVideoPlayerHandedBack } from '@/lib/video-player-loans';
 import { FeedMediaFrame } from '@/components/feed-media-frame';
 import { MediaLoadingSparkle } from '@/components/media-loading-sparkle';
+import { mediaSparkleStateFor } from '@/lib/media-loading-sparkle';
 import { LetterboxBands } from '@/components/letterbox-bands';
 import { PostDetailsPage } from '@/components/post-details-page';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
@@ -256,6 +257,12 @@ const DOUBLE_TAP_SAVE_HEART_SIZE = 90;
 const VIEWER_PLAY_BADGE_SIZE = 72;
 /** How long after a zoom has uncovered the reel its neighbours' players are made. */
 const NEIGHBOUR_PLAYERS_DELAY_MS = 400;
+/**
+ * The loading sparkles of the black "Loading preview" screen and of a post's
+ * clip share this hand-off: when the post arrives mid-wait, the page's carry
+ * straight on from the screen's (`MediaLoadingSparkle`'s `handoff`).
+ */
+const VIEWER_SPARKLE_HANDOFF = 'viewer';
 
 const ViewerPlaybackContext = createContext<ReturnType<typeof createViewerPlaybackHandoff> | null>(null);
 /** The reel has started to go off screen (lib/use-screen-leaving.ts): its videos are silent from then on. */
@@ -1523,7 +1530,7 @@ function ImmersivePreviewViewer() {
       <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
         {shellHidesBar}
         {/* The logo's three sparkles on the black screen while the post is on its way (owner, 2026-11-23). */}
-        <MediaLoadingSparkle state="loading" label="Loading preview" />
+        <MediaLoadingSparkle state="loading" label="Loading preview" handoff={VIEWER_SPARKLE_HANDOFF} />
       </ViewerShell>
     );
   }
@@ -3407,10 +3414,9 @@ function ActiveVideoAttempt({
       </DoubleTapPressable>
       {/* The logo's three sparkles until the clip can play, fading as it does (owner, 2026-11-23). */}
       <MediaLoadingSparkle
-        state={zoomLanded && !playbackFailed && (status === 'loading' || status === 'idle')
-          ? 'loading'
-          : status === 'readyToPlay' && !playbackFailed ? 'ready' : 'gone'}
+        state={mediaSparkleStateFor(status, { shown: zoomLanded, failed: playbackFailed })}
         label="Loading video"
+        handoff={VIEWER_SPARKLE_HANDOFF}
       />
       {/* Centred on the screen like the loading spinner and the paused badge.
           The trailing inset keeps the card clear of the rail, and the leading

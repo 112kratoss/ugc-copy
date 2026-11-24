@@ -102,10 +102,10 @@ it('shows loading feedback without starting a result preview automatically', () 
   expect(state.players[0].play).not.toHaveBeenCalled();
   renderer.act(() => state.players[0].listener?.({ status: 'readyToPlay' }));
   expect(view.root.findAllByType('loading' as never)).toHaveLength(0);
-  // A clip that can play ends the wait with the sparkle's burst.
+  // A clip that can play ends the wait as ready: the sparkles fade as it comes in.
   expect(view.root.findByType('sparkle-end' as never).props.state).toBe('ready');
 });
-it('ends the wait without a burst when the clip fails', () => {
+it('ends the wait at once, with no fade, when the clip fails', () => {
   const view = mount();
   renderer.act(() => state.players[0].listener?.({ status: 'error' }));
   expect(view.root.findAllByType('loading' as never)).toHaveLength(0);

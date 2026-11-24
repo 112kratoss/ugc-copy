@@ -19,14 +19,36 @@
  */
 import { MEDIA_SKETCH_DELAY_MS } from './media-sketch';
 
+/**
+ * Where the wait stands: still waiting (`loading`), over because the media is
+ * ready (`ready`: the sparkles fade as it comes in), or over any other way, a
+ * failure or the screen going (`gone`: they go at once).
+ */
+export type MediaSparkleState = 'loading' | 'ready' | 'gone';
+
+/**
+ * How a video player's wait stands for the sparkles, from expo-video's status.
+ * `shown`: whether the screen may draw them yet (the viewer's reel waits for
+ * its zoom to land); `failed`: playback has failed, whatever the status says.
+ */
+export function mediaSparkleStateFor(
+  status: string,
+  { shown = true, failed = false }: { shown?: boolean; failed?: boolean } = {},
+): MediaSparkleState {
+  if (failed) return 'gone';
+  if (status === 'loading' || status === 'idle') return shown ? 'loading' : 'gone';
+  return status === 'readyToPlay' ? 'ready' : 'gone';
+}
+
 /** Wait this long after the wait starts before anything is drawn: the picture sketch's wait. */
 export const MEDIA_SPARKLE_DELAY_MS = MEDIA_SKETCH_DELAY_MS;
 /**
- * Sparkles that start this soon after others went away mid-wait carry
- * straight on with no wait of their own: the viewer's black screen handing
- * over to the post's page while its clip is still coming. The page's own start
- * once the reel has landed, about 350 ms after the black screen went on the
- * Pixel 9a emulator (2026-11-23), so a quarter of a second missed it.
+ * Sparkles that start this soon after others of the same hand-off went away
+ * mid-wait carry straight on with no wait of their own: the viewer's black
+ * screen handing over to the post's page while its clip is still coming. The
+ * page's own start once the reel has landed, about 350 ms after the black
+ * screen went on the Pixel 9a emulator (2026-11-23), so a quarter of a second
+ * missed it.
  */
 export const MEDIA_SPARKLE_HANDOFF_MS = 1000;
 

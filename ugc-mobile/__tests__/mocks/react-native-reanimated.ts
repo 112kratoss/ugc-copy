@@ -139,6 +139,13 @@ export function runOnUI<T extends (...args: never[]) => unknown>(fn: T) {
   return fn;
 }
 
+/** Reanimated's own values: how an animation answers the phone's Reduce Motion setting. */
+export const ReduceMotion = {
+  System: 'system',
+  Always: 'always',
+  Never: 'never',
+} as const;
+
 export const Extrapolation = {
   CLAMP: 'clamp',
   EXTEND: 'extend',
