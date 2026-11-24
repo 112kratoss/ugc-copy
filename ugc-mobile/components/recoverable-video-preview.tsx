@@ -1,8 +1,10 @@
 import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useIsFocused } from '@react-navigation/native';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
+import { MediaLoadingSparkle } from '@/components/media-loading-sparkle';
+import { mediaSparkleStateFor } from '@/lib/media-loading-sparkle';
 import { SecondaryButton } from '@/components/ui';
 import { useNativePreviewPlayback } from '@/lib/use-native-preview-playback';
 import { cachedVideoSource } from '@/lib/media-source';
@@ -186,11 +188,8 @@ function VideoPreviewAttempt({
         // makes it take the touches, so the controls under it cannot be pressed.
         <View style={{ position: 'absolute', inset: 0, backgroundColor: StyleSheet.flatten(style)?.backgroundColor ?? mediaColors.mediaGround }} />
       ) : null}
-      {!timedOut && (status === 'loading' || status === 'idle') ? (
-        <View pointerEvents="none" style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center' }}>
-          <ActivityIndicator accessibilityLabel="Loading video" color={theme.colors.primary} />
-        </View>
-      ) : null}
+      {/* The logo's three sparkles on the player's black screen until the clip can play (owner, 2026-11-23). */}
+      <MediaLoadingSparkle state={mediaSparkleStateFor(status, { shown: !timedOut })} label="Loading video" />
       {failed ? (
         <View style={{ position: 'absolute', inset: 0, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <View style={{ backgroundColor: theme.colors.panel, borderRadius: appTheme.radii.xl, borderCurve: 'continuous', padding: 20, gap: 12 }}>

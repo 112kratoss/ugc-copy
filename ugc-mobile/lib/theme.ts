@@ -201,6 +201,15 @@ export const mediaColors = {
   mediaGround: '#000000',
   // A small glass chip sitting on a picture: a creator, a state glyph.
   mediaChip: 'rgba(3,4,13,0.62)',
+  // The logo's colours, sampled from assets/images/icon.png, for the three
+  // sparkles on a black screen while a clip or a post is on its way
+  // (components/media-loading-sparkle.tsx): the sparkle, which runs from its
+  // peach upper left to its coral lower right, the booklet's violet spine and
+  // its cream dot.
+  sparkleFrom: '#ffa38c',
+  sparkleTo: '#ff7f60',
+  sparkleViolet: '#cf8df1',
+  sparkleCream: '#fff8ed',
 } as const;
 
 /**
