@@ -79,6 +79,7 @@ import {
   restorePersistedAccountState,
 } from './persisted-account-state';
 import { clearPersistedHomeFeed } from './persisted-home-feed';
+import { clearPersistedHomeShelf } from './persisted-home-shelf';
 import { clearComposerDraftsForUser } from './post-composer-draft-resume';
 import { devicePushQueryKey } from './push-registration';
 import { clearSearchHistory } from './search-history';
@@ -1586,6 +1587,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // The home feed, the recent searches and the account numbers saved for
       // the next launch are this person's.
       clearPersistedHomeFeed(),
+      clearPersistedHomeShelf(),
       clearSearchHistory(),
       clearPersistedAccountState(),
       // So are the stills read of clips this person could see.
@@ -2023,6 +2025,7 @@ async function recoverInvalidAuthSession(error: unknown) {
   forgetLastPushRegistration();
   await clearPersistedSupabaseAuthSession();
   await clearPersistedHomeFeed();
+  await clearPersistedHomeShelf();
   await clearSearchHistory();
   await clearPersistedAccountState();
   clearVideoStills();

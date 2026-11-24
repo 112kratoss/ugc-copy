@@ -271,6 +271,11 @@ vi.mock('@/lib/persisted-home-feed', () => ({
   schedulePersistHomeFeed: vi.fn(),
 }));
 
+vi.mock('@/lib/persisted-home-shelf', () => ({
+  cancelScheduledPersistHomeShelf: vi.fn(),
+  schedulePersistHomeShelf: vi.fn(),
+}));
+
 // Explore's read-ahead, scheduled and started as Home asks for it.
 const readAheadMocks = vi.hoisted(() => ({
   schedule: vi.fn((_start: () => void) => vi.fn()),

@@ -66,6 +66,7 @@ import { OnboardingProvider, useOnboarding } from '@/lib/onboarding';
 import { installMediaQueryRetention, pruneInactiveMediaQueries } from '@/lib/media-query-retention';
 import { preloadPersistedAccountState } from '@/lib/persisted-account-state';
 import { restorePersistedHomeFeed } from '@/lib/persisted-home-feed';
+import { restorePersistedHomeShelf } from '@/lib/persisted-home-shelf';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import {
   onboardingAnimation,
@@ -153,6 +154,9 @@ AppState.addEventListener('memoryWarning', () => pruneInactiveMediaQueries(query
 // rest of the app starts, so a returning launch draws posts rather than
 // skeletons once the session is restored. See lib/persisted-home-feed.
 void restorePersistedHomeFeed(queryClient);
+// And the "Make this" shelf above it, under the identity it was saved for
+// (lib/persisted-home-shelf).
+void restorePersistedHomeShelf(queryClient);
 // Whether guests here may be promised the welcome credits, read before Home
 // draws its top bar (lib/welcome-promise).
 void loadWelcomePromise();

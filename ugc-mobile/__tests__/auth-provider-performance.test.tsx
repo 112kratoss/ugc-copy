@@ -96,6 +96,7 @@ vi.mock('../lib/guest-merge-ticket-storage', () => ({
   storeGuestMergeTicket: vi.fn(async () => undefined),
 }));
 vi.mock('../lib/persisted-home-feed', () => ({ clearPersistedHomeFeed: state.clearPersistedHomeFeed }));
+vi.mock('../lib/persisted-home-shelf', () => ({ clearPersistedHomeShelf: vi.fn(async () => undefined) }));
 vi.mock('../lib/search-history', () => ({ clearSearchHistory: state.clearSearchHistory }));
 vi.mock('../lib/persisted-account-state', () => ({
   clearPersistedAccountState: state.clearPersistedAccountState,
