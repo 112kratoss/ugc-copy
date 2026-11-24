@@ -35,7 +35,7 @@ npm run ops:feed-algorithm -- experiment srm --key <experiment_key>
 - `list`, `scorecard` and `experiment srm` only read. `activate` and `experiment start|stop` print their plan and change nothing without `--apply`; with it, each makes one service-role call (`activate_feed_algorithm_version`, `create_feed_experiment` or `set_feed_experiment_status`) and prints what it returns. `list` and the dry runs work before the v3 migration; `scorecard` and every `--apply` need the functions it adds.
 - They refuse up front what those functions would refuse: `activate` takes a `draft`, `shadow` or `retired` version (a `retired` one is a rollback, see Rollback) and refuses the one already `active`, an experiment arm must be `active` or `shadow`, experiment keys are unique, and `experiment stop` leaves a `completed` or `cancelled` experiment alone.
 - Basis points: 10000 = 100%. `--traffic-bps` is the share of all viewers enrolled; `--treatment-bps` is the treatment's share of the enrolled viewers, and control gets the rest (`--treatment-bps 3000` gives control 7000). Both take 1–10000.
-- A change reaches feed sessions started after it. A session already open keeps the list it was ranked with for its next pages (up to two hours).
+- A change reaches feed sessions started after it, within a minute: each server instance keeps the active version, the versions it has served and the running experiment for 60 seconds (`FEED_CONFIG_CACHE_TTL_MS`, `src/lib/feed-config-cache.ts`, since 2026-11-24), so for up to a minute after an `--apply` some new sessions are still ranked on the old one. An experiment that reaches its `ends_at` stops enrolling at that moment. A viewer's arm is never cached: it is read from `feed_experiment_assignments` on every request. A session already open keeps the list it was ranked with for its next pages (up to two hours).
 - The exit code is 1 after a usage error, a refusal or a database error.
 
 ## Reading the scorecard
@@ -148,7 +148,7 @@ What it does not do:
 
 Rolling back means making the previous version active again.
 
-- **An experiment**: `experiment stop --key <key> --status cancelled --apply`. Every viewer is back on the active version at their next feed session.
+- **An experiment**: `experiment stop --key <key> --status cancelled --apply`. Every viewer is back on the active version at their next feed session started a minute or more after the stop.
 - **An activation**: activate the previous version again. `activate_feed_algorithm_version` accepts a `retired` target and clears its `retired_at` in the same statement that retires the current version (`feed_algorithm_versions_lifecycle_check` forbids a `retired_at` earlier than the new `activated_at`, so the RPC does it, not you):
 
   ```bash
@@ -157,7 +157,7 @@ Rolling back means making the previous version active again.
 
 ## Kill switches
 
-Each v3 mechanism has a key in the version's JSON that switches it off. No CLI command edits them today: a change is a SQL update of the row, and it reaches feed sessions started after it.
+Each v3 mechanism has a key in the version's JSON that switches it off. No CLI command edits them today: a change is a SQL update of the row, and it reaches feed sessions started after it, within a minute (the per-instance cache above).
 
 | Key | Column | Off at | Switches off |
 | --- | --- | --- | --- |

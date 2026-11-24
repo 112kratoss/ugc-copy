@@ -184,6 +184,8 @@ describe('/api/showcase/feed route', () => {
       resource: 'all',
       countryCode: null,
       bypassCache: true,
+      // A signed-in For you read's phases are kept for the sampled production log.
+      onPhaseTiming: expect.any(Function),
     });
   });
 

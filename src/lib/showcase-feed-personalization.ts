@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { createFeedConfigCache } from '@/lib/feed-config-cache';
 import { resolveFeedExperimentAssignment } from '@/lib/feed-experiments';
 import {
   filterFeedVisibility,
@@ -641,7 +642,17 @@ function normalizeAlgorithmConfig(row: ActiveAlgorithmRow): ActiveAlgorithmConfi
   };
 }
 
-async function getAlgorithmVersion(
+/**
+ * Algorithm versions as one instance last read them, for `FEED_CONFIG_CACHE_TTL_MS`
+ * (the active one under `active`, any other by id). Every ranked page, cursor
+ * page and read-ahead read one, and on an idle database that read alone cost
+ * 300-800 ms (perf loop 2026-11-24). An activation, a rollback or a kill-switch
+ * edit therefore reaches new sessions within a minute, not at once
+ * (`docs/feed-algorithm-operations.md`).
+ */
+const algorithmVersionCache = createFeedConfigCache<ActiveAlgorithmConfig | null>();
+
+async function readAlgorithmVersion(
   serviceClient: SupabaseClient,
   id?: string,
 ) {
@@ -652,8 +663,25 @@ async function getAlgorithmVersion(
     ? query.eq('id', id)
     : query.eq('algorithm_key', 'for-you-rules').eq('status', 'active');
   const { data, error } = await query.maybeSingle();
-  if (error || !data) return null;
+  // A failed read is not an answer: thrown, so the cache keeps nothing of it.
+  if (error) throw error;
+  if (!data) return null;
   return normalizeAlgorithmConfig(data as ActiveAlgorithmRow);
+}
+
+async function getAlgorithmVersion(
+  serviceClient: SupabaseClient,
+  id?: string,
+) {
+  try {
+    return await algorithmVersionCache.read(
+      serviceClient,
+      id ? `id:${id}` : 'active',
+      () => readAlgorithmVersion(serviceClient, id),
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -1363,6 +1391,15 @@ async function rankFreshCandidates({
   viewerUserId: string | null;
   onPhaseTiming?: (phase: string, durationMs: number) => void;
 }): Promise<{ ranked: RankedShowcaseItem[]; randomSeed: number; seedBucket: number | null }> {
+  // The recent top-up needs only the algorithm's item limit, and a ranking
+  // needed it on every one of the 52 For you rankings production logged on
+  // 2026-11-23/24 (the pool hydrates fewer than 60 posts), each time after
+  // hydration, ~135 ms p50 in series. So it starts here, beside the candidate
+  // read, and settles (it never rejects) for the merge below to use or drop.
+  const fallbackRead = timed('fallback', () => fallbackItems(algorithm.eligibleItemLimit)).then(
+    (items) => ({ ok: true as const, items }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
   const featureRows = await timed('candidate_rpc', () => loadCandidateFeatures({
     algorithm,
     anonymousKeyHash,
@@ -1384,6 +1421,13 @@ async function rankFreshCandidates({
   const configuredFeatureRows = sortedFeatureRows && returnsV3Columns(algorithm.retrieval.candidateRpc)
     ? reserveColdCandidateRows(sortedFeatureRows, algorithm.eligibleItemLimit)
     : sortedFeatureRows;
+  // The ranked pool is hydrated once the top-up has settled (it usually has:
+  // it is shorter than the candidate read), so the posts the two pools share,
+  // nearly all of them with a small catalog, are hydrated once, by the top-up,
+  // and the pool finds them in the request's hydration cache.
+  const settledFallback = configuredFeatureRows?.length
+    ? await timed('fallback_wait', () => fallbackRead)
+    : null;
   const hydratedFeatureItems = configuredFeatureRows?.length
     ? await timed('hydration', () => hydrateEligibleCandidates({
       eligibleItemLimit: algorithm.eligibleItemLimit,
@@ -1392,9 +1436,13 @@ async function rankFreshCandidates({
     }))
     : [];
   const fallbackTarget = algorithm.eligibleItemLimit - hydratedFeatureItems.length;
-  const filteredFallbackItems = fallbackTarget > 0
-    ? await timed('fallback', () => fallbackItems(algorithm.eligibleItemLimit))
-    : [];
+  let filteredFallbackItems: ShowcaseFeedItem[] = [];
+  if (fallbackTarget > 0) {
+    const fallback = settledFallback ?? await timed('fallback_wait', () => fallbackRead);
+    // A failed top-up fails the page only when the page needed it, as before.
+    if (!fallback.ok) throw fallback.error;
+    filteredFallbackItems = fallback.items;
+  }
   const mergedCandidateItems = mergeUniqueFeedItems(hydratedFeatureItems, filteredFallbackItems);
   const featureRowsByPostId = new Map(
     (configuredFeatureRows ?? []).map((row) => [row.postId, row]),

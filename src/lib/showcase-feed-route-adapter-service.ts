@@ -1,6 +1,6 @@
 import 'server-only';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
-import { logBackendRouteError } from '@/lib/backend-logger';
+import { logBackendInfo, logBackendRouteError } from '@/lib/backend-logger';
 
 import { after, NextResponse } from 'next/server';
 
@@ -60,6 +60,8 @@ type ShowcaseFeedRouteDependencies = {
   runAfterResponse?: RunAfterResponse;
   logError?: typeof logBackendRouteError;
   withProviderFetchRequestId?: typeof withProviderFetchRequestId;
+  /** The draw that samples a read's phase log (`logSampledFeedPhases`); `Math.random` by default. */
+  random?: () => number;
 };
 
 function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undefined) {
@@ -79,7 +81,59 @@ function resolveDependencies(dependencies: ShowcaseFeedRouteDependencies | undef
     runAfterResponse: dependencies?.runAfterResponse ?? ((task) => after(task)),
     logError: dependencies?.logError ?? logBackendRouteError,
     withProviderFetchRequestId: dependencies?.withProviderFetchRequestId ?? withProviderFetchRequestId,
+    random: dependencies?.random ?? Math.random,
   };
+}
+
+/** About one signed-in For you read in this many is logged with its phases, and every slow one. */
+const FEED_PHASE_LOG_SAMPLE_RATE = 0.1;
+/** A read at least this slow (from the request's arrival at the route) is always logged. */
+const FEED_PHASE_LOG_SLOW_MS = 2_000;
+
+/**
+ * One production log line of a signed-in For you read's phases (speed round 2,
+ * 2026-11-24): about one read in ten, and every read slower than two seconds,
+ * so the first-page waits can be read live without the monitor's header. Its
+ * fields are durations and fixed labels only: never the reader's id, token,
+ * address or query string (the logger adds the request id, as on every line).
+ */
+function logSampledFeedPhases({
+  admissionMs,
+  claim,
+  cursor,
+  fresh,
+  offset,
+  phases,
+  random,
+  readAhead,
+  totalMs,
+}: {
+  admissionMs: number | null;
+  claim: boolean | null;
+  cursor: boolean;
+  fresh: boolean;
+  offset: number;
+  phases: Map<string, number>;
+  random: () => number;
+  readAhead: boolean;
+  totalMs: number;
+}) {
+  if (process.env.VERCEL_ENV !== 'production') return;
+  const slow = totalMs >= FEED_PHASE_LOG_SLOW_MS;
+  if (!slow && !(random() < FEED_PHASE_LOG_SAMPLE_RATE)) return;
+  logBackendInfo('showcase_feed_phase_timing', {
+    reason: slow ? 'slow' : 'sampled',
+    totalMs: Math.round(totalMs),
+    // From the request's arrival at the route to the handler: token check, session and lifecycle.
+    admissionMs: admissionMs === null ? null : Math.round(admissionMs),
+    firstPage: !cursor && offset === 0,
+    cursorPage: cursor,
+    offsetPage: !cursor && offset > 0,
+    readAhead,
+    readAheadClaim: claim === null ? null : claim ? 'claim' : 'claim_miss',
+    fresh,
+    phases: Object.fromEntries([...phases].map(([phase, durationMs]) => [phase, Math.round(durationMs)])),
+  });
 }
 
 async function getViewerUserId(
@@ -250,7 +304,9 @@ async function handleShowcaseFeedGET(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
   startedReadLimit: StartedShowcaseFeedReadLimit | null,
+  receivedAt: number | null,
 ) {
+  const handlerStartedAt = performance.now();
   try {
     const hasAuthorizationHeader = Boolean(request.headers.get('Authorization'));
     const performanceMonitorMode = request.headers.get('x-performance-monitor');
@@ -258,9 +314,25 @@ async function handleShowcaseFeedGET(
       || hasAuthorizationHeader
         && (performanceMonitorMode === 'warmup' || performanceMonitorMode === 'load');
     const phaseTimings = new Map<string, number>();
+    // Phases are kept for the monitor's header, and for every signed-in For you
+    // read, whose sampled log line reads them (`logSampledFeedPhases`).
+    let collectingPhases = timingEnabled;
     const recordPhase = (phase: string, durationMs: number) => {
-      if (!timingEnabled) return;
+      if (!collectingPhases) return;
       phaseTimings.set(phase, (phaseTimings.get(phase) ?? 0) + Math.max(0, durationMs));
+    };
+    let readAheadClaim: boolean | null = null;
+    const logPhases = (options: { readAhead: boolean; cursor: boolean; offset: number; fresh: boolean }) => {
+      if (!collectingPhases) return;
+      const answeredAt = performance.now();
+      logSampledFeedPhases({
+        ...options,
+        admissionMs: receivedAt === null ? null : Math.max(0, handlerStartedAt - receivedAt),
+        claim: readAheadClaim,
+        phases: phaseTimings,
+        random: dependencies.random,
+        totalMs: answeredAt - (receivedAt ?? handlerStartedAt),
+      });
     };
     const withPhaseTimings = (response: NextResponse) => {
       if (!timingEnabled) return response;
@@ -296,6 +368,7 @@ async function handleShowcaseFeedGET(
     const { limit, tool, cursor, sort, offset, readAhead } = query;
     const authStartedAt = performance.now();
     const actor = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
+    if (actor.ok && actor.viewerUserId && sort === 'for-you') collectingPhases = true;
     recordPhase('auth', performance.now() - authStartedAt);
     if (!actor.ok) {
       return NextResponse.json(
@@ -397,10 +470,11 @@ async function handleShowcaseFeedGET(
         tool: tool && tool !== 'all' ? tool : null,
         unlock: normalizeShowcaseUnlockFilter(searchParams.get('unlock')),
         resource: normalizeShowcaseResourceFilter(searchParams.get('resource')),
-        ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
+        ...(collectingPhases ? { onPhaseTiming: recordPhase } : {}),
       });
       recordPhase('feed_total', performance.now() - feedStartedAt);
       if (prepared) countReadAhead('hold');
+      logPhases({ readAhead: true, cursor: false, offset, fresh: false });
       // Null: nothing to hold (no active algorithm, an empty ranking). The app
       // then reads the page the ordinary way when Explore opens.
       return withPhaseTimings(NextResponse.json(
@@ -433,11 +507,16 @@ async function handleShowcaseFeedGET(
       // hold is: a token sent without one is never the app's (it reads ahead
       // only with a bearer token), so it cannot land among the misses.
       ...(readAheadToken && viewerUserId
-        ? { onReadAheadClaim: (claimed: boolean) => countReadAhead(claimed ? 'claim' : 'claim_miss') }
+        ? {
+          onReadAheadClaim: (claimed: boolean) => {
+            readAheadClaim = claimed;
+            countReadAhead(claimed ? 'claim' : 'claim_miss');
+          },
+        }
         : {}),
       ...(seedBucket === null ? {} : { seedBucket }),
       ...(fresh ? { fresh } : {}),
-      ...(timingEnabled ? { onPhaseTiming: recordPhase } : {}),
+      ...(collectingPhases ? { onPhaseTiming: recordPhase } : {}),
     });
     recordPhase('feed_total', performance.now() - feedStartedAt);
     const cacheControl = getViewerAwareApiCacheControl(hasAuthorizationHeader || sort === 'for-you');
@@ -460,6 +539,7 @@ async function handleShowcaseFeedGET(
     if (anonymousIdentity?.cookieValueToSet) {
       setFeedAnonymousCookie(response, anonymousIdentity.cookieValueToSet);
     }
+    logPhases({ readAhead: false, cursor: Boolean(cursor), offset, fresh });
     return response;
   } catch (error) {
     dependencies.logError('Showcase feed error:', error);
@@ -472,16 +552,22 @@ async function handleShowcaseFeedGET(
 
 export async function getShowcaseFeedRouteResponse({
   dependencies,
+  receivedAt = null,
   request,
   startedReadLimit = null,
 }: {
   dependencies?: ShowcaseFeedRouteDependencies;
+  /**
+   * `performance.now()` when the route export received the request, before its
+   * admission ran, so the sampled phase log can say what admission took.
+   */
+  receivedAt?: number | null;
   request: Request;
   /** This read's count, when the route started it beside admission (`startShowcaseFeedReadLimit`). */
   startedReadLimit?: StartedShowcaseFeedReadLimit | null;
 }) {
   const resolvedDependencies = resolveDependencies(dependencies);
   return resolvedDependencies.withProviderFetchRequestId(getApiRequestId(request), async () => (
-    handleShowcaseFeedGET(request, resolvedDependencies, startedReadLimit)
+    handleShowcaseFeedGET(request, resolvedDependencies, startedReadLimit, receivedAt)
   ));
 }
