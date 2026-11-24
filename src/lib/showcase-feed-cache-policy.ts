@@ -7,10 +7,11 @@ import {
 /**
  * How long a sort lane's shared first page (recent, top saves, top remixes,
  * top sales) is served from the data cache before a read rebuilds it. None of
- * those orders decays with time, and the tag is dropped whenever content
- * changes: every publish, edit, delete, take-down and account deletion calls
- * `invalidateShowcaseFeedCache()`, and feed maintenance does hourly after it
- * refreshes the stats. So the timer only bounds what changes with no tag drop:
+ * those orders decays with time, and a tag is dropped whenever content
+ * changes: a delete, take-down or account deletion expires it at once
+ * (`invalidateShowcaseFeedCache()`), and a publish, edit or restore, and the
+ * hourly feed maintenance after it refreshes the stats, have it drawn again in
+ * the background (`showcase-feed-cache.ts`). So the timer only bounds what changes with no tag drop:
  * the save, remix and comment counts on the cards, at most half an hour old.
  * It was 60 s, a rewrite of a 19-50 KB entry every minute or so of traffic
  * (usage audit, 2026-11-04).
@@ -22,7 +23,7 @@ export const SHOWCASE_FEED_BASE_PAGE_REVALIDATE_SECONDS = 1800;
  * cache. Its ranking has time-decay features and a shared seed that turns
  * every ten minutes (`FEED_SHARED_SEED_BUCKET_MS`), so it is held for one seed
  * bucket: anonymous readers still see the rotation at its own cadence. Content
- * changes drop it at once, as above.
+ * changes drop it, as above.
  */
 export const SHOWCASE_FOR_YOU_BOOTSTRAP_REVALIDATE_SECONDS = 600;
 

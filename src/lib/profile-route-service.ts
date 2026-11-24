@@ -397,9 +397,11 @@ export async function updateProfileForRoute({
     .filter((media, index, entries) => entries.findIndex((candidate) => (
       candidate.location.filePath === media.location.filePath
     )) === index);
-  // What the profile showed, read when a save sends a photo: the photo a new
-  // upload replaces goes once the new one is saved.
-  const previousMedia = submittedProfileMedia.length > 0
+  // What the profile showed, read when a save sends a photo or takes one off:
+  // the photo a new upload replaces goes once the new one is saved, and a
+  // photo changed has the feeds drawn again at once (their cards draw it).
+  const sendsProfilePhoto = data.avatarUrl !== undefined || data.coverUrl !== undefined;
+  const previousMedia = submittedProfileMedia.length > 0 || sendsProfilePhoto
     ? await readStoredProfileMedia(resolvedClient, userId)
     : null;
   // Only a new upload is taken from the request. A file the account's folder
@@ -573,7 +575,18 @@ export async function updateProfileForRoute({
 
   const savedHandle = normalizeUsername((updatedProfile as Partial<ProfileRow> | null)?.username);
   const handleTaken = savedHandle !== null && savedHandle !== normalizeUsername(validation.existingUsername);
-  invalidateShowcaseFeedAndRefreshEveryPage(handleTaken ? { handles: [savedHandle] } : {});
+  // A photo that was shown and is replaced (its old file is gone) or taken off
+  // is taken out of view: the feeds expire at once. Anything else a profile
+  // shows, a first photo included, is refreshed in the background, the feeds
+  // too. Photos that could not be read before the save count as taken out.
+  const savedMedia = (updatedProfile ?? {}) as Partial<StoredProfileMedia>;
+  const photoTakenOut = sendsProfilePhoto && (!previousMedia || (['avatar_url', 'cover_url'] as const).some((column) => (
+    previousMedia[column] !== null && (savedMedia[column] ?? null) !== previousMedia[column]
+  )));
+  invalidateShowcaseFeedAndRefreshEveryPage({
+    ...(handleTaken ? { handles: [savedHandle] } : {}),
+    ...(photoTakenOut ? { mediaRemoved: true } : {}),
+  });
 
   return {
     ok: true,

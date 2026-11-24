@@ -672,6 +672,41 @@ describe('profile route service', () => {
       },
     });
     expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledOnce();
+    // A save of words takes nothing out of view: the feeds refresh in the background.
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledWith({ handles: ['creator-name'] });
+  });
+
+  // The feeds' cards draw the creator's photo: one taken off (or replaced, its
+  // old file deleted) must not be served once more from a cached `/`.
+  it('expires the feeds at once when a save writes a profile photo', async () => {
+    const client = createClient({
+      profiles: [{
+        id: user.id,
+        username: 'creator-name',
+        display_name: 'Existing',
+        bio: null,
+        avatar_url: 'https://example.com/old-avatar.png',
+        cover_url: null,
+        website_url: null,
+        twitter_handle: null,
+        instagram_handle: null,
+        tiktok_handle: null,
+        location: null,
+        credits: 25,
+      }],
+    });
+    const invalidateShowcaseFeedAndRefreshEveryPage = vi.fn();
+
+    const result = await updateProfileForRoute({
+      userId: user.id,
+      body: { username: 'creator-name', displayName: 'Existing', avatarUrl: '' },
+      client: client.client,
+      invalidateShowcaseFeedAndRefreshEveryPage,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(client.upserts[0]).toMatchObject({ avatar_url: null });
+    expect(invalidateShowcaseFeedAndRefreshEveryPage).toHaveBeenCalledWith({ mediaRemoved: true });
   });
 
   // The app reads a 409 as the handle's only when it names the field: the

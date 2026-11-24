@@ -12,8 +12,7 @@ export const SHOWCASE_FEED_INVALIDATE_ROUTE = '/api/cron/showcase-feed-invalidat
 
 /**
  * Refreshes every page and read the feed's tag caches, on request: the same
- * `invalidateShowcaseFeedCache()` a publish, an edit or a take-down in the app
- * makes. For callers outside the app, where `next/cache` does not exist: the
+ * `invalidateShowcaseFeedCache()` a delete or a take-down in the app makes. For callers outside the app, where `next/cache` does not exist: the
  * moderation CLI calls it after a take-down or a dismissal
  * (`scripts/ops/moderation-ops.ts`), which otherwise left the post on the
  * signed-out home page until its window ran out.

@@ -18,13 +18,15 @@ export const SHOWCASE_FEED_CACHE_TAG = 'showcase-feed:v3';
 
 /**
  * The feeds' cached reads again, refreshed in the background (`'max'` only):
- * for the hourly maintenance, whose totals reorder the feeds and whose account
- * labels and negative-feedback rates can drop a post from recommendations
- * (they already take the hour to be computed). Nothing it does is a removal:
- * take-downs and a post's own cover go through `invalidateShowcaseFeedCache`.
- * Each cached feed read carries it beside `SHOWCASE_FEED_CACHE_TAG`, which
- * removals keep expiring at once; a tag is only ever invalidated one way
- * (`PUBLIC_PAGE_CACHE_TAG` says why).
+ * for every change that takes nothing out of view (a publish, an edit, a
+ * restore, a profile saved, a repaired preview) and for the hourly
+ * maintenance, whose totals reorder the feeds and whose account labels and
+ * negative-feedback rates can drop a post from recommendations (they already
+ * take the hour to be computed). Take-downs, a post's own cover and media
+ * deleted from under a card go through `SHOWCASE_FEED_CACHE_TAG` instead. Each
+ * cached feed read carries both tags, and removals keep expiring the other one
+ * at once; a tag is only ever invalidated one way (`PUBLIC_PAGE_CACHE_TAG`
+ * says why).
  */
 export const SHOWCASE_FEED_REFRESH_TAG = 'showcase-feed:refresh:v1';
 
@@ -36,19 +38,23 @@ export const SHOWCASE_FEED_REFRESH_TAG = 'showcase-feed:refresh:v1';
  * - a removal, `invalidateShowcaseFeedCache`: the feeds and every public page
  *   at once;
  * - a change to one post that leaves it in view or brings it in,
- *   `invalidateShowcaseFeedAndRefreshPostPages`: the feeds at once, and the
- *   pages that draw the post in the background;
+ *   `invalidateShowcaseFeedAndRefreshPostPages`: the feeds and the pages that
+ *   draw the post in the background;
  * - a change whose pages cannot be named (a profile, a repaired preview),
- *   `invalidateShowcaseFeedAndRefreshEveryPage`: the feeds at once, and every
- *   public page in the background;
- * - a change only the feeds show, `invalidateShowcaseFeedCacheOnly`;
+ *   `invalidateShowcaseFeedAndRefreshEveryPage`: the feeds and every public
+ *   page in the background;
+ * - a change only the feeds show (a block, a report),
+ *   `invalidateShowcaseFeedCacheOnly`: the feeds at once;
  * - the feeds' hourly maintenance, `refreshShowcaseFeedsInBackground`.
  *
- * The feeds must show a new post at once, so their tag is always expired with
- * `{ expire: 0 }`. A page refreshed in the background (`'max'`) is answered
- * from the cache once more, in its previous version, while it is drawn again
- * behind that visitor: nobody waits for a cold render because of a change that
- * removes nothing. A sale or a free unlock refreshes the storefront alone
+ * A cache refreshed in the background (`'max'`) is answered once more, in its
+ * previous version, while it is drawn again behind that visitor: nobody waits
+ * for a cold render because of a change that removes nothing. So a new post
+ * may reach the signed-out `/`, Explore's shared first pages and the shelf one
+ * visit late (its own page, where the composers land, drops its not-found at
+ * once); anything that takes content out of view still expires at once, as
+ * does a change that deleted media a feed card draws (`mediaRemoved`). A sale
+ * or a free unlock refreshes the storefront alone
  * (`invalidateMarketplaceResourceListCache`).
  */
 
@@ -89,6 +95,21 @@ export function refreshShowcaseFeedsInBackground() {
   revalidateTag(SHOWCASE_FEED_REFRESH_TAG, 'max');
 }
 
+/**
+ * The feeds after a change that takes nothing out of view: in the background,
+ * the next visitor of `/` and Explore answered from the cache while they are
+ * drawn again (a publish made `/` cold for about 3 s on a phone, speed
+ * remeasure 2026-11-24). Unless the change deleted media a card draws: then
+ * at once, so no cached card points at a file that is gone.
+ */
+function refreshShowcaseFeeds({ mediaRemoved }: { mediaRemoved?: boolean }) {
+  if (mediaRemoved) {
+    revalidateTag(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
+    return;
+  }
+  revalidateTag(SHOWCASE_FEED_REFRESH_TAG, 'max');
+}
+
 export type PublicPostPageChange = {
   postId: string;
   /** The post's creation, whose id is a legacy address of the post's page. */
@@ -106,8 +127,9 @@ export type PublicPostPageChange = {
    * The change deleted media the post's page drew (a picture or clip replaced
    * or taken out, its files removed at once): the page is drawn again at once,
    * through the same tag as an arrival, rather than served once with media
-   * that is gone. The cards on its creator's page and the storefront are
-   * still refreshed in the background, so they may show the old cover once.
+   * that is gone, and so are the feeds. The cards on its creator's page and
+   * the storefront are still refreshed in the background, so they may show
+   * the old cover once.
    */
   mediaRemoved?: boolean;
   /** Made by this change: no post can credit it as the one it remixed yet. */
@@ -148,8 +170,9 @@ async function loadRemixesCrediting(
 
 /**
  * A change to one post that removes nothing from view: a publish, an edit, a
- * move to public or unlisted from private, a restore. The feeds are expired
- * at once; in the background, the post's own page (and its legacy address),
+ * move to public or unlisted from private, a restore. In the background, the
+ * feeds (at once instead when the change deleted media their cards draw,
+ * `mediaRemoved`), the post's own page (and its legacy address),
  * its creator's page, the storefront (which lists a recipe with its post),
  * and the pages that draw the post in a remix credit: each remix's page and
  * its creator's. A post that has just come into view also has its not-found
@@ -163,7 +186,7 @@ export async function invalidateShowcaseFeedAndRefreshPostPages(
   adminSupabase: SupabaseClient,
   change: PublicPostPageChange,
 ): Promise<void> {
-  revalidateTag(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
+  refreshShowcaseFeeds({ mediaRemoved: change.mediaRemoved });
 
   const pageIds = [change.postId, change.generationId]
     .filter((id): id is string => typeof id === 'string' && id.length > 0);
@@ -190,17 +213,23 @@ export async function invalidateShowcaseFeedAndRefreshPostPages(
  * A change whose pages cannot be named: a profile saved (its name, handle and
  * picture are on the creator's page, every post page of theirs, each remix
  * credit that names them and the storefront's cards) or a repaired preview
- * (the sweep knows the media, not every page that draws it). The feeds are
- * expired at once, every public page is refreshed in the background, and a
+ * (the sweep knows the media, not every page that draws it). The feeds, the
+ * storefront and every public page are refreshed in the background, and a
  * page that could only hold a not-found until now is dropped at once: a post
- * a moderator brought back, a handle a profile has just taken.
+ * a moderator brought back, a handle a profile has just taken. A change that
+ * took media out (`mediaRemoved`: a profile photo replaced, its old file
+ * deleted, or taken off) expires the feeds at once, as their cards draw it.
  */
 export function invalidateShowcaseFeedAndRefreshEveryPage(arrivals: {
   postIds?: readonly string[];
   handles?: readonly string[];
+  mediaRemoved?: boolean;
 } = {}) {
-  revalidateTag(SHOWCASE_FEED_CACHE_TAG, { expire: 0 });
+  refreshShowcaseFeeds({ mediaRemoved: arrivals.mediaRemoved });
   revalidateTag(PUBLIC_PAGE_REFRESH_TAG, 'max');
+  // The storefront's first pages carry the feed tag alone of the two, which
+  // this no longer expires (the post-pages refresh names the storefront too).
+  revalidateTag(MARKETPLACE_RESOURCE_LIST_CACHE_TAG, 'max');
   for (const postId of arrivals.postIds ?? []) {
     revalidateTag(publicPostArrivalTag(postId), { expire: 0 });
   }
