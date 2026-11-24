@@ -12,15 +12,17 @@ import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import {
   isSearchStarterEmpty,
   parseSearchStarterResponse,
+  SEARCH_STARTER_KEPT_MS,
   type SearchStarterResponse,
 } from '../../../ugc-mobile/lib/public-search-policy/search-starter';
 
 /**
  * How long the top bar draws an answer it has without asking again. Its panel
  * is opened many times in a visit, on every page, and its lists are made
- * hourly: one request serves the visit's next ten minutes.
+ * hourly: one request serves the visit's next ten minutes. One figure with the
+ * app's search screen, from the shared starter rules.
  */
-export const SEARCH_STARTER_KEPT_MS = 10 * 60_000;
+export { SEARCH_STARTER_KEPT_MS };
 
 // The last answer, and the account it was asked for (null for a visitor): kept
 // in this tab's memory, so the top bar's field, which leaves the page whenever

@@ -72,6 +72,33 @@ describe('mobile api client caching', () => {
       fetcher: vi.fn(async () => jsonResponse({ generations: [{ id: 'different-generation' }] })) as typeof fetch });
     expect(await api.getGenerationDetails('missing-generation')).toBeNull();
   });
+  // lib/use-search-starter.ts keeps the starter's answer, whose creators leave
+  // out whom the account follows or is blocked with: told of every change.
+  it('tells onRelationsChanged once a follow, an unfollow, a block or an unblock is taken, and never for a refusal', async () => {
+    const onRelationsChanged = vi.fn();
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, blocked: true, following: true }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+      onRelationsChanged,
+    });
+
+    await api.setCreatorFollowing('creator-1', true);
+    await api.setCreatorFollowing('creator-1', false);
+    await api.blockUser('creator-1');
+    await api.unblockUser('creator-1');
+    expect(onRelationsChanged).toHaveBeenCalledTimes(4);
+
+    // Nothing else is a relation.
+    await api.searchStarter();
+    expect(onRelationsChanged).toHaveBeenCalledTimes(4);
+
+    fetcher.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'Nope' }), { status: 500, headers: { 'Content-Type': 'application/json' } }));
+    await expect(api.blockUser('creator-1')).rejects.toBeDefined();
+    expect(onRelationsChanged).toHaveBeenCalledTimes(4);
+  });
+
   it('sends authenticated moderation reports and user block mutations', async () => {
     const fetcher = vi.fn(async () => jsonResponse({ success: true, blocked: true }));
     const api = createApiClient({

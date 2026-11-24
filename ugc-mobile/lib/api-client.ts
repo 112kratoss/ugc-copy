@@ -359,6 +359,13 @@ export interface ApiClientOptions {
   clientInfo?: MobileClientInfo;
   fetcher?: typeof fetch;
   requestTimeoutMs?: number;
+  /**
+   * Told once the server has taken a follow, an unfollow, a block or an
+   * unblock: what the viewer is offered that leaves out whom they follow or
+   * are blocked with (the search starter's creators, `lib/use-search-starter.ts`)
+   * is asked again rather than drawn from a kept answer.
+   */
+  onRelationsChanged?: () => void;
 }
 
 export interface MobileClientInfo {
@@ -977,7 +984,14 @@ export function createApiClient({
   clientInfo,
   fetcher = fetch,
   requestTimeoutMs = DEFAULT_API_REQUEST_TIMEOUT_MS,
+  onRelationsChanged,
 }: ApiClientOptions) {
+  /** Passes a relation's answer on, once taken, after telling `onRelationsChanged`. */
+  function afterRelationChange<T>(answer: T): T {
+    onRelationsChanged?.();
+    return answer;
+  }
+
   const root = normalizeBaseUrl(baseUrl);
   const requestedCatalogSchemaVersion = clientInfo?.catalogSchemaVersion;
   const catalogSchemaVersion = requestedCatalogSchemaVersion === 2
@@ -1720,11 +1734,11 @@ export function createApiClient({
     blockUser: (userId: string) =>
       request<{ success: true; blocked: boolean }>(`/api/moderation/blocks/${encodeURIComponent(userId)}`, {
         method: 'POST',
-      }),
+      }).then(afterRelationChange),
     unblockUser: (userId: string) =>
       request<{ success: true; blocked: boolean }>(`/api/moderation/blocks/${encodeURIComponent(userId)}`, {
         method: 'DELETE',
-      }),
+      }).then(afterRelationChange),
     getCreatorFollowState: (followingId: string) =>
       request<{ following: boolean }>(`/api/profile/follow${buildQuery({ followingId })}`),
     setCreatorFollowing: (followingId: string, following: boolean, attribution?: CreatorFollowAttribution | null) =>
@@ -1736,7 +1750,7 @@ export function createApiClient({
           ...(attribution?.postId ? { postId: attribution.postId } : {}),
           ...(attribution?.postId && attribution.deliveryId ? { deliveryId: attribution.deliveryId } : {}),
         }),
-      }),
+      }).then(afterRelationChange),
     saveShowcasePost: (postId: string, options: SaveShowcasePostOptions) =>
       request<SaveShowcasePostResponse>('/api/showcase/save', {
         method: 'POST',
