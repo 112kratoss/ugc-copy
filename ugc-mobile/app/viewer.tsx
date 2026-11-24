@@ -1,5 +1,5 @@
 import { useDecodedImageAspectRatio } from '@/lib/use-decoded-image-aspect-ratio';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
+import { hashKey, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import { router, Stack, useLocalSearchParams, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -92,6 +92,7 @@ import {
   buildViewerItems,
   type ImmersiveSourceData,
   isGenerationSource,
+  isLinkedPostAlone,
   linkReelEndSlideState,
   loadImmersiveSourceData,
   loadShowcaseReelNeighbours,
@@ -460,7 +461,9 @@ function ImmersivePreviewViewer() {
   // draws the post from the read that found it (the post page's, through the
   // snapshot below) and asks for the For you page it swipes on into only once
   // the reader's first swipe comes to rest (`loadShowcaseReelNeighbours` says why).
-  const linkOpened = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;
+  // Decided by what the reel holds, not by the route alone: the same route can
+  // open on a whole list (`isLinkedPostAlone`), which is read and drawn as before.
+  const linkRoute = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;
   const neighbours = useMutation({
     mutationFn: async ({ selected, key }: { selected: ShowcaseFeedItem; key: typeof sourceQueryKey }) => {
       const data = await loadShowcaseReelNeighbours({ api, selected, mediaOnly });
@@ -469,6 +472,18 @@ function ImmersivePreviewViewer() {
       queryClient.setQueryData<ImmersiveSourceData>(key, data);
     },
   });
+
+  // The neighbours read belongs to the reel's source as it was asked: another
+  // one (a guest who signs in here) starts with the post alone again, its
+  // page read only at its own first swipe, and the read is let go.
+  const sourceKeyHash = hashKey(sourceQueryKey);
+  const neighboursStatus = neighbours.variables && hashKey(neighbours.variables.key) === sourceKeyHash
+    ? neighbours.status
+    : 'idle';
+  const resetNeighbours = neighbours.reset;
+  useEffect(() => {
+    resetNeighbours();
+  }, [resetNeighbours, sourceKeyHash]);
 
   const loaderQuery = useQuery({
     queryKey: sourceQueryKey,
@@ -482,11 +497,18 @@ function ImmersivePreviewViewer() {
     initialDataUpdatedAt: () => (gridBacked
       ? undefined
       : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, identityUserId)?.updatedAt),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId, mediaOnly, withNeighbours: !linkOpened || neighbours.isSuccess }),
+    queryFn: () => loadImmersiveSourceData({
+      api,
+      source,
+      initialId,
+      mediaOnly,
+      withNeighbours: !linkRoute || neighboursStatus === 'success' || !isLinkedPostAlone(queryClient.getQueryData(sourceQueryKey)),
+    }),
     staleTime: 1000 * 45,
   });
-  // The post a link opened, once it is in hand: what its neighbours are asked around.
-  const linkedPost = linkOpened
+  // The post a link opened, once it is in hand and alone, or with the page
+  // this reel read around it: what its neighbours are asked around.
+  const linkedPost = linkRoute && (neighboursStatus !== 'idle' || isLinkedPostAlone(loaderQuery.data))
     ? loaderQuery.data?.showcaseItems?.find((item) => item.id === initialId) ?? null
     : null;
   // Once the reader's first swipe has come to rest, on the page under the
@@ -495,11 +517,11 @@ function ImmersivePreviewViewer() {
   // and the first swipe sprang back to the post instead of reaching the page
   // below (Pixel_9a, 2026-11-24).
   const askForNeighbours = () => {
-    if (!linkedPost || !neighbours.isIdle) return;
+    if (!linkedPost || neighboursStatus !== 'idle' || neighbours.isPending) return;
     neighbours.mutate({ selected: linkedPost, key: sourceQueryKey });
   };
   const retryNeighbours = () => {
-    if (!linkedPost || !neighbours.isError) return;
+    if (!linkedPost || neighboursStatus !== 'error') return;
     neighbours.mutate({ selected: linkedPost, key: sourceQueryKey });
   };
 
@@ -700,7 +722,7 @@ function ImmersivePreviewViewer() {
     hasNextPage: pagedGrid.hasNextPage,
     isFetchNextPageError: pagedGrid.isFetchNextPageError,
     isFetchingNextPage: pagedGrid.isFetchingNextPage,
-  }) : linkedPost ? linkReelEndSlideState({ status: neighbours.status, itemCount: items.length }) : null;
+  }) : linkedPost ? linkReelEndSlideState({ status: neighboursStatus, itemCount: items.length }) : null;
   const [endSlidePage, setEndSlidePage] = useState<number | null>(null);
   const onEndSlide = endSlide !== null && endSlidePage !== null && endSlidePage >= items.length;
   // Posts that arrive while the reader is on that slide (a page retried from
@@ -964,18 +986,29 @@ function ImmersivePreviewViewer() {
     router.setParams({ comments: undefined, replyTo: undefined } as never);
   }, [items, requestedCommentsPostId, requestedReplyToId]);
 
+  // The reel's posts as last drawn. A linked post's neighbours read swaps in
+  // the page's served copy of the post on screen (the same id, now with its
+  // delivery): the events below are filed for that copy without restarting
+  // their timing. The list, not the active post: by the time the effect lets
+  // go of a post, the next one is already the active one.
+  const latestItemsRef = useRef<ImmersivePreviewItem[]>([]);
+  useLayoutEffect(() => {
+    latestItemsRef.current = items;
+  });
   useEffect(() => {
     if (!initialPositionReady || !isFocused || onEndSlide || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
-    const item = activeItem;
+    const first = activeItem;
     const postId = activeItem.showcasePostId;
-    // `feedEventContext` is one holder for the reel's whole life, read here as
-    // the ref was: left out of this effect's dependencies on purpose.
-    const impressionKey = getQualifiedImpressionKey({
-      postId,
-      recommendation: item.recommendation,
-    }, feedEventContext.read().feedSessionId);
+    const current = () => latestItemsRef.current.find((candidate) => candidate.id === first.id) ?? first;
     const startedAt = Date.now();
     const recordQualifiedImpression = () => {
+      const item = current();
+      // `feedEventContext` is one holder for the reel's whole life, read here as
+      // the ref was: left out of this effect's dependencies on purpose.
+      const impressionKey = getQualifiedImpressionKey({
+        postId,
+        recommendation: item.recommendation,
+      }, feedEventContext.read().feedSessionId);
       if (qualifiedImpressionsRef.current.has(impressionKey)) return;
       qualifiedImpressionsRef.current.add(impressionKey);
       recordViewerFeedEvent(item, 'impression', {
@@ -998,7 +1031,7 @@ function ImmersivePreviewViewer() {
     const flushMediaProgress = () => {
       const flush = mediaProgressTracker.takeFlush();
       if (!flush) return;
-      recordViewerFeedEvent(item, 'media_progress', {
+      recordViewerFeedEvent(current(), 'media_progress', {
         progress: flush.progress,
         ...(flush.durationMs !== null ? { durationMs: flush.durationMs } : {}),
       });
@@ -1025,7 +1058,7 @@ function ImmersivePreviewViewer() {
       }
       // A landing under 250 ms is a flick passing through, not a skip.
       const leaveEvent = reelLeaveEventType(durationMs);
-      if (leaveEvent) recordViewerFeedEvent(item, leaveEvent, { durationMs });
+      if (leaveEvent) recordViewerFeedEvent(current(), leaveEvent, { durationMs });
     };
   }, [activeItem?.id, initialPositionReady, isFocused, onEndSlide, recordViewerFeedEvent, source]);
 

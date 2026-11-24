@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api-client';
 import {
   buildViewerItems,
+  isLinkedPostAlone,
   linkReelEndSlideState,
   loadImmersiveSourceData,
   loadShowcaseReelNeighbours,
@@ -496,6 +497,31 @@ describe('immersive preview source data', () => {
     // Another account's read is not this one's; nor is another post's.
     expect(readCachedImmersiveSourceSnapshot(queryClient, 'showcase-feed', 'user-2', 'post-9', null, 'user-2')).toBeUndefined();
     expect(readCachedImmersiveSourceSnapshot(queryClient, 'showcase-feed', 'user-1', 'post-8', null, 'user-1')).toBeUndefined();
+  });
+
+  // Review of #919: Home seeds the post's read with its own feed card before it
+  // opens a post; a link opened later must not file this reel's events against
+  // Home's delivery.
+  it("takes the post page's read without the delivery a Home card left on it", () => {
+    const queryClient = new QueryClient();
+    const card = { ...showcaseItem('post-9'), recommendation: { deliveryId: 'home-delivery', position: 3, algorithmVersion: 'v4' } } as ShowcaseFeedItem;
+    queryClient.setQueryData(createShowcasePostQueryKey('post-9', 'user-1'), { success: true, item: card });
+
+    const item = readCachedImmersiveSourceData(queryClient, 'showcase-feed', 'user-1', 'post-9', null, 'user-1')?.showcaseItems?.[0];
+    expect(item?.id).toBe('post-9');
+    expect(item && 'recommendation' in item).toBe(false);
+    // The cache's own copy is left as it was.
+    expect(queryClient.getQueryData<{ item: ShowcaseFeedItem }>(createShowcasePostQueryKey('post-9', 'user-1'))?.item.recommendation?.deliveryId).toBe('home-delivery');
+  });
+
+  it('calls a For you reel the linked post alone only while it holds that post and no page read', () => {
+    expect(isLinkedPostAlone(undefined)).toBe(true);
+    expect(isLinkedPostAlone({ showcaseItems: [] })).toBe(true);
+    expect(isLinkedPostAlone({ showcaseItems: [showcaseItem('post-9')] })).toBe(true);
+    // A page was read with it, even an empty one or one with no session.
+    expect(isLinkedPostAlone({ showcaseItems: [showcaseItem('post-9')], feedSessionId: null })).toBe(false);
+    // A whole list: the saved pages holding the post, or a list kept from before.
+    expect(isLinkedPostAlone({ showcaseItems: [showcaseItem('post-1'), showcaseItem('post-9')] })).toBe(false);
   });
 
   it('keeps a lane that holds the post ahead of the post page\'s read', () => {

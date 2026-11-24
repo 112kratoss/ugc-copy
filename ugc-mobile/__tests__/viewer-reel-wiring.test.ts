@@ -39,8 +39,12 @@ describe('the reel reads the lane it was opened from', () => {
   // the reader swipes on. Behaviour: `viewer-reel-actions.test.tsx`, "a reel a
   // link opened", and `immersive-preview-source-data.test.ts`.
   it('reads the For you page under a post a link opened only once the reader swipes on', () => {
-    expect(viewer).toContain("const linkOpened = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;");
-    expect(viewer).toContain('withNeighbours: !linkOpened || neighbours.isSuccess');
+    expect(viewer).toContain("const linkRoute = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;");
+    // From what the reel holds, not the route alone (review of #919).
+    expect(viewer).toContain("withNeighbours: !linkRoute || neighboursStatus === 'success' || !isLinkedPostAlone(queryClient.getQueryData(sourceQueryKey)),");
+    expect(viewer).toContain("const linkedPost = linkRoute && (neighboursStatus !== 'idle' || isLinkedPostAlone(loaderQuery.data))");
+    // The read belongs to the source key it was asked for.
+    expect(viewer).toContain('neighbours.variables && hashKey(neighbours.variables.key) === sourceKeyHash');
     // At rest only: a request or its answer mid-swipe cost Android its snap (Pixel_9a, 2026-11-24).
     expect(slice('onMomentumScrollEnd={(event) => {', 'if (endSlide && nextIndex >= items.length) {')).toContain('askForNeighbours();');
     expect(viewer).not.toContain('askForNeighbours} ');
@@ -76,7 +80,7 @@ describe('the reel reads the lane it was opened from', () => {
     expect(viewer).toContain('const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
     // The grid is no ranked session: a post its pages no longer hold is gone.
     expect(viewer).toContain('{ keepMissing: laneBacked }');
-    expect(viewer).toContain('loadImmersiveSourceData({ api, source, initialId, mediaOnly, withNeighbours: !linkOpened || neighbours.isSuccess })');
+    expect(slice('queryFn: () => loadImmersiveSourceData({', '}),')).toContain('initialId,');
   });
 
   it('comes back to the same lane after sign-in', () => {

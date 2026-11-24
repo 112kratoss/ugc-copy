@@ -406,11 +406,34 @@ function cachedShowcaseItems(
   // A shared link, a push or a deep link reaches the reel through the post
   // page (`app/post/[id].tsx`), which has just read the post: the reel opens
   // on that read, with its age, instead of reading it again before it draws.
+  // Without a delivery: Home seeds that read with its own feed card before it
+  // opens a post (`components/home-dashboard.tsx`), and a link opened later
+  // would have filed this reel's impressions and dwell against Home's delivery.
   const postKey = createShowcasePostQueryKey(initialId, userId);
   const post = queryClient.getQueryData<ShowcasePostResponse>(postKey)?.item;
   return post?.id === initialId
-    ? { data: { showcaseItems: [post] }, updatedAt: oldestUpdatedAt(queryClient, [postKey]) }
+    ? { data: { showcaseItems: [withoutDelivery(post)] }, updatedAt: oldestUpdatedAt(queryClient, [postKey]) }
     : undefined;
+}
+
+function withoutDelivery(post: ShowcaseFeedItem): ShowcaseFeedItem {
+  if (!post.recommendation) return post;
+  const copy = { ...post };
+  delete copy.recommendation;
+  return copy;
+}
+
+/**
+ * Whether a For you reel's data is the one post a link opened and nothing
+ * else: no For you page read with it (no `feedSessionId`, which every page
+ * read sets, null included) and no other post. Only then does it wait for
+ * the reader to swipe before reading its neighbours. The same route can open
+ * on more than that: a list kept from an earlier open of the link whose
+ * neighbours were read, or the saved pages that hold the post.
+ */
+export function isLinkedPostAlone(data: ImmersiveSourceData | undefined): boolean {
+  if (!data) return true;
+  return !('feedSessionId' in data) && (data.showcaseItems?.length ?? 0) <= 1;
 }
 
 /**
