@@ -34,6 +34,7 @@ import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
+import { useRootRemountReload } from '@/lib/root-remount-reload-native';
 import {
   setAccountDeletingHandler,
   setSessionMergedHandler,
@@ -216,6 +217,12 @@ function ReelBackdrop() {
 }
 
 function RootLayout() {
+  // Android can rebuild the activity inside a live process and run this root a
+  // second time in the same JS runtime; on the store app the next post opened
+  // from a tile then stuck behind an invisible reel. The cause inside the app
+  // is not known, a fresh process is fine, so a second mount reloads the JS
+  // once (lib/root-remount-reload.ts; archive/perf-loop-2026-11-24/activity-recreate-freeze/).
+  useRootRemountReload();
   return <RootLayoutNav />;
 }
 
