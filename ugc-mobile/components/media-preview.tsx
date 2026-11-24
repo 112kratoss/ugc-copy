@@ -182,6 +182,21 @@ type StableMediaImageProps = {
    * is centred in it.
    */
   loadingSketch?: boolean;
+  /**
+   * Where a `contain`-fitted picture of known shape lands in this view, from
+   * the media's own size (`mediaRectInScreen`). The thumbhash is then drawn in
+   * that box, cropped to it, under the image until the picture shows, rather
+   * than as the image's own placeholder. A thumbhash keeps a shape only in
+   * sevenths (a 3:4 picture's decodes at 23×32), so fitted across a page it
+   * stood taller than the picture and showed above and below it while the
+   * picture loaded (owner's recording, 2026-11-25).
+   *
+   * Give a box for the whole life of the image or none at all: expo-image
+   * starts a load over when its placeholder changes (Android's
+   * `rerenderIfNeeded`), so the place must come from the media's declared
+   * size, never from a size learned by decoding.
+   */
+  placeholderFrame?: { x: number; y: number; width: number; height: number } | null;
 };
 
 export function StableMediaImage(props: StableMediaImageProps) {
@@ -220,6 +235,7 @@ function StableMediaImageSession({
   watchdog = false,
   diagnosticsSurface = 'app',
   loadingSketch = false,
+  placeholderFrame = null,
 }: StableMediaImageProps) {
   // The address drawn: the parent's at first, then a renewal's
   // (`resolveRetryUrl`), or the parent's newer signature of the same file once
@@ -454,7 +470,7 @@ function StableMediaImageSession({
     <Image
       key={`image:${cacheKey}:${attempt}:${requestKey}`}
       source={{ ...source, cacheKey }}
-      placeholder={thumbhash ? { thumbhash } : undefined}
+      placeholder={thumbhash && !placeholderFrame ? { thumbhash } : undefined}
       placeholderContentFit={contentFit}
       contentFit={contentFit}
       cachePolicy="memory-disk"
@@ -518,8 +534,28 @@ function StableMediaImageSession({
     />
   );
 
+  // The thumbhash in the picture's own box, while the picture has not shown:
+  // under it, so the picture covers it the moment it is drawn.
+  const shapedBlur = thumbhash && placeholderFrame && awaitingDisplay ? (
+    <Image
+      key="shaped-blur"
+      placeholder={{ thumbhash }}
+      placeholderContentFit="cover"
+      contentFit="cover"
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        left: placeholderFrame.x,
+        top: placeholderFrame.y,
+        width: placeholderFrame.width,
+        height: placeholderFrame.height,
+      }}
+    />
+  ) : null;
+
   return (
     <>
+      {shapedBlur}
       {image}
       {plate}
       {sketching ? <MediaLoadingSketch key="sketch" /> : null}

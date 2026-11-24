@@ -2993,8 +2993,9 @@ function ImmersiveMedia({
   // The bands around a picture that does not fill the slide are plain black
   // (components/letterbox-bands.tsx). They take the frame's backdrop slot, under
   // the picture. A picture of unknown shape gets the frame's own black backdrop.
+  const declaredAspectRatio = mediaItemAspectRatio(mediaItem);
   const mediaAspectRatio = useDecodedImageAspectRatio(
-    mediaItemAspectRatio(mediaItem),
+    declaredAspectRatio,
     showcaseMediaZoomPreview(mediaItem)?.url,
     mediaItem.mediaKind === 'image' ? resolveShowcaseViewerImageSource(mediaItem, failedDisplayUrl).url : null,
   );
@@ -3009,6 +3010,13 @@ function ImmersiveMedia({
   // Where the media sits on the page, for UIKit's zoom to grow the tile into
   // and shrink the reel back out of (lib/apple-zoom.ts).
   const zoomTargetRect = zoomTarget && onScreen ? <AppleZoomTarget rect={mediaRectInScreen({ width, height }, mediaAspectRatio)} /> : null;
+
+  // The thumbhash shown while the picture loads goes in the picture's own place:
+  // drawn across the page at its own, approximate shape, it stood out above and
+  // below a 3:4, 3:2 or 5:4 picture (see `StableMediaImage`). Only from the
+  // declared size, which a slide keeps for its life; a decoded size arrives
+  // mid-load and would make the image start over.
+  const placeholderFrame = declaredAspectRatio ? mediaRectInScreen({ width, height }, declaredAspectRatio) : null;
 
   // The tapped tile's picture, over this page's own until that has painted,
   // when the reel opened on this post. It goes straight over the picture, so
@@ -3035,6 +3043,7 @@ function ImmersiveMedia({
             imageBackdropContent={letterboxBands}
             cacheKey={mediaItem.preview?.cacheKey ?? mediaItem.previewCacheKey}
             thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+            placeholderFrame={placeholderFrame}
             transition={0}
             recyclingKey={`viewer:${mediaItem.id}`}
             style={{ position: 'absolute', width, height }}
@@ -3084,6 +3093,7 @@ function ImmersiveMedia({
           imageBackdropContent={letterboxBands}
           cacheKey={image.cacheKey}
           thumbhash={mediaItem.preview?.thumbhash ?? mediaItem.previewThumbhash}
+          placeholderFrame={placeholderFrame}
           onImageError={image.rendition === 'display' ? () => setFailedDisplayUrl(image.url) : undefined}
           // The page on screen, on a focused reel: a covered screen's views are
           // detached and cannot start loading, so they are not timed.
