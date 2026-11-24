@@ -61,7 +61,10 @@ export default function CreatorIdentity({
   );
 
   const isLink = linked && Boolean(creator.username);
-  const className = `inline-flex items-center gap-3 min-w-0 ${isLink ? 'hover:opacity-90 transition-opacity' : ''}`;
+  // An inline box is as wide as its content's narrowest line at least, and the name and handle
+  // never wrap: without `max-w-full` it overflowed a narrower slot (the reel's row beside Follow on
+  // a phone) and ran under what came next, where its `truncate` had no narrower box to cut it in.
+  const className = `inline-flex max-w-full items-center gap-3 min-w-0 ${isLink ? 'hover:opacity-90 transition-opacity' : ''}`;
 
   if (!isLink) {
     return <div className={className}>{content}</div>;

@@ -56,6 +56,25 @@ describe('CreatorIdentity', () => {
     expect(screen.getByText('@creator-name')).toBeInTheDocument();
   });
 
+  // The reel's row on a phone drew a long name and handle under Follow: the inline box grew to its
+  // text instead of keeping to its slot, so `truncate` never cut it (E2E reel-creator-row-fits).
+  it('keeps to the width of its slot, so a long name and handle end in an ellipsis', () => {
+    render(
+      <CreatorIdentity
+        creator={{
+          id: 'user-1',
+          username: 'a-creator-with-a-long-handle',
+          name: 'A Creator With A Long Name',
+          avatar: null,
+        }}
+      />
+    );
+
+    expect(screen.getByRole('link')).toHaveClass('max-w-full', 'min-w-0');
+    expect(screen.getByText('A Creator With A Long Name')).toHaveClass('truncate');
+    expect(screen.getByText('@a-creator-with-a-long-handle')).toHaveClass('truncate');
+  });
+
   it('requests a bounded optimized rendition for a storage avatar', () => {
     render(
       <CreatorIdentity
