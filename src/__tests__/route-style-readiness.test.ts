@@ -56,14 +56,16 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
   'pricing',
   'privacy',
   'r',
+  'search',
   'showcase',
   'templates',
   'terms',
 ]);
 // Every other route folder: the signed-in surfaces, each with a layout that
-// links the supplement. Search also draws for a signed-out visitor (its
-// results) and keeps it, and so do the image, video and motion creators, which
-// a visitor uses up to Generate (2026-10-28). A folder in neither list fails: one left out used to
+// links the supplement. The image, video and motion creators draw for a
+// signed-out visitor too, up to Generate (2026-10-28), and keep it. Search was
+// one of them until 2026-11-24: its results are public, so it is in the public
+// list and globals.css scans it. A folder in neither list fails: one left out used to
 // count as signed-in, so a new public page built on a signed-in layout passed
 // and inlined both sheets.
 const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
@@ -81,7 +83,6 @@ const SIGNED_IN_ROUTE_DIRECTORIES = new Set([
   'onboarding',
   'post',
   'profile',
-  'search',
   'support',
   'template-runs',
   'unlocks',
@@ -303,7 +304,7 @@ describe('route utility stylesheet readiness', () => {
 
     // A page made for signed-out visitors (marketing, policy, a landing) belongs
     // in PUBLIC_ROUTE_DIRECTORIES and globals.css instead. A signed-in surface
-    // that also draws a signed-out state keeps the supplement (Search), or
+    // that also draws a signed-out state keeps the supplement (the creators), or
     // loads it with its signed-in half (Alerts, LAZY_SUPPLEMENT_BOUNDARIES).
     for (const directory of [...SIGNED_IN_ROUTE_DIRECTORIES].sort()) {
       const layoutPath = path.join(APP_ROOT, directory, 'layout.tsx');
