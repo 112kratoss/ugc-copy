@@ -187,7 +187,7 @@ function VideoPreviewAttempt({
         // makes it take the touches, so the controls under it cannot be pressed.
         <View style={{ position: 'absolute', inset: 0, backgroundColor: StyleSheet.flatten(style)?.backgroundColor ?? mediaColors.mediaGround }} />
       ) : null}
-      {/* The logo's sparkle on the player's black screen until the clip can play (owner, 2026-11-23). */}
+      {/* The logo's three sparkles on the player's black screen until the clip can play (owner, 2026-11-23). */}
       <MediaLoadingSparkle
         state={!timedOut && (status === 'loading' || status === 'idle') ? 'loading' : status === 'readyToPlay' ? 'ready' : 'gone'}
         label="Loading video"

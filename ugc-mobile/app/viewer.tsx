@@ -1522,7 +1522,7 @@ function ImmersivePreviewViewer() {
     return (
       <ViewerShell topInset={topInset} bottomInset={bottomInset} preview={openingPreview} video={zoom.lentVideo} post={openingPost}>
         {shellHidesBar}
-        {/* The logo's sparkle on the black screen while the post is on its way (owner, 2026-11-23). */}
+        {/* The logo's three sparkles on the black screen while the post is on its way (owner, 2026-11-23). */}
         <MediaLoadingSparkle state="loading" label="Loading preview" />
       </ViewerShell>
     );
@@ -2947,7 +2947,7 @@ function ImmersiveMedia({
         {mediaItem.previewUrl ? (
           <FeedMediaFrame
             kind="image"
-            // The clip's own loading sparkle says it is loading; a pencil on its poster would draw under it.
+            // The clip's own loading sparkles say it is loading; a pencil on its poster would draw under them.
             loadingSketch={false}
             onImageDisplay={reportSlidePainted}
             url={mediaItem.previewUrl}
@@ -3405,7 +3405,7 @@ function ActiveVideoAttempt({
         ) : null}
         {active && !isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
-      {/* The logo's sparkle until the clip can play, bursting as it does (owner, 2026-11-23). */}
+      {/* The logo's three sparkles until the clip can play, fading as it does (owner, 2026-11-23). */}
       <MediaLoadingSparkle
         state={zoomLanded && !playbackFailed && (status === 'loading' || status === 'idle')
           ? 'loading'

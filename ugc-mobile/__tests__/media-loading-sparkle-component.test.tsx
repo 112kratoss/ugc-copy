@@ -14,10 +14,10 @@ vi.mock('react-native', () => ({
 
 import { MediaLoadingSparkle, type MediaSparkleState } from '../components/media-loading-sparkle';
 import {
-  MEDIA_SPARKLE_BURST_MS,
   MEDIA_SPARKLE_DELAY_MS,
+  MEDIA_SPARKLE_FADE_MS,
   MEDIA_SPARKLE_HANDOFF_MS,
-  MEDIA_SPARKLE_TRIO_FADE_MS,
+  MEDIA_SPARKLE_TRIO,
   sparklePath,
 } from '../lib/media-loading-sparkle';
 
@@ -46,20 +46,26 @@ function layOut(tree: renderer.ReactTestRenderer, width: number, height: number)
   renderer.act(() => box(tree).props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width, height } } }));
 }
 
-/** The big sparkle: the logo's shape at full size. */
-function bigSparkles(tree: renderer.ReactTestRenderer) {
-  return tree.root.findAll((node) => node.type === 'path' && node.props.d === sparklePath(22));
+/** The sparkles drawn at `scale` of their full size. */
+function sparkles(tree: renderer.ReactTestRenderer, scale = 1) {
+  const d = sparklePath(MEDIA_SPARKLE_TRIO.arm * scale);
+  return tree.root.findAll((node) => node.type === 'path' && node.props.d === d);
 }
 
-function trioSparkles(tree: renderer.ReactTestRenderer) {
-  return tree.root.findAll((node) => node.type === 'path' && node.props.d === sparklePath(6));
+function allSparkles(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAll((node) => node.type === 'path');
 }
 
-function svgs(tree: renderer.ReactTestRenderer) {
-  return tree.root.findAll((node) => node.type === 'svg');
+/**
+ * Each sparkle's animated style, as the test double resolves it once per
+ * render. Its shared values are made afresh on each render, so a fade's
+ * progress cannot be read here (`media-loading-sparkle.test.ts` has the maths).
+ */
+function looks(tree: renderer.ReactTestRenderer) {
+  return tree.root.findAllByType('animated-view' as never).map((node) => node.props.style[1]);
 }
 
-// Each test an hour after the last, so a sparkle one test leaves mid-wait is
+// Each test an hour after the last, so sparkles one test leaves mid-wait are
 // never a hand-off for the next.
 let hour = 0;
 
@@ -83,58 +89,48 @@ describe('MediaLoadingSparkle', () => {
     expect(box(tree).props.pointerEvents).toBe('none');
 
     advance(MEDIA_SPARKLE_DELAY_MS - 1);
-    expect(bigSparkles(tree)).toHaveLength(0);
+    expect(allSparkles(tree)).toHaveLength(0);
     advance(1);
-    expect(bigSparkles(tree)).toHaveLength(1);
-    // The glow, the sparkle, its dot, three shed motes and the burst's twelve, ready for the end.
-    expect(svgs(tree)).toHaveLength(18);
+    // Three sparkles at full size, the first in the logo's gradient.
+    expect(sparkles(tree)).toHaveLength(3);
+    expect(sparkles(tree)[0].props.fill).toMatch(/^url\(#sparkleFill/);
+    expect(sparkles(tree)[1].props.fill).toBe('#cf8df1');
+    expect(sparkles(tree)[2].props.fill).toBe('#fff8ed');
     renderer.act(() => tree.unmount());
   });
 
-  it('gives a small player the trio, and a box too small for it the spinner', () => {
+  it('draws them smaller in a small player, and keeps the spinner in a box too small for them', () => {
     const small = mount();
-    layOut(small, 170, 300);
+    layOut(small, 120, 300);
     advance(MEDIA_SPARKLE_DELAY_MS);
-    expect(trioSparkles(small)).toHaveLength(3);
-    expect(bigSparkles(small)).toHaveLength(0);
+    expect(sparkles(small, 0.75)).toHaveLength(3);
     renderer.act(() => small.unmount());
 
     const tiny = mount();
-    layOut(tiny, 48, 30);
+    layOut(tiny, 80, 40);
     advance(MEDIA_SPARKLE_DELAY_MS);
     expect(tiny.root.findAllByType('spinner' as never)).toHaveLength(1);
-    expect(svgs(tiny)).toHaveLength(0);
+    expect(allSparkles(tiny)).toHaveLength(0);
     // The box still says what is happening.
     expect(box(tiny).props.accessibilityLabel).toBe('Loading video');
     renderer.act(() => tiny.unmount());
   });
 
-  it('stays for its burst once the media is ready, silent to a screen reader, then goes', () => {
+  it('stays to fade once the media is ready, silent to a screen reader, then goes', () => {
     const tree = mount();
     layOut(tree, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS);
-    const drawing = bigSparkles(tree)[0];
+    const drawing = sparkles(tree)[0];
 
     update(tree, 'ready');
-    // The same drawing, not a new one: the burst carries on from the breath.
-    expect(bigSparkles(tree)[0]).toBe(drawing);
+    // The same drawing, not a new one: the fade carries on from the twinkle.
+    expect(sparkles(tree)[0]).toBe(drawing);
     expect(box(tree).props.accessibilityRole).toBeUndefined();
     expect(box(tree).props.importantForAccessibility).toBe('no-hide-descendants');
 
-    advance(MEDIA_SPARKLE_BURST_MS - 1);
-    expect(bigSparkles(tree)).toHaveLength(1);
+    advance(MEDIA_SPARKLE_FADE_MS - 1);
+    expect(sparkles(tree)).toHaveLength(3);
     advance(1);
-    expect(tree.toJSON()).toBeNull();
-    renderer.act(() => tree.unmount());
-  });
-
-  it('fades the trio out as the media comes in', () => {
-    const tree = mount();
-    layOut(tree, 170, 300);
-    advance(MEDIA_SPARKLE_DELAY_MS);
-    update(tree, 'ready');
-    expect(trioSparkles(tree)).toHaveLength(3);
-    advance(MEDIA_SPARKLE_TRIO_FADE_MS);
     expect(tree.toJSON()).toBeNull();
     renderer.act(() => tree.unmount());
   });
@@ -165,20 +161,19 @@ describe('MediaLoadingSparkle', () => {
     update(tree, 'loading');
     layOut(tree, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS - 1);
-    expect(bigSparkles(tree)).toHaveLength(0);
+    expect(allSparkles(tree)).toHaveLength(0);
     advance(1);
-    expect(bigSparkles(tree)).toHaveLength(1);
+    expect(sparkles(tree)).toHaveLength(3);
     renderer.act(() => tree.unmount());
   });
 
-  it('under Reduce Motion draws no motes and goes without a burst', () => {
+  it('twinkles in place under Reduce Motion, and goes without a fade', () => {
     motion.reduced = true;
     const tree = mount();
     layOut(tree, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS);
-    expect(bigSparkles(tree)).toHaveLength(1);
-    // The glow, the sparkle and its dot alone.
-    expect(svgs(tree)).toHaveLength(3);
+    expect(sparkles(tree)).toHaveLength(3);
+    looks(tree).forEach((look) => expect(look.transform).toEqual([{ scale: 1 }]));
     update(tree, 'ready');
     expect(tree.toJSON()).toBeNull();
     renderer.act(() => tree.unmount());
@@ -188,30 +183,30 @@ describe('MediaLoadingSparkle', () => {
     const shell = mount();
     layOut(shell, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS);
-    expect(bigSparkles(shell)).toHaveLength(1);
+    expect(sparkles(shell)).toHaveLength(3);
     renderer.act(() => shell.unmount());
 
     advance(MEDIA_SPARKLE_HANDOFF_MS - 50);
     const page = mount();
     layOut(page, 390, 844);
     advance(1);
-    expect(bigSparkles(page)).toHaveLength(1);
+    expect(sparkles(page)).toHaveLength(3);
     renderer.act(() => page.unmount());
   });
 
-  it('waits its own delay after a sparkle that went with its media, or long ago', () => {
+  it('waits its own delay after sparkles that went with their media, or long ago', () => {
     const first = mount();
     layOut(first, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS);
     update(first, 'ready');
-    advance(MEDIA_SPARKLE_BURST_MS);
+    advance(MEDIA_SPARKLE_FADE_MS);
     renderer.act(() => first.unmount());
     const next = mount();
     layOut(next, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS - 1);
-    expect(bigSparkles(next)).toHaveLength(0);
+    expect(allSparkles(next)).toHaveLength(0);
     advance(1);
-    expect(bigSparkles(next)).toHaveLength(1);
+    expect(sparkles(next)).toHaveLength(3);
     renderer.act(() => next.unmount());
 
     // `next` went mid-wait, but the window has passed by the time another starts.
@@ -219,7 +214,7 @@ describe('MediaLoadingSparkle', () => {
     const late = mount();
     layOut(late, 390, 844);
     advance(MEDIA_SPARKLE_DELAY_MS - 1);
-    expect(bigSparkles(late)).toHaveLength(0);
+    expect(allSparkles(late)).toHaveLength(0);
     renderer.act(() => late.unmount());
   });
 
