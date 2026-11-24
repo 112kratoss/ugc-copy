@@ -4,12 +4,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api-client';
 import {
   buildViewerItems,
+  isLinkedPostAlone,
+  linkReelEndSlideState,
   loadImmersiveSourceData,
+  loadShowcaseReelNeighbours,
   readCachedImmersiveSourceData,
   readCachedImmersiveSourceSnapshot,
 } from '../lib/immersive-preview-source-data';
 import { profileArchivedGenerationsQueryKey, profileFailedGenerationsQueryKey } from '../lib/profile-media-query';
-import { SHOWCASE_FEED_PAGE_SIZE } from '../lib/showcase-feed-query';
+import { createShowcasePostQueryKey, SHOWCASE_FEED_PAGE_SIZE } from '../lib/showcase-feed-query';
 import type { CreatorProfileResponse, GenerationListItem, ShowcaseFeedItem } from '../lib/types';
 
 function generation(id: string, overrides: Partial<GenerationListItem> = {}): GenerationListItem {
@@ -476,6 +479,121 @@ describe('immersive preview source data', () => {
     queryClient.setQueryData(['generations', 'user-1'], { generations: [generation('gen-1')] });
 
     expect(readCachedImmersiveSourceSnapshot(queryClient, 'home-creations', 'user-1', 'elsewhere')).toBeUndefined();
+  });
+
+  // A shared link, a push or a deep link reaches the reel through the post
+  // page (`app/post/[id].tsx`), which has just read the post: the reel used to
+  // read it again, beside a For you page, before it drew anything.
+  it("opens a reel a link opened on the post page's own read of the post, with its age", () => {
+    const queryClient = new QueryClient();
+    const readAt = Date.now() - 5_000;
+    const opened = showcaseItem('post-9');
+    queryClient.setQueryData(createShowcasePostQueryKey('post-9', 'user-1'), { success: true, item: opened }, { updatedAt: readAt });
+    // A saved page that lacks it is no snapshot of it.
+    queryClient.setQueryData(['profile-saved-media', 'user-1'], { pages: [{ items: [showcaseItem('post-1')] }], pageParams: [0] });
+
+    const snapshot = readCachedImmersiveSourceSnapshot(queryClient, 'showcase-feed', 'user-1', 'post-9', null, 'user-1');
+    expect(snapshot).toEqual({ data: { showcaseItems: [opened] }, updatedAt: readAt });
+    // Another account's read is not this one's; nor is another post's.
+    expect(readCachedImmersiveSourceSnapshot(queryClient, 'showcase-feed', 'user-2', 'post-9', null, 'user-2')).toBeUndefined();
+    expect(readCachedImmersiveSourceSnapshot(queryClient, 'showcase-feed', 'user-1', 'post-8', null, 'user-1')).toBeUndefined();
+  });
+
+  // Review of #919: Home seeds the post's read with its own feed card before it
+  // opens a post; a link opened later must not file this reel's events against
+  // Home's delivery.
+  it("takes the post page's read without the delivery a Home card left on it", () => {
+    const queryClient = new QueryClient();
+    const card = { ...showcaseItem('post-9'), recommendation: { deliveryId: 'home-delivery', position: 3, algorithmVersion: 'v4' } } as ShowcaseFeedItem;
+    queryClient.setQueryData(createShowcasePostQueryKey('post-9', 'user-1'), { success: true, item: card });
+
+    const item = readCachedImmersiveSourceData(queryClient, 'showcase-feed', 'user-1', 'post-9', null, 'user-1')?.showcaseItems?.[0];
+    expect(item?.id).toBe('post-9');
+    expect(item && 'recommendation' in item).toBe(false);
+    // The cache's own copy is left as it was.
+    expect(queryClient.getQueryData<{ item: ShowcaseFeedItem }>(createShowcasePostQueryKey('post-9', 'user-1'))?.item.recommendation?.deliveryId).toBe('home-delivery');
+  });
+
+  it('calls a For you reel the linked post alone only while it holds that post and no page read', () => {
+    expect(isLinkedPostAlone(undefined)).toBe(true);
+    expect(isLinkedPostAlone({ showcaseItems: [] })).toBe(true);
+    expect(isLinkedPostAlone({ showcaseItems: [showcaseItem('post-9')] })).toBe(true);
+    // A page was read with it, even an empty one or one with no session.
+    expect(isLinkedPostAlone({ showcaseItems: [showcaseItem('post-9')], feedSessionId: null })).toBe(false);
+    // A whole list: the saved pages holding the post, or a list kept from before.
+    expect(isLinkedPostAlone({ showcaseItems: [showcaseItem('post-1'), showcaseItem('post-9')] })).toBe(false);
+  });
+
+  it('keeps a lane that holds the post ahead of the post page\'s read', () => {
+    const queryClient = new QueryClient();
+    const rankedItems = [showcaseItem('post-2'), showcaseItem('post-9')];
+    queryClient.setQueryData(['showcase-feed', 'infinite', 'user-1', { sort: 'for-you' }], {
+      pages: [{ items: rankedItems, feedSessionId: 'session-1', algorithmVersion: 'hybrid-v1', nextCursor: null }],
+      pageParams: [{ offset: 0 }],
+    });
+    queryClient.setQueryData(createShowcasePostQueryKey('post-9', 'user-1'), { success: true, item: showcaseItem('post-9') });
+
+    expect(readCachedImmersiveSourceData(queryClient, 'showcase-feed', 'user-1', 'post-9', null, 'user-1')).toMatchObject({
+      showcaseItems: rankedItems,
+      feedSessionId: 'session-1',
+    });
+  });
+
+  // Every post a For you page holds is served to the reader, and a post served
+  // and never seen ranks lower for them for hours (`served_penalty`): a link
+  // opened, read and left serves nothing.
+  it('reads the post alone for a reel a link opened, until its neighbours are asked for', async () => {
+    const api = {
+      getShowcaseFeed: vi.fn(async () => ({ items: [showcaseItem('post-1')], feedSessionId: 'session-1' })),
+      getShowcasePost: vi.fn(async () => ({ item: showcaseItem('post-9') })),
+    };
+    const data = await loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: 'post-9', withNeighbours: false });
+
+    expect(api.getShowcaseFeed).not.toHaveBeenCalled();
+    expect(api.getShowcasePost).toHaveBeenCalledWith('post-9');
+    expect(data).toEqual({ showcaseItems: [showcaseItem('post-9')] });
+
+    api.getShowcasePost.mockImplementationOnce(async (): Promise<never> => { throw new ApiError('Post not found.', 404); });
+    await expect(loadImmersiveSourceData({ api: api as never, source: 'showcase-feed', initialId: 'post-9', withNeighbours: false }))
+      .resolves.toEqual({ showcaseItems: [] });
+  });
+
+  it('asks one For you page for the neighbours, and keeps the post the reader is on first', async () => {
+    const opened = showcaseItem('post-9');
+    const api = {
+      getShowcaseFeed: vi.fn(async () => ({
+        items: [showcaseItem('post-1'), showcaseItem('post-2')],
+        feedSessionId: 'session-1',
+        algorithmVersion: 'hybrid-v1',
+      })),
+    };
+    const data = await loadShowcaseReelNeighbours({ api, selected: opened });
+
+    expect(api.getShowcaseFeed.mock.calls).toEqual([[{ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you' }]]);
+    expect(data).toEqual({
+      showcaseItems: [opened, showcaseItem('post-1'), showcaseItem('post-2')],
+      feedSessionId: 'session-1',
+      algorithmVersion: 'hybrid-v1',
+    });
+
+    // Served in the page too: the page's copy (its delivery) goes first, once.
+    const served = { ...showcaseItem('post-9'), recommendation: { deliveryId: 'delivery-9', position: 1, algorithmVersion: 'hybrid-v1' } } as ShowcaseFeedItem;
+    api.getShowcaseFeed.mockResolvedValueOnce({ items: [showcaseItem('post-1'), served], feedSessionId: 'session-2', algorithmVersion: 'hybrid-v1' });
+    const again = await loadShowcaseReelNeighbours({ api, selected: opened, mediaOnly: true });
+    expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you', category: 'media' });
+    expect(again.showcaseItems).toEqual([served, showcaseItem('post-1')]);
+    expect(again.feedSessionId).toBe('session-2');
+  });
+
+  it("draws a loading page under a linked post until its neighbours come, and the page's end when none did", () => {
+    expect(linkReelEndSlideState({ status: 'idle', itemCount: 1 })).toBe('loading');
+    expect(linkReelEndSlideState({ status: 'pending', itemCount: 1 })).toBe('loading');
+    expect(linkReelEndSlideState({ status: 'error', itemCount: 1 })).toBe('error');
+    expect(linkReelEndSlideState({ status: 'success', itemCount: 1 })).toBe('end');
+    // Loaded: the reel ends at its last post, as a reel opened from a link always has.
+    expect(linkReelEndSlideState({ status: 'success', itemCount: 13 })).toBeNull();
+    // Nothing on screen yet (the post is still being read, or is gone): nothing after it either.
+    expect(linkReelEndSlideState({ status: 'idle', itemCount: 0 })).toBeNull();
   });
 
   it("opens a failure the library has not reached from the Failed scope's own pages, and only that one", () => {

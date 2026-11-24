@@ -1420,6 +1420,243 @@ describe("the reel's save", () => {
   });
 });
 
+// A shared link, a push or a deep link opens the post page (`app/post/[id].tsx`),
+// which reads the post and sends a media post on here with no lane. The reel
+// used to read that post again, beside a For you page, and draw nothing until
+// both had answered; and that page served a dozen posts to everyone who opened
+// a link, swiped on or not (archive/perf-loop-2026-11-24, app-static "New since" 1).
+describe('a reel a link opened', () => {
+  const LINK_ROUTE = { source: 'showcase-feed' };
+  // The post as the post page read it on its own: no feed delivered it.
+  const linkedPost = (): ShowcaseFeedItem => ({ ...feedItem('post-link', luna, 'unused'), recommendation: undefined });
+  const forYouPage = (items: ShowcaseFeedItem[]) => ({
+    items,
+    feedSessionId: 'session-9',
+    algorithmVersion: 'for-you-rules-v4',
+    nextCursor: null,
+    pageInfo: { hasMore: false, nextOffset: null },
+  });
+  const listProps = (tree: renderer.ReactTestRenderer) => tree.root.findByType('flat-list' as never).props as {
+    ListFooterComponent: React.ReactElement<{ state: string; onRetry: () => void }> | null;
+  };
+  const footerState = (tree: renderer.ReactTestRenderer) => listProps(tree).ListFooterComponent?.props.state ?? null;
+
+  /** What the post page leaves in the cache before it redirects. */
+  function seedPostPageRead(item = linkedPost()) {
+    queryClient.setQueryData(['showcase-post', item.id, 'viewer-1'], { success: true, item });
+  }
+
+  /** A swipe that comes back to rest on the post (too short to leave it). */
+  async function swipeAndRest(tree: renderer.ReactTestRenderer) {
+    await swipeTo(tree, 0);
+  }
+
+  it('draws the post the post page read at once, and asks the server for nothing', async () => {
+    seedPostPageRead();
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(reelIds(tree)).toEqual(['post-link']);
+    expect(activeId()).toBe('post-link');
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+    // A page to swipe to, which says it is loading until the reader gets there.
+    expect(footerState(tree)).toBe('loading');
+  });
+
+  // Asked once the swipe is at rest, never as it starts: a request made, or
+  // answered, while the list still moved cost Android its snap, and the first
+  // swipe sprang back to the post (Pixel_9a, 2026-11-24).
+  it("asks for one For you page once the reader's first swipe comes to rest, and keeps the post first", async () => {
+    seedPostPageRead();
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([feedItem('post-a', maya, 'delivery-a'), feedItem('post-d', nova, 'delivery-d')]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+    expect(tree.root.findByType('flat-list' as never).props.onScrollBeginDrag).toBeUndefined();
+
+    await swipeAndRest(tree);
+    await swipeAndRest(tree);
+
+    expect(authState.api.getShowcaseFeed.mock.calls).toEqual([[{ limit: 12, sort: 'for-you' }]]);
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a', 'post-d']);
+    expect(activeId()).toBe('post-link');
+    // The reel ends at its last post, as a reel opened from a link always has.
+    expect(footerState(tree)).toBeNull();
+
+    // The page's posts are counted in its session.
+    await swipeTo(tree, 1);
+    expect(activeId()).toBe('post-a');
+  });
+
+  it('puts a reader who reached the loading page on the first neighbour once it comes', async () => {
+    seedPostPageRead();
+    const page = deferred<ReturnType<typeof forYouPage>>();
+    authState.api.getShowcaseFeed.mockReturnValue(page.promise);
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    await swipeTo(tree, 1);
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(footerState(tree)).toBe('loading');
+
+    await act(async () => {
+      page.resolve(forYouPage([feedItem('post-a', maya, 'delivery-a')]));
+    });
+    await settle();
+
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a']);
+    expect(activeId()).toBe('post-a');
+  });
+
+  it('says the page failed on the page itself, and asks again from its Try again', async () => {
+    seedPostPageRead();
+    authState.api.getShowcaseFeed.mockRejectedValueOnce(Object.assign(new Error('Network request failed'), { status: 0 }));
+    authState.api.getShowcaseFeed.mockResolvedValueOnce(forYouPage([feedItem('post-a', maya, 'delivery-a')]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    await swipeTo(tree, 1);
+    expect(footerState(tree)).toBe('error');
+    // A later swipe does not ask again by itself: the page offers its own retry.
+    await swipeAndRest(tree);
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      listProps(tree).ListFooterComponent!.props.onRetry();
+    });
+    await settle();
+
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(2);
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a']);
+  });
+
+  it("closes on the page's end when For you has nothing more", async () => {
+    seedPostPageRead();
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([{ ...linkedPost(), recommendation: { deliveryId: 'delivery-link', position: 0, algorithmVersion: 'for-you-rules-v4' } } as ShowcaseFeedItem]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    await swipeAndRest(tree);
+
+    expect(reelIds(tree)).toEqual(['post-link']);
+    expect(footerState(tree)).toBe('end');
+  });
+
+  it('reads the post itself, and nothing more, when nothing has read it yet', async () => {
+    authState.api.getShowcasePost.mockResolvedValue({ success: true, item: linkedPost() });
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(authState.api.getShowcasePost.mock.calls).toEqual([['post-link']]);
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+    expect(reelIds(tree)).toEqual(['post-link']);
+  });
+
+  // Review of #919, 1: the route alone said "a linked post" even when the reel
+  // opened on a whole list (the link opened again after its neighbours were
+  // read, or a post the saved pages hold).
+  it('opens on a list it already holds as a list: no loading page, no page read on a swipe', async () => {
+    const kept = [linkedPost(), feedItem('post-a', maya, 'delivery-a'), feedItem('post-d', nova, 'delivery-d')];
+    queryClient.setQueryData(
+      ['immersive-preview-source', 'showcase-feed', 'viewer-1', 'post-link', '', '', false, ''],
+      { showcaseItems: kept, feedSessionId: 'session-9', algorithmVersion: 'for-you-rules-v4' },
+    );
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a', 'post-d']);
+    expect(footerState(tree)).toBeNull();
+    await swipeAndRest(tree);
+    await swipeTo(tree, 1);
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a', 'post-d']);
+    expect(activeId()).toBe('post-a');
+  });
+
+  it('opens a post the saved pages hold on those pages, as before', async () => {
+    queryClient.setQueryData(['profile-saved-media', 'viewer-1'], {
+      pages: [{ items: [feedItem('post-s', maya, 'unused-s'), linkedPost()], nextCursor: null }],
+      pageParams: [0],
+    });
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(reelIds(tree)).toEqual(['post-s', 'post-link']);
+    expect(footerState(tree)).toBeNull();
+    await swipeAndRest(tree);
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+  });
+
+  it('reads a list it holds again as a list once it is old, never as the post alone', async () => {
+    queryClient.setQueryData(
+      ['immersive-preview-source', 'showcase-feed', 'viewer-1', 'post-link', '', '', false, ''],
+      { showcaseItems: [linkedPost(), feedItem('post-a', maya, 'delivery-a')], feedSessionId: 'session-9', algorithmVersion: 'for-you-rules-v4' },
+      { updatedAt: Date.now() - 60_000 },
+    );
+    authState.api.getShowcasePost.mockResolvedValue({ success: true, item: linkedPost() });
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([feedItem('post-a', maya, 'delivery-a'), feedItem('post-d', nova, 'delivery-d')]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a', 'post-d']);
+  });
+
+  // Review of #919, 2: the read belongs to the source key it was asked for.
+  it('starts a guest who signs in on the reel again from the post alone, reading no page until a swipe', async () => {
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    queryClient.setQueryData(['showcase-post', 'post-link', undefined], { success: true, item: linkedPost() });
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([feedItem('post-a', maya, 'delivery-a')]));
+    authState.api.getShowcasePost.mockResolvedValue({ success: true, item: linkedPost() });
+    const tree = await renderReel('post-link', LINK_ROUTE);
+    await swipeAndRest(tree);
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a']);
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+
+    authState.user = { id: 'viewer-1', email: 'viewer@example.com' };
+    authState.identityUserId = 'viewer-1';
+    act(() => {
+      tree.update(
+        <QueryClientProvider client={queryClient}>
+          <ImmersivePreviewViewerScreen />
+        </QueryClientProvider>
+      );
+    });
+    await settle();
+
+    expect(reelIds(tree)).toEqual(['post-link']);
+    expect(footerState(tree)).toBe('loading');
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    await swipeAndRest(tree);
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(2);
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a']);
+  });
+
+  // Review of #919, 3: the page's served copy of the post on screen carries its
+  // delivery; the impression and the dwell go to it (since #902 the impression
+  // is the view count too).
+  it("files the post's impression and dwell under the delivery its neighbours' page served it with", async () => {
+    seedPostPageRead();
+    const served = { ...linkedPost(), recommendation: { deliveryId: 'delivery-link', position: 0, algorithmVersion: 'for-you-rules-v4' } } as ShowcaseFeedItem;
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([served, feedItem('post-a', maya, 'delivery-a')]));
+    const { enqueueShowcaseFeedEvent } = await import('@/lib/feed-event-queue');
+    const tree = await renderReel('post-link', LINK_ROUTE);
+    // Past the qualified impression's second, whose timer fires while the post
+    // is still the post page's copy (no delivery, so nothing is filed then).
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1100)); });
+    await swipeAndRest(tree);
+    await swipeTo(tree, 1);
+
+    const filed = (enqueueShowcaseFeedEvent as unknown as { mock: { calls: Array<[{ eventType: string; deliveryId?: string; postId: string }]> } })
+      .mock.calls.map(([request]) => request).filter((request) => request.postId === 'post-link');
+    expect(filed.map((request) => [request.eventType, request.deliveryId])).toEqual([
+      ['impression', 'delivery-link'],
+      ['dwell', 'delivery-link'],
+    ]);
+  });
+
+  it('keeps a reel opened from a lane to its lane, with no loading page of its own', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    await swipeTo(tree, 2);
+    expect(activeId()).toBe('post-c');
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+  });
+});
+
 describe('a recipe opened from search', () => {
   // The route the search row pushes (`components/explore-search-overlay.tsx`).
   const SEARCH_ROUTE = { source: 'showcase-feed', initialPage: 'details', initialSection: 'resources' };
@@ -1465,9 +1702,15 @@ describe('a recipe opened from search', () => {
     const tree = await renderReel('post-recipe', SEARCH_ROUTE);
 
     expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-recipe');
-    expect(reelIds(tree)).toEqual(['post-recipe', 'post-a']);
+    // The post alone, as from a link: For you is asked for once the reader swipes on.
+    expect(reelIds(tree)).toEqual(['post-recipe']);
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
     expect(activeId()).toBe('post-recipe');
     expect(activeItem().details?.unlock).toMatchObject({ resourceId: 'bundle-1', postId: 'post-recipe' });
+    expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
+
+    await swipeTo(tree, 0);
+    expect(reelIds(tree)).toEqual(['post-recipe', 'post-a']);
     expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
     expect(slideProps(tree, 'post-a').initialSection).toBeUndefined();
   });
