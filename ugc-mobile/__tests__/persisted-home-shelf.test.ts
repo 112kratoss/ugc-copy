@@ -138,7 +138,7 @@ describe('the key', () => {
 });
 
 describe('what a saved copy keeps', () => {
-  it('keeps the creations without their price or "Free to try", and only the offer that names no figure', () => {
+  it('keeps the creations without the cards' prices or "Free to try", and only the offer that names no figure', () => {
     const items = toSavedShelfItems(shelf().items);
 
     expect(ids(items)).toEqual(['a', 'b', 'action:post', 'c', 'd']);
@@ -294,8 +294,13 @@ describe('a card taken off', () => {
     asyncStorage.removeItem.mockImplementation(storage.removeItem);
     const client = clientWithShelf('user-1', shelf(), FETCHED_AT);
 
+    asyncStorage.removeItem.mockClear();
     takeOffHomeShelf(client, { creatorId: 'creator-b' });
-    await clearPersistedHomeShelf(environment(storage)); // waits for the queued removal
+    // Nothing here clears the copy: the listener persisted-home-shelf registers
+    // does, on the device's storage, even with Home unmounted. A no-op save
+    // queued after it waits for that removal.
+    await persistHomeShelf(new QueryClient(), 'user-1', environment(storage));
+    expect(asyncStorage.removeItem).toHaveBeenCalledWith(PERSISTED_HOME_SHELF_STORAGE_KEY);
     expect(storage.values.has(PERSISTED_HOME_SHELF_STORAGE_KEY)).toBe(false);
 
     // What Home's save does after the edit.
@@ -331,7 +336,8 @@ describe('wiring', () => {
     const dashboard = read('components/home-dashboard.tsx');
     expect(dashboard).toContain('if (isAuthLoading || !shelfQuery.isSuccess) return;');
     expect(dashboard).toContain('schedulePersistHomeShelf(queryClient, identityUserId);');
-    expect(dashboard).toContain('useEffect(() => cancelScheduledPersistHomeShelf, []);');
+    // Dropped when the identity changes or Home unmounts (home-dashboard.test.tsx).
+    expect(dashboard).toContain('    schedulePersistHomeShelf(queryClient, identityUserId);\n    return cancelScheduledPersistHomeShelf;');
   });
 
   it('forgets the saved shelf everywhere the signed-in session is cleared from the device', () => {

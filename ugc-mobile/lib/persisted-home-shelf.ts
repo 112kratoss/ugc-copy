@@ -19,10 +19,13 @@ import type { HomeShelfItem, HomeShelfResponse } from './types';
 //
 // What is kept is only what cannot mislead for the second or so before the
 // fresh answer lands (`toSavedShelfItems`):
-// - creations, without their price and without `fitsWelcomeCredits` (the
-//   "Free to try" badge): a price is the catalog's and may have changed since.
-//   The card draws without a price line until the refetch brings it; the
-//   creator quotes afresh before any run, and the remix start is the server's,
+// - creations, without the cards' prices and without `fitsWelcomeCredits`
+//   (the "Free to try" badge): a card's price is the catalog's and may have
+//   changed since. The card draws without a price line until the refetch
+//   brings it; the creator quotes afresh before any run. The card's `post` is
+//   kept whole, recipe price (`asset.priceUsdCents`) included, as the feed's
+//   saved page keeps it: an unlock at a stale figure is answered 409
+//   `RESOURCE_PRICE_CHANGED` and charges nothing. The remix start is the server's,
 //   so a press on a restored card is refused properly if the post has gone or
 //   its remix was put behind a recipe (`startShowcaseRemix`).
 // - the "Share your first post" offer, which states no figure.
