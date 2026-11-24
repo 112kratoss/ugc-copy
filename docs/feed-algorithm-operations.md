@@ -148,7 +148,7 @@ What it does not do:
 
 Rolling back means making the previous version active again.
 
-- **An experiment**: `experiment stop --key <key> --status cancelled --apply`. Every viewer is back on the active version at their next feed session started a minute or more after the stop.
+- **An experiment**: `experiment stop --key <key> --status cancelled --apply`. Every viewer is back on the active version at their next feed session started a minute or more after the stop. For that minute an instance still holding the experiment can enrol a new viewer, so `feed_experiment_assignments` rows can land up to a minute after the stop: wait a minute after `experiment stop` before reading `experiment srm` or the scorecard as final.
 - **An activation**: activate the previous version again. `activate_feed_algorithm_version` accepts a `retired` target and clears its `retired_at` in the same statement that retires the current version (`feed_algorithm_versions_lifecycle_check` forbids a `retired_at` earlier than the new `activated_at`, so the RPC does it, not you):
 
   ```bash

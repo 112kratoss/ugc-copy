@@ -1360,6 +1360,12 @@ function createPhaseTimer(onPhaseTiming?: (phase: string, durationMs: number) =>
 
 type CandidateSources = {
   fallbackItems: (target: number) => Promise<ShowcaseFeedItem[]>;
+  /**
+   * The top-up is a single read on this lane, so it may start beside the
+   * candidate read (`rankFreshCandidates`). Left out or false, it is read only
+   * once hydration shows the pool falls short, as it always was.
+   */
+  fallbackIsOneRead?: boolean;
   hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
 };
 
@@ -1370,6 +1376,7 @@ type CandidateSources = {
 async function rankFreshCandidates({
   algorithm,
   anonymousKeyHash,
+  fallbackIsOneRead = false,
   fallbackItems,
   filters,
   hydratePostIds,
@@ -1394,12 +1401,16 @@ async function rankFreshCandidates({
   // The recent top-up needs only the algorithm's item limit, and a ranking
   // needed it on every one of the 52 For you rankings production logged on
   // 2026-11-23/24 (the pool hydrates fewer than 60 posts), each time after
-  // hydration, ~135 ms p50 in series. So it starts here, beside the candidate
+  // hydration, ~135 ms p50 in series. Where it is one read (the lane has
+  // nothing to filter after hydration) it starts here, beside the candidate
   // read, and settles (it never rejects) for the merge below to use or drop.
-  const fallbackRead = timed('fallback', () => fallbackItems(algorithm.eligibleItemLimit)).then(
+  // On a filtered lane it is a scan of several round trips, kept to after
+  // hydration and to a pool that falls short, as before.
+  const readFallback = () => timed('fallback', () => fallbackItems(algorithm.eligibleItemLimit)).then(
     (items) => ({ ok: true as const, items }),
     (error: unknown) => ({ ok: false as const, error }),
   );
+  const earlyFallback = fallbackIsOneRead ? readFallback() : null;
   const featureRows = await timed('candidate_rpc', () => loadCandidateFeatures({
     algorithm,
     anonymousKeyHash,
@@ -1425,8 +1436,8 @@ async function rankFreshCandidates({
   // it is shorter than the candidate read), so the posts the two pools share,
   // nearly all of them with a small catalog, are hydrated once, by the top-up,
   // and the pool finds them in the request's hydration cache.
-  const settledFallback = configuredFeatureRows?.length
-    ? await timed('fallback_wait', () => fallbackRead)
+  const settledFallback = earlyFallback && configuredFeatureRows?.length
+    ? await timed('fallback_wait', () => earlyFallback)
     : null;
   const hydratedFeatureItems = configuredFeatureRows?.length
     ? await timed('hydration', () => hydrateEligibleCandidates({
@@ -1438,7 +1449,8 @@ async function rankFreshCandidates({
   const fallbackTarget = algorithm.eligibleItemLimit - hydratedFeatureItems.length;
   let filteredFallbackItems: ShowcaseFeedItem[] = [];
   if (fallbackTarget > 0) {
-    const fallback = settledFallback ?? await timed('fallback_wait', () => fallbackRead);
+    const fallback = settledFallback
+      ?? (earlyFallback ? await timed('fallback_wait', () => earlyFallback) : await readFallback());
     // A failed top-up fails the page only when the page needed it, as before.
     if (!fallback.ok) throw fallback.error;
     filteredFallbackItems = fallback.items;
@@ -1633,6 +1645,7 @@ async function persistAndBuildRankedPage({
  */
 export async function prepareRankedShowcaseFeedSession({
   anonymousKeyHash,
+  fallbackIsOneRead,
   fallbackItems,
   filters,
   hydratePostIds,
@@ -1666,6 +1679,7 @@ export async function prepareRankedShowcaseFeedSession({
   const { ranked, randomSeed } = await rankFreshCandidates({
     algorithm,
     anonymousKeyHash,
+    fallbackIsOneRead,
     fallbackItems,
     filters,
     hydratePostIds,
@@ -1799,6 +1813,7 @@ async function servePreparedSession({
 export async function getPersonalizedShowcaseFeedPage({
   anonymousKeyHash,
   cursor,
+  fallbackIsOneRead,
   fallbackItems,
   filters,
   hydratePostIds,
@@ -1815,6 +1830,7 @@ export async function getPersonalizedShowcaseFeedPage({
 }: {
   anonymousKeyHash: string | null;
   cursor: string | null;
+  fallbackIsOneRead?: CandidateSources['fallbackIsOneRead'];
   fallbackItems: (target: number) => Promise<ShowcaseFeedItem[]>;
   filters: RankedFeedFilters;
   hydratePostIds: (postIds: string[]) => Promise<ShowcaseFeedItem[]>;
@@ -1982,6 +1998,7 @@ export async function getPersonalizedShowcaseFeedPage({
   const ranking = await rankFreshCandidates({
     algorithm,
     anonymousKeyHash,
+    fallbackIsOneRead,
     fallbackItems,
     filters,
     hydratePostIds,

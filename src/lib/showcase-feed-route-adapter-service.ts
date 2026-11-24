@@ -106,6 +106,7 @@ function logSampledFeedPhases({
   phases,
   random,
   readAhead,
+  status,
   totalMs,
 }: {
   admissionMs: number | null;
@@ -116,6 +117,8 @@ function logSampledFeedPhases({
   phases: Map<string, number>;
   random: () => number;
   readAhead: boolean;
+  /** The answer's HTTP status: a refused or failed read is logged too, slow failures most of all. */
+  status: number;
   totalMs: number;
 }) {
   if (process.env.VERCEL_ENV !== 'production') return;
@@ -123,6 +126,8 @@ function logSampledFeedPhases({
   if (!slow && !(random() < FEED_PHASE_LOG_SAMPLE_RATE)) return;
   logBackendInfo('showcase_feed_phase_timing', {
     reason: slow ? 'slow' : 'sampled',
+    outcome: status < 400 ? 'ok' : status === 429 ? 'rate_limited' : status < 500 ? 'refused' : 'error',
+    status,
     totalMs: Math.round(totalMs),
     // From the request's arrival at the route to the handler: token check, session and lifecycle.
     admissionMs: admissionMs === null ? null : Math.round(admissionMs),
@@ -300,11 +305,31 @@ export function startShowcaseFeedReadLimit(
   };
 }
 
+/** Set once a read is known to be logged (`logSampledFeedPhases`), and called with its answer's status. */
+type FeedPhaseLog = { log: ((status: number) => void) | null };
+
+/**
+ * Every answer of a read whose phases are kept, a refusal or a failure
+ * included, reaches the sampled log line with its status.
+ */
 async function handleShowcaseFeedGET(
   request: Request,
   dependencies: ReturnType<typeof resolveDependencies>,
   startedReadLimit: StartedShowcaseFeedReadLimit | null,
   receivedAt: number | null,
+) {
+  const phaseLog: FeedPhaseLog = { log: null };
+  const response = await answerShowcaseFeedGET(request, dependencies, startedReadLimit, receivedAt, phaseLog);
+  phaseLog.log?.(response.status);
+  return response;
+}
+
+async function answerShowcaseFeedGET(
+  request: Request,
+  dependencies: ReturnType<typeof resolveDependencies>,
+  startedReadLimit: StartedShowcaseFeedReadLimit | null,
+  receivedAt: number | null,
+  phaseLog: FeedPhaseLog,
 ) {
   const handlerStartedAt = performance.now();
   try {
@@ -322,7 +347,9 @@ async function handleShowcaseFeedGET(
       phaseTimings.set(phase, (phaseTimings.get(phase) ?? 0) + Math.max(0, durationMs));
     };
     let readAheadClaim: boolean | null = null;
-    const logPhases = (options: { readAhead: boolean; cursor: boolean; offset: number; fresh: boolean }) => {
+    const logPhases = (
+      options: { readAhead: boolean; cursor: boolean; offset: number; fresh: boolean; status: number },
+    ) => {
       if (!collectingPhases) return;
       const answeredAt = performance.now();
       logSampledFeedPhases({
@@ -366,6 +393,8 @@ async function handleShowcaseFeedGET(
     const searchParams = new URL(request.url).searchParams;
     const query = readShowcaseFeedQuery(searchParams);
     const { limit, tool, cursor, sort, offset, readAhead } = query;
+    const logShape = { readAhead, cursor: Boolean(cursor), offset, fresh: false };
+    phaseLog.log = (status) => logPhases({ ...logShape, status });
     const authStartedAt = performance.now();
     const actor = await getViewerUserId(request, hasAuthorizationHeader, dependencies);
     if (actor.ok && actor.viewerUserId && sort === 'for-you') collectingPhases = true;
@@ -401,6 +430,7 @@ async function handleShowcaseFeedGET(
     // ranked afresh, where a first page read again within two minutes is
     // otherwise served the same ranking. Anything else ignores it.
     const fresh = searchParams.get('fresh') === '1' && sort === 'for-you' && !cursor && offset === 0;
+    logShape.fresh = fresh;
     const anonymousIdentity = viewerUserId || sort !== 'for-you'
       ? null
       : dependencies.resolveFeedAnonymousIdentity(request);
@@ -474,7 +504,6 @@ async function handleShowcaseFeedGET(
       });
       recordPhase('feed_total', performance.now() - feedStartedAt);
       if (prepared) countReadAhead('hold');
-      logPhases({ readAhead: true, cursor: false, offset, fresh: false });
       // Null: nothing to hold (no active algorithm, an empty ranking). The app
       // then reads the page the ordinary way when Explore opens.
       return withPhaseTimings(NextResponse.json(
@@ -539,7 +568,6 @@ async function handleShowcaseFeedGET(
     if (anonymousIdentity?.cookieValueToSet) {
       setFeedAnonymousCookie(response, anonymousIdentity.cookieValueToSet);
     }
-    logPhases({ readAhead: false, cursor: Boolean(cursor), offset, fresh });
     return response;
   } catch (error) {
     dependencies.logError('Showcase feed error:', error);

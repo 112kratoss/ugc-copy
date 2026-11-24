@@ -1087,6 +1087,8 @@ describe('sampled production log of a signed-in For you read\'s phases', () => {
       expect(record).toMatchObject({
         level: 'info',
         reason: 'sampled',
+        outcome: 'ok',
+        status: 200,
         firstPage: true,
         cursorPage: false,
         offsetPage: false,
@@ -1150,6 +1152,48 @@ describe('sampled production log of a signed-in For you read\'s phases', () => {
       ]);
       expect(log.timings()[0].phases).toMatchObject({ candidate_rpc: 77 });
       expect(JSON.stringify(log.records)).not.toContain(READ_AHEAD_TOKEN);
+    } finally {
+      log.restore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('logs a refused or failed read too, with its outcome, and still nothing that identifies the reader', async () => {
+    vi.stubEnv('VERCEL_ENV', 'production');
+    const log = captureLogs();
+    try {
+      const failed = await signedInRead('sort=for-you', {
+        receivedAt: performance.now() - 2_500,
+        page: vi.fn(async () => { throw new Error(`feed read failed for ${USER_ID}`); }) as unknown as typeof getShowcaseFeedPage,
+      });
+      expect(failed.status).toBe(500);
+
+      const limited = await getShowcaseFeedRouteResponse({
+        request: new Request('http://localhost/api/showcase/feed?sort=for-you', {
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        }),
+        dependencies: {
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: vi.fn(() => createUserClient(USER_ID)),
+          enforceBackendRateLimit: vi.fn(async () => {
+            throw new BackendRateLimitError({
+              allowed: false, limit: 60, remaining: 0, retryAfterSeconds: 30,
+              resetAt: new Date(Date.now() + 60_000).toISOString(),
+            });
+          }),
+          random: () => 0,
+          getShowcaseFeedPage: vi.fn() as unknown as typeof getShowcaseFeedPage,
+          logError: vi.fn(),
+        },
+      });
+      expect(limited.status).toBe(429);
+
+      expect(log.timings().map(({ outcome, status, reason }) => ({ outcome, status, reason }))).toEqual([
+        { outcome: 'error', status: 500, reason: 'slow' },
+        { outcome: 'rate_limited', status: 429, reason: 'sampled' },
+      ]);
+      const lines = JSON.stringify(log.timings());
+      for (const identifying of [USER_ID, TOKEN, IP]) expect(lines).not.toContain(identifying);
     } finally {
       log.restore();
       vi.unstubAllEnvs();

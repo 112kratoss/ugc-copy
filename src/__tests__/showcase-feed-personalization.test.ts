@@ -168,9 +168,7 @@ describe('showcase feed personalization candidate filling', () => {
     expect(db.rpc).toHaveBeenCalledWith('get_ranked_feed_candidates', expect.objectContaining({ p_limit: 300 }));
     expect(hydratePostIds).toHaveBeenCalledTimes(1);
     expect(hydratePostIds.mock.calls[0]?.[0]).toHaveLength(60);
-    // The recent top-up is read beside the candidate read (it is needed on
-    // nearly every ranking), and its items go unused when the pool fills.
-    expect(fallbackItems).toHaveBeenCalledTimes(1);
+    expect(fallbackItems).not.toHaveBeenCalled();
     expect(page.items).toHaveLength(12);
     // 60 ranked candidates against a 12-item page: there is more, and saying so does
     // not depend on having opened a session.
@@ -2445,7 +2443,7 @@ describe('first-page waits (speed round 2, 2026-11-24)', () => {
     expect(algorithmReads(db)).toBe(2);
   });
 
-  it('starts the recent top-up read beside the candidate read, not after hydration', async () => {
+  it('starts the recent top-up read beside the candidate read on a lane where it is one read', async () => {
     let releaseCandidates!: () => void;
     const candidatesReturned = new Promise<void>((resolve) => { releaseCandidates = resolve; });
     const base = serviceClient([]);
@@ -2459,7 +2457,7 @@ describe('first-page waits (speed round 2, 2026-11-24)', () => {
 
     const pending = getPersonalizedShowcaseFeedPage({
       anonymousKeyHash: null, cursor: null, filters: allFilters,
-      hydratePostIds, fallbackItems,
+      hydratePostIds, fallbackItems, fallbackIsOneRead: true,
       limit: 12, offset: 0, serviceClient: db, viewerUserId: null,
     });
     await vi.waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
@@ -2478,6 +2476,7 @@ describe('first-page waits (speed round 2, 2026-11-24)', () => {
     await getPersonalizedShowcaseFeedPage({
       anonymousKeyHash: null, cursor: null, filters: allFilters,
       hydratePostIds: async (ids) => { order.push('hydrate'); return ids.map((id) => item(id)); },
+      fallbackIsOneRead: true,
       fallbackItems: async () => {
         await new Promise((resolve) => setTimeout(resolve, 5));
         order.push('fallback');
@@ -2493,7 +2492,7 @@ describe('first-page waits (speed round 2, 2026-11-24)', () => {
     const needed = getPersonalizedShowcaseFeedPage({
       anonymousKeyHash: null, cursor: null, filters: allFilters,
       hydratePostIds: async (ids) => ids.map((id) => item(id)),
-      fallbackItems: failingFallback,
+      fallbackItems: failingFallback, fallbackIsOneRead: true,
       limit: 12, offset: 0, serviceClient: serviceClient(['ranked-1']), viewerUserId: null,
     });
     await expect(needed).rejects.toThrow('recent read failed');
@@ -2502,9 +2501,37 @@ describe('first-page waits (speed round 2, 2026-11-24)', () => {
     const unneeded = await getPersonalizedShowcaseFeedPage({
       anonymousKeyHash: null, cursor: null, filters: allFilters,
       hydratePostIds: async (ids) => ids.map((id) => item(id)),
-      fallbackItems: failingFallback,
+      fallbackItems: failingFallback, fallbackIsOneRead: true,
       limit: 12, offset: 0, serviceClient: serviceClient(postIds), viewerUserId: null,
     });
     expect(unneeded.items).toHaveLength(12);
+  });
+
+  it('never holds a filtered lane\'s hydration behind its top-up scan, nor scans when the pool fills', async () => {
+    // On a filtered lane (image, video, media, an unlock or resource filter)
+    // the top-up is a scan of several round trips: it is read after hydration,
+    // and only for a pool that falls short.
+    const fullPool = Array.from({ length: 60 }, (_, index) => `ranked-${index}`);
+    const scan = vi.fn(async () => [item('recent-1')]);
+    const hydratePostIds = vi.fn(async (ids: string[]) => ids.map((id) => item(id)));
+    const full = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null,
+      filters: { category: 'video', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds, fallbackItems: scan, fallbackIsOneRead: false,
+      limit: 12, offset: 0, serviceClient: serviceClient(fullPool), viewerUserId: null,
+    });
+    expect(full.items).toHaveLength(12);
+    expect(scan).not.toHaveBeenCalled();
+
+    const order: string[] = [];
+    const short = await getPersonalizedShowcaseFeedPage({
+      anonymousKeyHash: null, cursor: null,
+      filters: { category: 'video', toolSlug: null, unlockFilter: 'all', resourceFilter: 'all' },
+      hydratePostIds: async (ids) => { order.push('hydrate'); return ids.map((id) => item(id)); },
+      fallbackItems: async () => { order.push('scan'); return [item('recent-1')]; },
+      limit: 12, offset: 0, serviceClient: serviceClient(['ranked-1']), viewerUserId: null,
+    });
+    expect(order).toEqual(['hydrate', 'scan']);
+    expect(short.items.map((entry) => entry.id).sort()).toEqual(['ranked-1', 'recent-1']);
   });
 });
