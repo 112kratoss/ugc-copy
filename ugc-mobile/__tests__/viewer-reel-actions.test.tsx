@@ -1420,6 +1420,141 @@ describe("the reel's save", () => {
   });
 });
 
+// A shared link, a push or a deep link opens the post page (`app/post/[id].tsx`),
+// which reads the post and sends a media post on here with no lane. The reel
+// used to read that post again, beside a For you page, and draw nothing until
+// both had answered; and that page served a dozen posts to everyone who opened
+// a link, swiped on or not (archive/perf-loop-2026-11-24, app-static "New since" 1).
+describe('a reel a link opened', () => {
+  const LINK_ROUTE = { source: 'showcase-feed' };
+  // The post as the post page read it on its own: no feed delivered it.
+  const linkedPost = (): ShowcaseFeedItem => ({ ...feedItem('post-link', luna, 'unused'), recommendation: undefined });
+  const forYouPage = (items: ShowcaseFeedItem[]) => ({
+    items,
+    feedSessionId: 'session-9',
+    algorithmVersion: 'for-you-rules-v4',
+    nextCursor: null,
+    pageInfo: { hasMore: false, nextOffset: null },
+  });
+  const listProps = (tree: renderer.ReactTestRenderer) => tree.root.findByType('flat-list' as never).props as {
+    onScrollBeginDrag?: () => void;
+    ListFooterComponent: React.ReactElement<{ state: string; onRetry: () => void }> | null;
+  };
+  const footerState = (tree: renderer.ReactTestRenderer) => listProps(tree).ListFooterComponent?.props.state ?? null;
+
+  /** What the post page leaves in the cache before it redirects. */
+  function seedPostPageRead(item = linkedPost()) {
+    queryClient.setQueryData(['showcase-post', item.id, 'viewer-1'], { success: true, item });
+  }
+
+  async function startSwipe(tree: renderer.ReactTestRenderer) {
+    await act(async () => {
+      listProps(tree).onScrollBeginDrag?.();
+    });
+    await settle();
+  }
+
+  it('draws the post the post page read at once, and asks the server for nothing', async () => {
+    seedPostPageRead();
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(reelIds(tree)).toEqual(['post-link']);
+    expect(activeId()).toBe('post-link');
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+    // A page to swipe to, which says it is loading until the reader gets there.
+    expect(footerState(tree)).toBe('loading');
+  });
+
+  it('asks for one For you page once the reader starts to swipe, and keeps the post first', async () => {
+    seedPostPageRead();
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([feedItem('post-a', maya, 'delivery-a'), feedItem('post-d', nova, 'delivery-d')]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    await startSwipe(tree);
+    await startSwipe(tree);
+
+    expect(authState.api.getShowcaseFeed.mock.calls).toEqual([[{ limit: 12, sort: 'for-you' }]]);
+    expect(authState.api.getShowcasePost).not.toHaveBeenCalled();
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a', 'post-d']);
+    expect(activeId()).toBe('post-link');
+    // The reel ends at its last post, as a reel opened from a link always has.
+    expect(footerState(tree)).toBeNull();
+
+    // The page's posts are counted in its session.
+    await swipeTo(tree, 1);
+    expect(activeId()).toBe('post-a');
+  });
+
+  it('puts a reader who reached the loading page on the first neighbour once it comes', async () => {
+    seedPostPageRead();
+    const page = deferred<ReturnType<typeof forYouPage>>();
+    authState.api.getShowcaseFeed.mockReturnValue(page.promise);
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    // A swipe that never reported its start (a screen reader's scroll) still asks.
+    await swipeTo(tree, 1);
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+    expect(footerState(tree)).toBe('loading');
+
+    await act(async () => {
+      page.resolve(forYouPage([feedItem('post-a', maya, 'delivery-a')]));
+    });
+    await settle();
+
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a']);
+    expect(activeId()).toBe('post-a');
+  });
+
+  it('says the page failed on the page itself, and asks again from its Try again', async () => {
+    seedPostPageRead();
+    authState.api.getShowcaseFeed.mockRejectedValueOnce(Object.assign(new Error('Network request failed'), { status: 0 }));
+    authState.api.getShowcaseFeed.mockResolvedValueOnce(forYouPage([feedItem('post-a', maya, 'delivery-a')]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    await startSwipe(tree);
+    expect(footerState(tree)).toBe('error');
+    // A later swipe does not ask again by itself: the page offers its own retry.
+    await startSwipe(tree);
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      listProps(tree).ListFooterComponent!.props.onRetry();
+    });
+    await settle();
+
+    expect(authState.api.getShowcaseFeed).toHaveBeenCalledTimes(2);
+    expect(reelIds(tree)).toEqual(['post-link', 'post-a']);
+  });
+
+  it("closes on the page's end when For you has nothing more", async () => {
+    seedPostPageRead();
+    authState.api.getShowcaseFeed.mockResolvedValue(forYouPage([{ ...linkedPost(), recommendation: { deliveryId: 'delivery-link', position: 0, algorithmVersion: 'for-you-rules-v4' } } as ShowcaseFeedItem]));
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    await startSwipe(tree);
+
+    expect(reelIds(tree)).toEqual(['post-link']);
+    expect(footerState(tree)).toBe('end');
+  });
+
+  it('reads the post itself, and nothing more, when nothing has read it yet', async () => {
+    authState.api.getShowcasePost.mockResolvedValue({ success: true, item: linkedPost() });
+    const tree = await renderReel('post-link', LINK_ROUTE);
+
+    expect(authState.api.getShowcasePost.mock.calls).toEqual([['post-link']]);
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+    expect(reelIds(tree)).toEqual(['post-link']);
+  });
+
+  it('keeps a reel opened from a lane to its lane, with no loading page of its own', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    expect(listProps(tree).onScrollBeginDrag).toBeUndefined();
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
+  });
+});
+
 describe('a recipe opened from search', () => {
   // The route the search row pushes (`components/explore-search-overlay.tsx`).
   const SEARCH_ROUTE = { source: 'showcase-feed', initialPage: 'details', initialSection: 'resources' };
@@ -1465,9 +1600,18 @@ describe('a recipe opened from search', () => {
     const tree = await renderReel('post-recipe', SEARCH_ROUTE);
 
     expect(authState.api.getShowcasePost).toHaveBeenCalledWith('post-recipe');
-    expect(reelIds(tree)).toEqual(['post-recipe', 'post-a']);
+    // The post alone, as from a link: For you is asked for once the reader swipes on.
+    expect(reelIds(tree)).toEqual(['post-recipe']);
+    expect(authState.api.getShowcaseFeed).not.toHaveBeenCalled();
     expect(activeId()).toBe('post-recipe');
     expect(activeItem().details?.unlock).toMatchObject({ resourceId: 'bundle-1', postId: 'post-recipe' });
+    expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
+
+    await act(async () => {
+      (tree.root.findByType('flat-list' as never).props as { onScrollBeginDrag: () => void }).onScrollBeginDrag();
+    });
+    await settle();
+    expect(reelIds(tree)).toEqual(['post-recipe', 'post-a']);
     expect(slideProps(tree, 'post-recipe')).toMatchObject({ initialSection: 'resources', pageKey: 'details' });
     expect(slideProps(tree, 'post-a').initialSection).toBeUndefined();
   });

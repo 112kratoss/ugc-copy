@@ -10,8 +10,10 @@ import {
   type ImmersivePreviewItem,
   type PreviewViewerSource,
 } from '@/lib/immersive-preview-view-model';
+import type { ReelEndSlideState } from '@/lib/showcase-feed-lane';
 import {
   createShowcaseFeedViewerQueryKey,
+  createShowcasePostQueryKey,
   flattenShowcaseFeedPages,
   getShowcaseFeedSessionContext,
   SHOWCASE_FEED_PAGE_SIZE,
@@ -134,11 +136,14 @@ export async function loadImmersiveSourceData({
   source,
   initialId,
   mediaOnly = false,
+  withNeighbours = true,
 }: {
   api: ImmersivePreviewApi;
   source: PreviewViewerSource;
   initialId: string;
   mediaOnly?: boolean;
+  /** For a For you reel: read its page with the post, or (false) the post alone. */
+  withNeighbours?: boolean;
 }): Promise<ImmersiveSourceData> {
   if (isGenerationSource(source)) {
     // The library window is unarchived, as the grid's is. Owner posts are not
@@ -196,6 +201,15 @@ export async function loadImmersiveSourceData({
     return { showcaseItems: selected ? [selected] : [] };
   }
 
+  // A reel opened on one post with no grid under it (a link, a push or a deep
+  // link through the post page, a recipe from search) reads that post alone
+  // until the reader swipes on (`withNeighbours: false`); its For you page
+  // then comes from `loadShowcaseReelNeighbours`.
+  if (!withNeighbours) {
+    const selected = initialId ? await readShowcasePostOrMissing(api, initialId) : null;
+    return { showcaseItems: selected ? [selected] : [] };
+  }
+
   // A cold link or notification opens a post that is rarely in the first
   // page of For You, so the post is read beside the feed rather than after
   // it: one round trip instead of two before anything shows. A reel opened
@@ -204,7 +218,7 @@ export async function loadImmersiveSourceData({
   // reader, and posts served and never reached count against them in the
   // ranking (audit 04-10; 48 was clamped to 24 by the route).
   const [response, selected] = await Promise.all([
-    api.getShowcaseFeed({ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) }),
+    readForYouPage(api, mediaOnly),
     initialId ? readShowcasePostOrMissing(api, initialId) : Promise.resolve(null),
   ]);
   let showcaseItems = response.items;
@@ -218,6 +232,61 @@ export async function loadImmersiveSourceData({
     feedSessionId: response.feedSessionId ?? null,
     algorithmVersion: response.algorithmVersion ?? null,
   };
+}
+
+/** One page of For you, as a lane asks for it (audit 04-10). */
+function readForYouPage(api: Pick<ImmersivePreviewApi, 'getShowcaseFeed'>, mediaOnly: boolean) {
+  return api.getShowcaseFeed({ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you', ...(mediaOnly ? { category: 'media' } : {}) });
+}
+
+/**
+ * The For you page a reel opened on one post swipes on into, asked for once
+ * the reader starts to swipe (`app/viewer.tsx`), with the post they are on
+ * kept first: the page's own copy when the page served it too (it carries
+ * that delivery), else the post as it was read.
+ *
+ * Asked for then, not as the reel opens: every post the page holds is served
+ * to the reader, and a post served and not seen ranks lower for them for
+ * hours after (`served_penalty` in `src/lib/showcase-feed-ranking.ts`), so a
+ * link opened, read and left would have pushed a dozen posts down their Home
+ * and Explore, and written a ranked session nobody asked for.
+ */
+export async function loadShowcaseReelNeighbours({
+  api,
+  selected,
+  mediaOnly = false,
+}: {
+  api: Pick<ImmersivePreviewApi, 'getShowcaseFeed'>;
+  selected: ShowcaseFeedItem;
+  mediaOnly?: boolean;
+}): Promise<ImmersiveSourceData> {
+  const response = await readForYouPage(api, mediaOnly);
+  const served = response.items.find((item) => item.id === selected.id);
+  return {
+    showcaseItems: [served ?? selected, ...response.items.filter((item) => item.id !== selected.id)],
+    feedSessionId: response.feedSessionId ?? null,
+    algorithmVersion: response.algorithmVersion ?? null,
+  };
+}
+
+/**
+ * The page under a post a link opened, by where its neighbours are: loading
+ * until they come (the reader who gets there first waits on it, and lands on
+ * the first of them), the failure with its retry, and the end when For you
+ * had nothing besides the post. Once they have come the reel ends at its last
+ * post, as a reel opened from a link always has. None while nothing is drawn.
+ */
+export function linkReelEndSlideState({
+  status,
+  itemCount,
+}: {
+  status: 'idle' | 'pending' | 'error' | 'success';
+  itemCount: number;
+}): ReelEndSlideState | null {
+  if (itemCount === 0) return null;
+  if (status === 'error') return 'error';
+  if (status === 'success') return itemCount > 1 ? null : 'end';
+  return 'loading';
 }
 
 /**
@@ -330,8 +399,17 @@ function cachedShowcaseItems(
 
   const saved = queryClient.getQueryData<CachedPages<ShowcaseFeedResponse>>(savedKey);
   const showcaseItems = dedupeById(readCachedPages(saved).flatMap((page) => page.items));
-  return showcaseItems.length
-    ? { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [savedKey]) }
+  if (showcaseItems.some((item) => item.id === initialId)) {
+    return { data: { showcaseItems }, updatedAt: oldestUpdatedAt(queryClient, [savedKey]) };
+  }
+
+  // A shared link, a push or a deep link reaches the reel through the post
+  // page (`app/post/[id].tsx`), which has just read the post: the reel opens
+  // on that read, with its age, instead of reading it again before it draws.
+  const postKey = createShowcasePostQueryKey(initialId, userId);
+  const post = queryClient.getQueryData<ShowcasePostResponse>(postKey)?.item;
+  return post?.id === initialId
+    ? { data: { showcaseItems: [post] }, updatedAt: oldestUpdatedAt(queryClient, [postKey]) }
     : undefined;
 }
 

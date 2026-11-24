@@ -31,8 +31,18 @@ describe('the reel reads the lane it was opened from', () => {
   it('pages on from its last post and closes the lane at its end', () => {
     expect(viewer).toContain('const pagedGrid = laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
     expect(slice('onEndReached={grid?.hasNextPage ? () => {', '} : undefined}')).toContain('pagedGrid.fetchNextPage();');
-    expect(viewer).toContain('ListFooterComponent={endSlide && pagedGrid ? (');
-    expect(viewer).toContain('onRetry={pagedGrid.retryNextPage}');
+    expect(viewer).toContain('ListFooterComponent={endSlide ? (');
+    expect(viewer).toContain('onRetry={pagedGrid ? pagedGrid.retryNextPage : retryNeighbours}');
+  });
+
+  // A link, a push, a deep link or a recipe from search: the post alone until
+  // the reader swipes on. Behaviour: `viewer-reel-actions.test.tsx`, "a reel a
+  // link opened", and `immersive-preview-source-data.test.ts`.
+  it('reads the For you page under a post a link opened only once the reader swipes on', () => {
+    expect(viewer).toContain("const linkOpened = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;");
+    expect(viewer).toContain('withNeighbours: !linkOpened || neighbours.isSuccess');
+    expect(viewer).toContain('onScrollBeginDrag={linkedPost ? askForNeighbours : undefined}');
+    expect(slice('if (endSlide && nextIndex >= items.length) {', 'return;')).toContain('askForNeighbours();');
   });
 
   it("keeps a lane's posts when the lane's refresh leaves them out, and never refreshes it twice", () => {
@@ -64,7 +74,7 @@ describe('the reel reads the lane it was opened from', () => {
     expect(viewer).toContain('const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
     // The grid is no ranked session: a post its pages no longer hold is gone.
     expect(viewer).toContain('{ keepMissing: laneBacked }');
-    expect(viewer).toContain('loadImmersiveSourceData({ api, source, initialId, mediaOnly })');
+    expect(viewer).toContain('loadImmersiveSourceData({ api, source, initialId, mediaOnly, withNeighbours: !linkOpened || neighbours.isSuccess })');
   });
 
   it('comes back to the same lane after sign-in', () => {

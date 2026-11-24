@@ -92,7 +92,9 @@ import {
   buildViewerItems,
   type ImmersiveSourceData,
   isGenerationSource,
+  linkReelEndSlideState,
   loadImmersiveSourceData,
+  loadShowcaseReelNeighbours,
   normalizeParam,
   normalizeViewerSource,
   readCachedImmersiveSourceSnapshot,
@@ -155,7 +157,7 @@ import {
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
-import type { ShowcaseFeedEventType, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
+import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcaseMediaItem, ShowcasePostResponse } from '@/lib/types';
 import { refreshUnlockedBundleCaches } from '@/lib/unlock-cache';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE, canSaveViewerItemOnDoubleTap, getDoubleTapSaveHeartAnimationSpec, getDoubleTapSaveHeartPalette, getDoubleTapSaveHeartPosition, getNativeRemixCreateHref, getRemixSourceContext, getViewerShareIntent, getViewerShareSourceSurface, isViewerOwnGeneration } from '@/lib/viewer-actions';
 import {
@@ -453,6 +455,21 @@ function ImmersivePreviewViewer() {
   const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;
   const gridBacked = Boolean(grid);
 
+  // A For you reel opened on one post with no grid under it: a shared link, a
+  // push or a deep link (through the post page), or a recipe from search. It
+  // draws the post from the read that found it (the post page's, through the
+  // snapshot below) and asks for the For you page it swipes on into only once
+  // the reader starts to swipe (`loadShowcaseReelNeighbours` says why).
+  const linkOpened = source === 'showcase-feed' && !gridBacked && !routeFeedSessionId;
+  const neighbours = useMutation({
+    mutationFn: async ({ selected, key }: { selected: ShowcaseFeedItem; key: typeof sourceQueryKey }) => {
+      const data = await loadShowcaseReelNeighbours({ api, selected, mediaOnly });
+      // A read of the post alone still on its way would land over the page.
+      await queryClient.cancelQueries({ queryKey: key, exact: true });
+      queryClient.setQueryData<ImmersiveSourceData>(key, data);
+    },
+  });
+
   const loaderQuery = useQuery({
     queryKey: sourceQueryKey,
     enabled: Boolean(source) && !gridBacked,
@@ -465,9 +482,22 @@ function ImmersivePreviewViewer() {
     initialDataUpdatedAt: () => (gridBacked
       ? undefined
       : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, identityUserId)?.updatedAt),
-    queryFn: () => loadImmersiveSourceData({ api, source, initialId, mediaOnly }),
+    queryFn: () => loadImmersiveSourceData({ api, source, initialId, mediaOnly, withNeighbours: !linkOpened || neighbours.isSuccess }),
     staleTime: 1000 * 45,
   });
+  // The post a link opened, once it is in hand: what its neighbours are asked around.
+  const linkedPost = linkOpened
+    ? loaderQuery.data?.showcaseItems?.find((item) => item.id === initialId) ?? null
+    : null;
+  // At the start of a swipe, so the page is on its way while the list is still moving.
+  const askForNeighbours = () => {
+    if (!linkedPost || !neighbours.isIdle) return;
+    neighbours.mutate({ selected: linkedPost, key: sourceQueryKey });
+  };
+  const retryNeighbours = () => {
+    if (!linkedPost || !neighbours.isError) return;
+    neighbours.mutate({ selected: linkedPost, key: sourceQueryKey });
+  };
 
   // Linked-post details for the creations a loader window holds. Enrichment
   // only: when it fails the creations still show (audit C5).
@@ -658,13 +688,15 @@ function ImmersivePreviewViewer() {
   // What stands after its last post, and whether the reader is on it: the
   // native page past the last post. No post is on screen there, so nothing
   // plays and no post's time is counted.
+  // A reel a link opened has one of its own under the post until the
+  // For you page it swipes on into has come.
   const endSlide = pagedGrid ? getReelEndSlideState({
     hasData: pagedGrid.hasData,
     itemCount: items.length,
     hasNextPage: pagedGrid.hasNextPage,
     isFetchNextPageError: pagedGrid.isFetchNextPageError,
     isFetchingNextPage: pagedGrid.isFetchingNextPage,
-  }) : null;
+  }) : linkedPost ? linkReelEndSlideState({ status: neighbours.status, itemCount: items.length }) : null;
   const [endSlidePage, setEndSlidePage] = useState<number | null>(null);
   const onEndSlide = endSlide !== null && endSlidePage !== null && endSlidePage >= items.length;
   // Posts that arrive while the reader is on that slide (a page retried from
@@ -1675,7 +1707,10 @@ function ImmersivePreviewViewer() {
           const nextIndex = Math.round(event.nativeEvent.contentOffset.y / height);
           if (endSlide && nextIndex >= items.length) {
             // The closing slide. The last post stays the active one underneath,
-            // paused, and the alignment effect has nothing to correct.
+            // paused, and the alignment effect has nothing to correct. Under a
+            // post a link opened it is where the neighbours land: a scroll that
+            // reported no start (a screen reader's) asks for them here.
+            askForNeighbours();
             if (endSlidePage === null) haptic.soft();
             nativeRowRef.current = { index: activeIndex, height };
             playbackHandoff.handoff({ from: items[handoffPageRef.current ?? activeIndex]?.id, to: null });
@@ -1723,12 +1758,15 @@ function ImmersivePreviewViewer() {
           if (!library.isFetchingNextPage) void library.fetchNextPage();
         } : undefined}
         onEndReachedThreshold={2}
-        ListFooterComponent={endSlide && pagedGrid ? (
+        // A reel a link opened asks for the For you page it goes on into as
+        // the reader's first swipe starts.
+        onScrollBeginDrag={linkedPost ? askForNeighbours : undefined}
+        ListFooterComponent={endSlide ? (
           <ReelEndSlide
             state={endSlide}
             width={width}
             height={height}
-            onRetry={pagedGrid.retryNextPage}
+            onRetry={pagedGrid ? pagedGrid.retryNextPage : retryNeighbours}
             onBack={zoom.dismiss}
           />
         ) : null}
