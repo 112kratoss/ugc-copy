@@ -15,7 +15,15 @@ type TabHistory = {
   entries(): Array<{ url: string | null; sameDocument: boolean }>;
 };
 
-export function isPreviousHistoryEntry(path: string): boolean {
+/**
+ * `isSameEntry` says whether the entry before is `path`; by default the same
+ * address, its query in any order. A page that reads its address more loosely
+ * (Studio's defaults, an extra parameter it ignores) passes its own reading.
+ */
+export function isPreviousHistoryEntry(
+  path: string,
+  isSameEntry: (previous: URL, target: URL) => boolean = isSameAddress,
+): boolean {
   if (typeof window === 'undefined') return false;
   const tabHistory = (window as Window & { navigation?: TabHistory }).navigation;
   const current = tabHistory?.currentEntry;
@@ -26,8 +34,10 @@ export function isPreviousHistoryEntry(path: string): boolean {
   // this document's router.
   if (!previousEntry?.url || !previousEntry.sameDocument) return false;
 
-  const previous = new URL(previousEntry.url);
-  const target = new URL(path, window.location.origin);
+  return isSameEntry(new URL(previousEntry.url), new URL(path, window.location.origin));
+}
+
+function isSameAddress(previous: URL, target: URL): boolean {
   return previous.origin === target.origin
     && previous.pathname === target.pathname
     && sortedQuery(previous) === sortedQuery(target);

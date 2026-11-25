@@ -15,7 +15,11 @@ import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/St
 import {
     forgetStudioReturnedPost,
     getCreationsWorkspaceCacheKey,
+    parseCreationMediaFilter,
+    parseStudioPostFilter,
+    parseStudioWorkspaceView,
     readStudioReturnedPost,
+    type StudioWorkspaceView,
 } from '@/lib/creations-workspace-cache';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import {
@@ -135,7 +139,7 @@ interface Generation {
 }
 
 type FilterType = CreationMediaFilter;
-type WorkspaceView = 'creations' | 'posts' | 'unlocks';
+type WorkspaceView = StudioWorkspaceView;
 type OwnerPostVisibilityFilter = StudioPostFilter;
 
 interface OwnerPost {
@@ -653,20 +657,6 @@ function mergePostAppend(previousPosts: OwnerPost[], incomingPosts: OwnerPost[])
     ];
 }
 
-function parseWorkspaceView(value: string | null): WorkspaceView {
-    return value === 'posts' || value === 'unlocks' ? value : 'creations';
-}
-
-function parsePostVisibilityFilter(value: string | null): OwnerPostVisibilityFilter {
-    return value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived'
-        ? value
-        : 'all';
-}
-
-function parseCreationMediaFilter(value: string | null): FilterType {
-    return value === 'images' || value === 'videos' || value === 'audio' ? value : 'all';
-}
-
 const WORKSPACE_TABS: ReadonlyArray<{ key: WorkspaceView; label: string; lede: string }> = [
     { key: 'creations', label: 'Creations', lede: 'Preview private outputs, then turn the strongest ones into posts.' },
     { key: 'posts', label: 'Post Library', lede: 'Use Post Library for full post edits, archive state, and cleanup after publishing.' },
@@ -685,8 +675,8 @@ export default function CreationsPage() {
     // back button, a refresh, a shared link, and every returnTo land on the
     // view the viewer was actually looking at. The tabs and filter chips are
     // links that change it; nothing else does.
-    const activeView = parseWorkspaceView(searchParams.get('view'));
-    const postVisibilityFilter = parsePostVisibilityFilter(searchParams.get('visibility'));
+    const activeView = parseStudioWorkspaceView(searchParams.get('view'));
+    const postVisibilityFilter = parseStudioPostFilter(searchParams.get('visibility'));
     // The creations' media filter is in the address too (owner's report, 2026-11-15: a
     // filter left by Back or a refresh came back as All).
     const filter = parseCreationMediaFilter(searchParams.get('media'));
@@ -1934,6 +1924,16 @@ export default function CreationsPage() {
 
     const appendCreationsSource = (path: string): string => withSearchParam(path, 'from', 'creations');
 
+    // A private or archived post opens in its editor, which goes back to this
+    // view once saved, as every other editor link here does; a public one opens
+    // its own page.
+    const getLinkedPostOpenHref = (workspaceState: CreationWorkspaceCardState): string | null => {
+        const href = workspaceState.secondaryAction.href ?? null;
+        return href && href === workspaceState.linkedPost?.ownerPath
+            ? withStudioReturn(appendCreationsSource(href))
+            : href;
+    };
+
     const buildCreationCustomizePath = (
         generation: Generation,
         workspaceState: CreationWorkspaceCardState
@@ -2120,7 +2120,7 @@ export default function CreationsPage() {
                 ) : null}
 
                 {workspaceState.secondaryAction.href && workspaceState.linkedPost ? (
-                    <Link href={workspaceState.secondaryAction.href} className={secondaryClass}>
+                    <Link href={getLinkedPostOpenHref(workspaceState) ?? workspaceState.secondaryAction.href} className={secondaryClass}>
                         <ExternalLink className="h-4 w-4" />
                         Open post
                     </Link>
@@ -2728,7 +2728,7 @@ export default function CreationsPage() {
                                 // The linked post's own page opens from its title in the
                                 // detail block, so the footer stays one row.
                                 const linkedPostHref = hasPrimaryAction && !primaryIsPublish
-                                    ? workspaceState.secondaryAction.href ?? null
+                                    ? getLinkedPostOpenHref(workspaceState)
                                     : null;
                                 const isGenerationDetailLoading = generationDetailLoadingId === gen.id;
                                 const cardTitle = getPreviewTitle(gen);

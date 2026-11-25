@@ -2472,6 +2472,34 @@ describe('CreationsPage', () => {
       expect(await screen.findByTestId('creation-card-gen-linked')).toHaveAttribute('data-highlighted', 'true');
       expect(screen.getByTestId('creation-card-gen-unlinked')).not.toHaveAttribute('data-highlighted');
     });
+
+    // A private post opens in its editor, which goes back to this view once
+    // saved, as every other editor link here does (#930's review).
+    it('opens a private post’s editor from its creation with the way back to Studio', async () => {
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({
+            generations: [makeGeneration({
+              id: 'gen-linked',
+              title: 'Linked generated post',
+              linked_post_id: 'post-linked',
+              linked_post_title: 'Linked generated post',
+              linked_post_visibility: 'private',
+              linked_post_archived_at: null,
+            })],
+          }))
+          : null
+      ));
+
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-linked');
+      const openPost = within(card).getByRole('link', { name: /open post|linked generated post/i });
+      const href = new URL(openPost.getAttribute('href') ?? '', 'https://magicbooklet.com');
+      expect(href.pathname).toBe('/post/post-linked/edit');
+      expect(href.searchParams.get('from')).toBe('creations');
+      expect(href.searchParams.get('returnTo')).toBe('/creations');
+    });
   });
 
   // A recipe taken off while people had it is retired: they keep it, but the
@@ -2547,7 +2575,7 @@ describe('CreationsPage', () => {
               linked_post_title: 'A post whose recipe was taken off',
               linked_post_visibility: 'public',
               linked_post_archived_at: null,
-              // The creations list still reads the retired row as a draft.
+              // As a server from before #930's review sent the retired row: a draft.
               linked_post_bundle: { accessMode: 'free', status: 'draft', priceUsdCents: 0 },
             })],
           }))

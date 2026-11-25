@@ -5,7 +5,7 @@ import { RouterContext } from 'next/dist/shared/lib/router-context.shared-runtim
 import type { NextRouter } from 'next/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { REMIX_RECIPE_MUST_BE_PAID } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
+import { describeUncopiedCreationInputs, REMIX_RECIPE_MUST_BE_PAID } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
@@ -5549,6 +5549,23 @@ describe('NewPostClient', () => {
       expect(readStudioReturnedPost()).toBe('post-studio');
     });
 
+    // Studio opened as the run an alert named, with its defaults spelled out:
+    // the same view by Studio's reading, so Back, not a second Studio.
+    it('steps back onto a Studio entry that names the same view another way', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      stubTabHistory([
+        '/creations?visibility=private&view=posts&media=all&generation=gen-1',
+        `/post/post-studio/edit?from=creations&returnTo=${encodeURIComponent(STUDIO_VIEW)}`,
+      ]);
+      answerSave();
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.back).toHaveBeenCalledTimes(1));
+      expect(routerMock.replace).not.toHaveBeenCalled();
+    });
+
     it('goes back to Recipe sales, and leaves Studio nothing to ring', async () => {
       searchParamsState.value = new URLSearchParams({ from: 'seller', returnTo: '/marketplace/sell' });
       answerSave();
@@ -5575,6 +5592,51 @@ describe('NewPostClient', () => {
       expect(routerMock.back).not.toHaveBeenCalled();
       expect(readStudioReturnedPost()).toBeNull();
       expect(toastMessages()).toEqual([]);
+    });
+
+    // A fix typed while the save was on its way was not sent: leaving would
+    // drop it without the leave guard's question (#930's review).
+    it('stays with its saved panel when something was typed while the save was on its way', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      let answer: (() => void) | undefined;
+      enqueueResponse({
+        ok: true,
+        json: () => new Promise((resolve) => {
+          answer = () => resolve({ success: true, postId: 'post-studio', visibility: 'private' });
+        }),
+      });
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+      await waitFor(() => expect(answer).toBeDefined());
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+        target: { value: 'A private post with a fixed title' },
+      });
+      await act(async () => {
+        answer?.();
+      });
+
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(routerMock.back).not.toHaveBeenCalled();
+      expect(readStudioReturnedPost()).toBeNull();
+      expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('A private post with a fixed title');
+    });
+
+    // Drawn under the recipe on a page that stays: one that leaves says it on
+    // the way, as a new post's publish does (#930's review).
+    it('says on its way back that inputs could not be copied into the recipe', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-studio', visibility: 'private', referencesNotCopied: 2 }),
+      });
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(STUDIO_VIEW));
+      expect(toastMessages()).toEqual(['Changes saved.', describeUncopiedCreationInputs(2)]);
     });
 
     it('stays where it is when the save is refused', async () => {

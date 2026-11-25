@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { isSameStudioView } from '@/lib/creations-workspace-cache';
 import { isPreviousHistoryEntry } from '@/lib/previous-history-entry';
 
 type TabEntry = string | { path: string; sameDocument: boolean };
@@ -62,5 +63,36 @@ describe('isPreviousHistoryEntry', () => {
     stubTabHistory(['/creations', '/post/post-1/edit', '/showcase/post-1'], 1);
 
     expect(isPreviousHistoryEntry('/creations')).toBe(true);
+  });
+
+  // Studio reads defaults and the run an alert opened as the same view, so an
+  // editor opened from such an entry steps back onto it (#930's review).
+  it('takes Studio by its own reading of the address when asked to', () => {
+    stubTabHistory(['/creations?generation=gen-1', '/post/post-1/edit']);
+    expect(isPreviousHistoryEntry('/creations')).toBe(false);
+    expect(isPreviousHistoryEntry('/creations', isSameStudioView)).toBe(true);
+
+    stubTabHistory(['/creations?view=posts&visibility=all&media=all', '/post/post-1/edit']);
+    expect(isPreviousHistoryEntry('/creations?view=posts', isSameStudioView)).toBe(true);
+    expect(isPreviousHistoryEntry('/creations?view=posts&visibility=private', isSameStudioView)).toBe(false);
+    expect(isPreviousHistoryEntry('/creations', isSameStudioView)).toBe(false);
+  });
+});
+
+describe('isSameStudioView', () => {
+  const at = (path: string) => new URL(path, 'https://magicbooklet.com');
+
+  it('reads what a default leaves out, and ignores what Studio does not read', () => {
+    expect(isSameStudioView(at('/creations'), at('/creations?view=creations&visibility=all&media=all'))).toBe(true);
+    expect(isSameStudioView(at('/creations?generation=gen-1'), at('/creations'))).toBe(true);
+    expect(isSameStudioView(at('/creations?view=nonsense'), at('/creations'))).toBe(true);
+  });
+
+  it('tells sections, filters and other pages apart', () => {
+    expect(isSameStudioView(at('/creations?view=posts'), at('/creations'))).toBe(false);
+    expect(isSameStudioView(at('/creations?visibility=public'), at('/creations?visibility=private'))).toBe(false);
+    expect(isSameStudioView(at('/creations?media=images'), at('/creations'))).toBe(false);
+    expect(isSameStudioView(at('/marketplace/sell'), at('/creations'))).toBe(false);
+    expect(isSameStudioView(at('/creations'), new URL('/creations', 'https://example.com'))).toBe(false);
   });
 });

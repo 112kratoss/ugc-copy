@@ -70,6 +70,7 @@ import { buildShowcaseDetailPath, getCurrentInternalPath, getSafeInternalReturnP
 import { sharePublicGeneration } from '@/lib/share-client';
 import {
   forgetCreationsWorkspaceCache,
+  isSameStudioView,
   isStudioPath,
   rememberStudioReturnedPost,
 } from '@/lib/creations-workspace-cache';
@@ -1416,6 +1417,20 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     () => !isSameComposerSnapshot(composerSnapshot, savedSnapshot),
     [composerSnapshot, savedSnapshot]
   );
+  // The form as last drawn, and as it was drawn once a save began, the press's
+  // own changes in it (a visibility button, Post without recipe). An edit that
+  // differs from the second when the answer comes was typed while the save was
+  // on its way: it is unsaved, and a return after the save would drop it.
+  const composerSnapshotRef = useRef(composerSnapshot);
+  const savingSnapshotRef = useRef<ComposerSnapshot | null>(null);
+  useEffect(() => {
+    composerSnapshotRef.current = composerSnapshot;
+    if (!isSubmitting) {
+      savingSnapshotRef.current = null;
+    } else if (!savingSnapshotRef.current) {
+      savingSnapshotRef.current = composerSnapshot;
+    }
+  }, [composerSnapshot, isSubmitting]);
   // One guard for every way out while there is unsaved work: Back and the
   // phone's back swipe, every link on the page (the shell's, and this page's
   // own Back link), the shell's search, and a reload or a closed tab. Never
@@ -2946,16 +2961,23 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // is the entry before, so the editor leaves history as the app's leaves its
   // stack, and otherwise in the editor's place. Studio is told which post to
   // ring. Someone who left while the save was on its way is not taken anywhere.
-  const leaveAfterEdit = (postId: string) => {
+  const leaveAfterEdit = (postId: string, referencesNotCopied: number) => {
     if (!isMountedRef.current) return;
     setIsLeavingAfterSave(true);
     if (isStudioPath(backHref)) rememberStudioReturnedPost(postId);
     pushToast({ tone: 'success', message: 'Changes saved.' });
+    // Drawn under the recipe on a page that stays; this one leaves, so it is
+    // said on the way, as a new post's publish says it.
+    if (referencesNotCopied > 0) {
+      pushToast({ tone: 'info', message: describeUncopiedCreationInputs(referencesNotCopied) });
+    }
     // The guard starts this a task after the popstate that takes the page off
     // its guard entry, so Next's restore of the editor's entry cannot drop it
     // (use-leave-guard.ts, #894).
     leaveComposer(() => {
-      if (isPreviousHistoryEntry(backHref)) {
+      // Studio by its own reading of its address: an entry that names a
+      // default, or the run an alert opened, is still the view to step back to.
+      if (isPreviousHistoryEntry(backHref, isStudioPath(backHref) ? isSameStudioView : undefined)) {
         router.back();
       } else {
         router.replace(backHref);
@@ -3379,12 +3401,18 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             ? data.resourceBundleStatus
             : null,
         };
+        const savedReferencesNotCopied = typeof data.referencesNotCopied === 'number' ? data.referencesNotCopied : 0;
         completePublish(saved, {
           itemsAdded: readRecipeItemsAdded(data.recipeItemsAdded),
-          notCopied: typeof data.referencesNotCopied === 'number' ? data.referencesNotCopied : 0,
+          notCopied: savedReferencesNotCopied,
         });
-        if (returnsAfterEdit) {
-          leaveAfterEdit(saved.postId);
+        // A form with something typed while the save was on its way stays,
+        // with its saved panel: leaving would drop that without asking.
+        const savingSnapshot = savingSnapshotRef.current;
+        const editedWhileSaving = savingSnapshot !== null
+          && !isSameComposerSnapshot(savingSnapshot, composerSnapshotRef.current);
+        if (returnsAfterEdit && !editedWhileSaving) {
+          leaveAfterEdit(saved.postId, savedReferencesNotCopied);
         }
 
         return;
