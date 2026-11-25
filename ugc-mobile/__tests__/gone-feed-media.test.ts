@@ -104,25 +104,36 @@ describe('the request a failed picture is asked about with', () => {
 
 describe('media found gone, for the rest of the launch', () => {
   it('keeps out every post that still names it, and only those', () => {
-    rememberGoneFeedMedia(PUBLIC_COPY);
+    rememberGoneFeedMedia(PUBLIC_COPY, 'viewer-1');
     const gone = post('gone', [PUBLIC_COPY]);
     const second = post('second-slide', [`${STORAGE}/storage/v1/object/public/showcase_media/other.jpg`, PUBLIC_COPY]);
     const kept = post('kept', [`${STORAGE}/storage/v1/object/public/showcase_media/kept.jpg`]);
 
-    expect(filterGoneFeedMedia([gone, kept, second]).map((item) => item.id)).toEqual(['kept']);
-    expect(holdsGoneFeedMedia(second)).toBe(true);
+    expect(filterGoneFeedMedia([gone, kept, second], 'viewer-1').map((item) => item.id)).toEqual(['kept']);
+    expect(holdsGoneFeedMedia(second, 'viewer-1')).toBe(true);
   });
 
   // Every read of a signed list signs each file again.
   it('knows a file by its path, whatever signature a later page carries', () => {
-    rememberGoneFeedMedia(signed('photo.jpg', T0 + HOUR_MS, 'first'));
+    rememberGoneFeedMedia(signed('photo.jpg', T0 + HOUR_MS, 'first'), 'viewer-1');
 
-    expect(holdsGoneFeedMedia(post('resigned', [signed('photo.jpg', T0 + 2 * HOUR_MS, 'second')]))).toBe(true);
-    expect(holdsGoneFeedMedia(post('other-file', [signed('other.jpg', T0 + HOUR_MS)]))).toBe(false);
+    expect(holdsGoneFeedMedia(post('resigned', [signed('photo.jpg', T0 + 2 * HOUR_MS, 'second')]), 'viewer-1')).toBe(true);
+    expect(holdsGoneFeedMedia(post('other-file', [signed('other.jpg', T0 + HOUR_MS)]), 'viewer-1')).toBe(false);
   });
 
   it('hands the same list back while nothing has been found gone', () => {
     const items = [post('a', [PUBLIC_COPY])];
-    expect(filterGoneFeedMedia(items)).toBe(items);
+    expect(filterGoneFeedMedia(items, 'viewer-1')).toBe(items);
+  });
+
+  // Whether a file is gone depends on who reads it: a creator still reads their
+  // own archived or private post, which a guest is refused.
+  it('keeps it for the viewer who found it gone, and no other', () => {
+    rememberGoneFeedMedia(PUBLIC_COPY, 'guest-1');
+    const items = [post('archived', [PUBLIC_COPY])];
+
+    expect(filterGoneFeedMedia(items, 'guest-1')).toEqual([]);
+    expect(filterGoneFeedMedia(items, 'creator-1')).toBe(items);
+    expect(filterGoneFeedMedia(items, null)).toBe(items);
   });
 });

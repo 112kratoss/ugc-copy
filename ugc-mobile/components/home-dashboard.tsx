@@ -443,11 +443,11 @@ export function HomeDashboard() {
   }, [api, feedSession.algorithmVersion, feedSession.feedSessionId, isFocused]);
 
   const feedItems = useMemo(() => {
-    // A post whose media was found gone this launch stays out of every page
-    // read afterwards (`lib/gone-feed-media.ts`).
-    const flattened = filterGoneFeedMedia(flattenShowcaseFeedPages(feedQuery.data?.pages));
+    // A post whose media was found gone for this viewer this launch stays out
+    // of every page read afterwards (`lib/gone-feed-media.ts`).
+    const flattened = filterGoneFeedMedia(flattenShowcaseFeedPages(feedQuery.data?.pages), identityUserId);
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
-  }, [feedQuery.data?.pages, user]);
+  }, [feedQuery.data?.pages, identityUserId, user]);
   const feedPageCount = feedWindowPaginationPosition(feedQuery.data);
   const requestedCommentsPostId = (
     Array.isArray(requestedComments) ? requestedComments[0] : requestedComments
@@ -868,21 +868,31 @@ export function HomeDashboard() {
   // A card's picture would not load. When its media is gone for this viewer
   // (the post archived, made private, hidden or deleted since its page was
   // read), the card leaves every lane and the shelf quietly, as a feed drops a
-  // post that is no longer there, and the media is remembered for the launch.
-  // Anything else leaves the card and the frame's Retry as they are
-  // (`lib/gone-feed-media.ts`). No Undo and no event: the reader chose nothing.
+  // post that is no longer there, and the media is remembered for this viewer
+  // for the launch. Anything else leaves the card and the frame's Retry as they
+  // are (`lib/gone-feed-media.ts`). No Undo and no event: the reader chose nothing.
   const removeCardWithGoneMedia = (item: ShowcaseFeedItem, mediaItem: ShowcaseMediaItem) => {
+    // The viewer and lanes the question is asked for: an answer that comes back
+    // after a sign-in or sign-out is theirs, not the next viewer's.
+    const viewerId = identityUserId;
+    const lanesKey = viewerFeedQueryKey;
     void checkFeedMediaAvailability(mediaItem.url, {
       apiBaseUrl: env.apiBaseUrl,
       storageBaseUrl: env.supabaseUrl,
       accessToken: mediaAccessToken,
     }).then((availability) => {
       if (availability !== 'gone') return;
-      rememberGoneFeedMedia(mediaItem.url);
-      queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
-        { queryKey: viewerFeedQueryKey },
-        (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
-      );
+      rememberGoneFeedMedia(mediaItem.url, viewerId);
+      // Each lane keeps the time it was read. A removal is no fetch, and a lane
+      // marked fresh would skip the refetch it is owed: the page restored at
+      // launch, waiting for auth to settle, and the "New posts" offer.
+      for (const [laneKey] of queryClient.getQueriesData<InfiniteData<ShowcaseFeedResponse>>({ queryKey: lanesKey })) {
+        queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(
+          laneKey,
+          (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id }),
+          { updatedAt: queryClient.getQueryState(laneKey)?.dataUpdatedAt },
+        );
+      }
       takeOffHomeShelf(queryClient, { postId: item.id });
     });
   };

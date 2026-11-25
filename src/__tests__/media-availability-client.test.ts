@@ -133,4 +133,23 @@ describe('checkMediaAvailability', () => {
     respond(answer(503));
     await expect(third).resolves.toBe('unknown');
   });
+
+  // The answer depends on who asks: a creator still reads their own archived post.
+  it('asks again for the same address with another session, while the first answer is on its way', async () => {
+    const responders: Array<(response: Response) => void> = [];
+    const fetchImpl = vi.fn(() => new Promise<Response>((resolve) => {
+      responders.push(resolve);
+    }));
+
+    const guest = checkMediaAvailability(API_MEDIA, { fetchImpl, headers: { Authorization: 'Bearer guest' } });
+    const creator = checkMediaAvailability(API_MEDIA, { fetchImpl, headers: { Authorization: 'Bearer creator' } });
+    const guestAgain = checkMediaAvailability(API_MEDIA, { fetchImpl, headers: { Authorization: 'Bearer guest' } });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    responders[0]!(answer(404));
+    responders[1]!(new Response('i', { status: 206 }));
+    await expect(guest).resolves.toBe('gone');
+    await expect(guestAgain).resolves.toBe('gone');
+    await expect(creator).resolves.toBe('readable');
+  });
 });

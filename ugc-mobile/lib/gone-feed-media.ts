@@ -17,27 +17,37 @@ import { signedMediaIdentity } from '@/lib/use-stable-signed-url';
  * The media found gone is remembered for the rest of the launch, by the file
  * it names rather than by post, so a page read afterwards that still names it
  * keeps the post out, and a post its creator edited with new media comes back
- * with that media.
+ * with that media. It is remembered for the viewer who asked: whether a file is
+ * gone depends on who reads it (a creator still reads their own archived or
+ * private post), so a sign-in or sign-out starts from nothing.
  */
 
-const goneMediaFiles = new Set<string>();
+const goneMediaFilesByViewer = new Map<string, Set<string>>();
 
-export function rememberGoneFeedMedia(url: string) {
-  goneMediaFiles.add(signedMediaIdentity(url));
+function viewerKey(viewerId: string | null | undefined) {
+  return viewerId?.trim() || '';
 }
 
-export function holdsGoneFeedMedia(item: ShowcaseFeedItem): boolean {
-  if (!goneMediaFiles.size) return false;
-  return getShowcasePreviewMediaItems(item).some((media) => goneMediaFiles.has(signedMediaIdentity(media.url)));
+export function rememberGoneFeedMedia(url: string, viewerId: string | null | undefined) {
+  const key = viewerKey(viewerId);
+  const files = goneMediaFilesByViewer.get(key) ?? new Set<string>();
+  files.add(signedMediaIdentity(url));
+  goneMediaFilesByViewer.set(key, files);
 }
 
-export function filterGoneFeedMedia(items: ShowcaseFeedItem[]): ShowcaseFeedItem[] {
-  if (!goneMediaFiles.size) return items;
-  return items.filter((item) => !holdsGoneFeedMedia(item));
+export function holdsGoneFeedMedia(item: ShowcaseFeedItem, viewerId: string | null | undefined): boolean {
+  const files = goneMediaFilesByViewer.get(viewerKey(viewerId));
+  if (!files?.size) return false;
+  return getShowcasePreviewMediaItems(item).some((media) => files.has(signedMediaIdentity(media.url)));
+}
+
+export function filterGoneFeedMedia(items: ShowcaseFeedItem[], viewerId: string | null | undefined): ShowcaseFeedItem[] {
+  if (!goneMediaFilesByViewer.get(viewerKey(viewerId))?.size) return items;
+  return items.filter((item) => !holdsGoneFeedMedia(item, viewerId));
 }
 
 export function resetGoneFeedMediaForTests() {
-  goneMediaFiles.clear();
+  goneMediaFilesByViewer.clear();
 }
 
 type FeedMediaRequestContext = {

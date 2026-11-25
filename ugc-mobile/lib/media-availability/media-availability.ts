@@ -54,8 +54,16 @@ export type CheckMediaAvailabilityOptions = {
   headers?: Record<string, string>;
 };
 
-// One question per address at a time: a slide and its retry can fail in a row.
+// One question per address and headers at a time: a slide and its retry can
+// fail in a row. Asked with other headers (another session), it is another
+// question, since the answer depends on who asks.
 const pending = new Map<string, Promise<MediaAvailability>>();
+
+function questionKey(url: string, headers: Record<string, string> | undefined) {
+  if (!headers) return url;
+  const sorted = Object.keys(headers).sort().map((name) => [name.toLowerCase(), headers[name]]);
+  return `${url}\n${JSON.stringify(sorted)}`;
+}
 
 async function askAddress(
   url: string,
@@ -87,11 +95,12 @@ export function checkMediaAvailability(
   url: string,
   { fetchImpl = fetch, headers }: CheckMediaAvailabilityOptions = {},
 ): Promise<MediaAvailability> {
-  const existing = pending.get(url);
+  const key = questionKey(url, headers);
+  const existing = pending.get(key);
   if (existing) return existing;
   const answer = askAddress(url, fetchImpl, headers).finally(() => {
-    pending.delete(url);
+    pending.delete(key);
   });
-  pending.set(url, answer);
+  pending.set(key, answer);
   return answer;
 }

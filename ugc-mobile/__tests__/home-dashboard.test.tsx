@@ -1179,9 +1179,24 @@ describe('Home screen', () => {
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status })));
     }
 
+    // The lanes the screen's cache holds: For You, read at 111, and Notes, at 222.
+    const forYouKey = [...createShowcaseFeedViewerQueryKey('viewer-1'), 'for-you'];
+    const notesKey = [...createShowcaseFeedViewerQueryKey('viewer-1'), 'notes'];
+    function holdLanes(items: unknown[]) {
+      queryState.client.getQueriesData.mockReturnValue([
+        [forYouKey, { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+        [notesKey, { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+      ]);
+      queryState.client.getQueryState.mockImplementation((key: readonly unknown[]) => (
+        (key === forYouKey ? { dataUpdatedAt: 111 } : key === notesKey ? { dataUpdatedAt: 222 } : undefined) as never
+      ));
+    }
+
     afterEach(() => {
       vi.unstubAllGlobals();
       resetGoneFeedMediaForTests();
+      queryState.client.getQueryState.mockReset();
+      queryState.client.getQueryState.mockImplementation(() => undefined);
     });
 
     function cardMediaFailed(tree: renderer.ReactTestRenderer, index: number, media: unknown) {
@@ -1195,6 +1210,7 @@ describe('Home screen', () => {
       const items = [mediaItem('a', 'delivery-gone-a'), mediaItem('b', 'delivery-gone-b')];
       queryState.pages = [page(items)];
       answerMedia(404, { error: 'Media not found' });
+      holdLanes(items);
       const { tree } = renderHome();
 
       await cardMediaFailed(tree, 1, items[1].mediaItems[0]);
@@ -1203,12 +1219,19 @@ describe('Home screen', () => {
       expect(fetch).toHaveBeenCalledWith('https://cdn.example.com/b.jpg', expect.objectContaining({
         headers: expect.objectContaining({ Range: 'bytes=0-0' }),
       }));
-      expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(2);
-      const [lanes, removeFromLanes] = queryState.client.setQueriesData.mock.calls[0] as [unknown, (current: FeedPages) => FeedPages];
-      expect(lanes).toEqual({ queryKey: createShowcaseFeedViewerQueryKey('viewer-1') });
+      expect(queryState.client.getQueriesData).toHaveBeenCalledWith({ queryKey: createShowcaseFeedViewerQueryKey('viewer-1') });
+      // Every lane loses the post and keeps the time it was read: a removal is
+      // no fetch, so a restored or aging lane still gets the refetch it is owed.
+      const laneCalls = queryState.client.setQueryData.mock.calls as unknown as Array<[unknown, (current: FeedPages) => FeedPages, { updatedAt?: number }]>;
+      expect(laneCalls.map(([key, , options]) => [key, options])).toEqual([
+        [forYouKey, { updatedAt: 111 }],
+        [notesKey, { updatedAt: 222 }],
+      ]);
       const lane = { pages: [page(items)], pageParams: [{ offset: 0 }] } as unknown as FeedPages;
-      expect(removeFromLanes(lane).pages[0].items.map((item) => item.id)).toEqual(['a']);
-      expect(queryState.client.setQueriesData.mock.calls[1][0]).toEqual({ queryKey: ['home-shelf'] });
+      expect(laneCalls[0][1](lane).pages[0].items.map((item) => item.id)).toEqual(['a']);
+      // The shelf, through its own removal.
+      expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(1);
+      expect(queryState.client.setQueriesData.mock.calls[0][0]).toEqual({ queryKey: ['home-shelf'] });
       // The reader chose nothing: no feed event, no Undo.
       expect(sentEvents()).toEqual([]);
       expect(hostProps(tree, 'feed-undo-notice').notice).toBeNull();
@@ -1218,6 +1241,12 @@ describe('Home screen', () => {
       renderer.act(() => tree.update(<HomeDashboard />));
       expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a']);
 
+      // Another viewer starts from nothing: whether a file is gone depends on who reads it.
+      authState.identityUserId = 'viewer-2';
+      authState.user = { id: 'viewer-2' };
+      renderer.act(() => tree.update(<HomeDashboard />));
+      expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a', 'b']);
+
       renderer.act(() => tree.unmount());
     });
 
@@ -1225,6 +1254,7 @@ describe('Home screen', () => {
       const items = [mediaItem('a', 'delivery-edit-a'), mediaItem('b', 'delivery-edit-b')];
       queryState.pages = [page(items)];
       answerMedia(404);
+      holdLanes(items);
       const { tree } = renderHome();
       await cardMediaFailed(tree, 1, items[1].mediaItems[0]);
 
@@ -1251,6 +1281,7 @@ describe('Home screen', () => {
 
       expect(fetch).toHaveBeenCalledTimes(1);
       expect(queryState.client.setQueriesData).not.toHaveBeenCalled();
+      expect(queryState.client.setQueryData).not.toHaveBeenCalled();
       queryState.pages = [page(items)];
       renderer.act(() => tree.update(<HomeDashboard />));
       expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a', 'b']);
@@ -1263,6 +1294,7 @@ describe('Home screen', () => {
       routed.mediaItems[0].url = '/api/media?bucket=post_media&path=private-posts%2Fb%2Fphoto.jpg';
       queryState.pages = [page([routed])];
       answerMedia(404);
+      holdLanes([routed]);
       const { tree } = renderHome();
 
       try {
@@ -1275,7 +1307,8 @@ describe('Home screen', () => {
       expect(new URL(url).pathname).toBe('/api/media');
       expect(new URL(url).searchParams.get('path')).toBe('private-posts/b/photo.jpg');
       expect(init.headers).toEqual({ Authorization: 'Bearer viewer-token', Range: 'bytes=0-0' });
-      expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(2);
+      expect(queryState.client.setQueryData).toHaveBeenCalledTimes(2);
+      expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(1);
       renderer.act(() => tree.unmount());
     });
   });
