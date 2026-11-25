@@ -26,7 +26,8 @@ import { TopScrim } from '@/components/top-scrim';
 import { SecondaryButton, StatusBlock } from '@/components/ui';
 import { UnlockRemixPrompt } from '@/components/unlock-remix-prompt';
 import { openSearchScreenFrom } from '@/lib/open-search-screen';
-import { useAuth } from '@/lib/auth';
+import { useAuth, useAuthSession } from '@/lib/auth';
+import { checkFeedMediaAvailability, filterGoneFeedMedia, rememberGoneFeedMedia } from '@/lib/gone-feed-media';
 import { openSignUpSheet, signUpNeededToCreate } from '@/lib/join-navigation';
 import { useAutoplayPolicy } from '@/lib/autoplay-preference';
 import { env } from '@/lib/env';
@@ -122,6 +123,7 @@ import type {
   ShowcaseFeedEventType,
   ShowcaseFeedItem,
   ShowcaseFeedResponse,
+  ShowcaseMediaItem,
   ShowcasePostResponse,
 } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
@@ -155,6 +157,9 @@ export function HomeDashboard() {
   // ranked for it, since the server refuses events against another viewer's
   // feed session.
   const { user, identityUserId, api, credits, isLoading: isAuthLoading } = useAuth();
+  // The session the cards' pictures load `/api/media` with (`useMediaSource`),
+  // so asking why one failed gets the answer the picture got.
+  const mediaAccessToken = useAuthSession()?.access_token ?? null;
   // Whether a signed-out visitor here may still be promised the welcome credits.
   const welcomePromise = useWelcomePromise();
   const queryClient = useQueryClient();
@@ -438,7 +443,9 @@ export function HomeDashboard() {
   }, [api, feedSession.algorithmVersion, feedSession.feedSessionId, isFocused]);
 
   const feedItems = useMemo(() => {
-    const flattened = flattenShowcaseFeedPages(feedQuery.data?.pages);
+    // A post whose media was found gone this launch stays out of every page
+    // read afterwards (`lib/gone-feed-media.ts`).
+    const flattened = filterGoneFeedMedia(flattenShowcaseFeedPages(feedQuery.data?.pages));
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [feedQuery.data?.pages, user]);
   const feedPageCount = feedWindowPaginationPosition(feedQuery.data);
@@ -858,6 +865,28 @@ export function HomeDashboard() {
 
   const dismissUndoNotice = (id: string) => setUndoNotice((current) => (current?.id === id ? null : current));
 
+  // A card's picture would not load. When its media is gone for this viewer
+  // (the post archived, made private, hidden or deleted since its page was
+  // read), the card leaves every lane and the shelf quietly, as a feed drops a
+  // post that is no longer there, and the media is remembered for the launch.
+  // Anything else leaves the card and the frame's Retry as they are
+  // (`lib/gone-feed-media.ts`). No Undo and no event: the reader chose nothing.
+  const removeCardWithGoneMedia = (item: ShowcaseFeedItem, mediaItem: ShowcaseMediaItem) => {
+    void checkFeedMediaAvailability(mediaItem.url, {
+      apiBaseUrl: env.apiBaseUrl,
+      storageBaseUrl: env.supabaseUrl,
+      accessToken: mediaAccessToken,
+    }).then((availability) => {
+      if (availability !== 'gone') return;
+      rememberGoneFeedMedia(mediaItem.url);
+      queryClient.setQueriesData<InfiniteData<ShowcaseFeedResponse>>(
+        { queryKey: viewerFeedQueryKey },
+        (current) => removeShowcaseFeedItemsFromInfiniteData(current, { postId: item.id })
+      );
+      takeOffHomeShelf(queryClient, { postId: item.id });
+    });
+  };
+
   const applyFeedFeedback = (item: ShowcaseFeedItem | null, eventType: ShowcaseFeedFeedbackType) => {
     if (!item) return;
     if (eventType === 'hide_creator' && (!item.creator.id || item.creator.id === user?.id)) return;
@@ -1094,6 +1123,7 @@ export function HomeDashboard() {
         onVideoProgress={(progress, durationMs) => (
           recordAttention(attention.recordProgress(card.item, progress, durationMs))
         )}
+        onMediaUnavailable={(mediaItem) => removeCardWithGoneMedia(card.item, mediaItem)}
       />
     </Reveal>
   );

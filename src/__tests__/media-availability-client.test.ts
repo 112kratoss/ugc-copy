@@ -35,6 +35,15 @@ describe('checkMediaAvailability', () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });
 
+  // The app asks with the headers its picture was loaded with (the session, for /api/media).
+  it('sends the headers it is given, with its own Range', async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => answer(404));
+
+    await checkMediaAvailability(API_MEDIA, { fetchImpl, headers: { Authorization: 'Bearer viewer-token', Range: 'bytes=0-' } });
+
+    expect(fetchImpl.mock.calls[0]![1]?.headers).toEqual({ Authorization: 'Bearer viewer-token', Range: 'bytes=0-0' });
+  });
+
   // The media route refuses a read the post no longer allows (archived,
   // private, hidden, marked NSFW, its owner gone) with 404; Storage answers a
   // public copy removed with its post's public reading with 400 (NoSuchKey).

@@ -46,6 +46,13 @@ type ShowcaseMediaPreviewProps = {
    * whole clip: `measureSourceVideoProgress`). Home's feed telemetry.
    */
   onVideoProgress?: (progress: number, durationMs: number | null) => void;
+  /**
+   * A picture of this media failed to load after its retries: its preview (the
+   * original is tried next) or the original. Home asks whether the media is
+   * gone and removes the card if so (`lib/gone-feed-media.ts`); the frame
+   * draws its own Retry either way.
+   */
+  onMediaUnavailable?: (mediaItem: ShowcaseMediaItem) => void;
   videoBackdrop?: 'solid' | 'none';
   videoContentFit?: 'cover' | 'contain';
   /**
@@ -80,6 +87,7 @@ export function ShowcaseMediaPreview({
   videoActivation = 'never',
   onVideoReadyChange,
   onVideoProgress,
+  onMediaUnavailable,
   videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
@@ -110,6 +118,7 @@ export function ShowcaseMediaPreview({
         videoActivation={resolvedVideoActivation}
         onVideoReadyChange={onVideoReadyChange}
         onVideoProgress={onVideoProgress}
+        onMediaUnavailable={onMediaUnavailable}
         videoBackdrop={videoBackdrop}
         videoContentFit={videoContentFit}
         watchdog={watchdog}
@@ -133,6 +142,7 @@ export function ShowcaseMediaPreview({
       videoActivation={resolvedVideoActivation}
       onVideoReadyChange={onVideoReadyChange}
       onVideoProgress={onVideoProgress}
+      onMediaUnavailable={onMediaUnavailable}
       videoBackdrop={videoBackdrop}
       videoContentFit={videoContentFit}
       watchdog={watchdog}
@@ -154,6 +164,7 @@ function ShowcaseMediaCarousel({
   videoActivation = 'never',
   onVideoReadyChange,
   onVideoProgress,
+  onMediaUnavailable,
   videoBackdrop = 'solid',
   videoContentFit = 'contain',
   watchdog = false,
@@ -191,6 +202,7 @@ function ShowcaseMediaCarousel({
               videoActivation={currentIndex === index ? videoActivation : 'never'}
               onVideoReadyChange={currentIndex === index ? onVideoReadyChange : undefined}
               onVideoProgress={currentIndex === index ? onVideoProgress : undefined}
+              onMediaUnavailable={onMediaUnavailable}
               videoBackdrop={videoBackdrop}
               videoContentFit={videoContentFit}
               watchdog={watchdog && currentIndex === index}
@@ -283,6 +295,7 @@ function ShowcaseMediaSlide({
   videoActivation,
   onVideoReadyChange,
   onVideoProgress,
+  onMediaUnavailable,
   videoBackdrop,
   videoContentFit,
   watchdog,
@@ -300,6 +313,7 @@ function ShowcaseMediaSlide({
   videoActivation: VideoActivation;
   onVideoReadyChange?: (ready: boolean) => void;
   onVideoProgress?: (progress: number, durationMs: number | null) => void;
+  onMediaUnavailable?: (mediaItem: ShowcaseMediaItem) => void;
   videoBackdrop: 'solid' | 'none';
   videoContentFit: 'cover' | 'contain';
   watchdog: boolean;
@@ -432,6 +446,10 @@ function ShowcaseMediaSlide({
       onImageLoad={onLoad}
       onImageError={() => {
         if (imageTileSource === 'preview') setFailedPreviewUrl(previewUrl);
+        // Asked at the preview's failure too, not only the original's: a post
+        // that has gone fails both, and the answer then comes while the
+        // original is still being tried, before the frame offers a Retry.
+        onMediaUnavailable?.(item);
       }}
       transition={120}
       recyclingKey={recyclingKey}
