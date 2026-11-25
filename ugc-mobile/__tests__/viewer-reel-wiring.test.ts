@@ -51,8 +51,15 @@ describe('the reel reads the lane it was opened from', () => {
     expect(viewer).not.toMatch(/onScrollBeginDrag=\{[^}]*Neighbours/);
   });
 
+  // A refresh never moves the reader's row: the posts above it stay
+  // (`viewer-session-items.test.ts`, "keeps the reader's post on its row").
+  it("keeps the posts above the reader's through a refresh", () => {
+    expect(slice('reconcileViewerSessionItems(sessionItems.ordered, sourceItems, {', '})'))
+      .toContain('anchorId: savedPosition?.itemId ?? initialId,');
+  });
+
   it("keeps a lane's posts when the lane's refresh leaves them out, and never refreshes it twice", () => {
-    expect(viewer).toContain('reconcileViewerSessionItems(sessionItems.ordered, sourceItems, { keepMissing: laneBacked })');
+    expect(slice('reconcileViewerSessionItems(sessionItems.ordered, sourceItems, {', '})')).toContain('keepMissing: laneBacked,');
     expect(slice('onSourceRefresh: () => {', '},')).toContain('if (!laneBacked) void sourceQuery.refetch();');
   });
 
@@ -78,8 +85,9 @@ describe('the reel reads the lane it was opened from', () => {
     expect(viewer).toContain("const creatorBacked = source === 'creator-profile' && Boolean(creatorUsername);");
     expect(slice('const creatorReel = useCreatorReelSource({', '});')).toContain('enabled: creatorBacked,');
     expect(viewer).toContain('const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
-    // The grid is no ranked session: a post its pages no longer hold is gone.
-    expect(viewer).toContain('{ keepMissing: laneBacked }');
+    // The grid is no ranked session: a post its pages no longer hold is gone,
+    // unless it sits above the reader's post, whose row must not move.
+    expect(slice('reconcileViewerSessionItems(sessionItems.ordered, sourceItems, {', '})')).toContain('keepMissing: laneBacked,');
     expect(slice('queryFn: () => loadImmersiveSourceData({', '}),')).toContain('initialId,');
   });
 

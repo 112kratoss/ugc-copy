@@ -592,13 +592,18 @@ function ImmersivePreviewViewer() {
   // Reconcile before commit, rather than letting an effect paint stale data.
   // A lane's refresh is a new session that leaves out the posts already seen,
   // so those stay; the reel takes out what the reader removes (`removeFromReel`).
+  // Any refresh keeps the posts above the reader's, so the reader's row stays
+  // put: a link's reel opened on Home's cached page refetches a new one.
   const [sessionItems, setSessionItems] = useState({ key: sourceQueryKey, input: sourceItems, ordered: sourceItems });
   if (sessionItems.input !== sourceItems || sessionItems.key !== sourceQueryKey) {
     setSessionItems({
       key: sourceQueryKey,
       input: sourceItems,
       ordered: sessionItems.key === sourceQueryKey
-        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems, { keepMissing: laneBacked })
+        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems, {
+          keepMissing: laneBacked,
+          anchorId: savedPosition?.itemId ?? initialId,
+        })
         : sourceItems,
     });
   }
