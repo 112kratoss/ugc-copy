@@ -95,7 +95,7 @@ describe('guest merge failure modes', () => {
       for (const status of ['merged', 'already_merged'] as const) {
         store.clear();
         await keep();
-        const action = resolveMergeRedeemAction(status);
+        const action = resolveMergeRedeemAction({ status });
 
         expect(action.clearTicket).toBe(true);
         expect(action.nextState).toBe('idle');
@@ -105,23 +105,56 @@ describe('guest merge failure modes', () => {
       }
     });
 
-    it('never clears on not_eligible', async () => {
+    it('never clears on a not_eligible the server does not call final', async () => {
       // The most dangerous status to mishandle. It looks like a failure, so the
       // instinct is to clean up — but the server left the ticket redeemable
       // precisely because this can be transient, and the secret exists nowhere
-      // else. Clearing it strands the credits permanently.
-      await keep();
-      const action = resolveMergeRedeemAction('not_eligible');
+      // else. Clearing it strands the credits permanently. A server before
+      // 2026-11-25 says nothing more, and one since says retryable.
+      for (const answer of [
+        { status: 'not_eligible' as const },
+        { status: 'not_eligible' as const, reason: 'account_not_ready', retryable: true },
+        // A reason alone is not a verdict: only retryable: false is.
+        { status: 'not_eligible' as const, reason: 'unknown_ticket' },
+      ]) {
+        store.clear();
+        await keep();
+        const action = resolveMergeRedeemAction(answer);
 
-      expect(action.clearTicket).toBe(false);
-      expect(action.nextState).toBe('pending');
+        expect(action.clearTicket).toBe(false);
+        expect(action.nextState).toBe('pending');
+        await expect(keptTickets()).resolves.toEqual([TICKET]);
+      }
+    });
 
-      await expect(keptTickets()).resolves.toEqual([TICKET]);
+    it('clears a refusal the server calls final, and fails only where there is something to tell', async () => {
+      const at = Date.parse('2026-11-25T08:00:00.000Z');
+      const unexpired = { expiresAt: '2026-12-20T08:00:00.000Z', now: at };
+      const cases = [
+        { reason: 'unknown_ticket', ticket: unexpired, nextState: 'idle' },
+        { reason: 'unknown_ticket', ticket: { expiresAt: '2026-10-01T08:00:00.000Z', now: at }, nextState: 'failed' },
+        { reason: 'same_account', ticket: unexpired, nextState: 'idle' },
+        { reason: 'guest_gone', ticket: unexpired, nextState: 'idle' },
+        { reason: 'guest_registered', ticket: unexpired, nextState: 'failed' },
+        { reason: 'guest_linked', ticket: unexpired, nextState: 'failed' },
+        { reason: 'account_linked', ticket: unexpired, nextState: 'failed' },
+        { reason: 'invalid_request', ticket: unexpired, nextState: 'failed' },
+        { reason: 'a_reason_from_a_newer_server', ticket: unexpired, nextState: 'failed' },
+      ] as const;
+      for (const { reason, ticket, nextState } of cases) {
+        store.clear();
+        await keep();
+        const action = resolveMergeRedeemAction({ status: 'not_eligible', reason, retryable: false }, ticket);
+
+        expect(action, reason).toEqual({ clearTicket: true, nextState });
+        await removeGuestMergeTicket(TICKET);
+        await expect(readGuestMergeTickets()).resolves.toEqual([]);
+      }
     });
 
     it('clears expiry and conflict, which spend the ticket, as failures', async () => {
       for (const status of ['expired', 'conflict'] as const) {
-        const action = resolveMergeRedeemAction(status);
+        const action = resolveMergeRedeemAction({ status });
 
         // Spent server-side, so keeping it buys nothing; what the person is
         // told is guestMergeOutcomeOf's (guest-merge.test.ts).
@@ -247,6 +280,26 @@ describe('guest merge failure modes', () => {
 
       await clearGuestMergeOutcome();
       await expect(readGuestMergeOutcome()).resolves.toBeNull();
+    });
+
+    it('keeps a refusal under a status a bundle from before it still shows (an OTA rollback)', async () => {
+      const outcome = { accountUserId: 'account-a', status: 'refused' as const, creditsMoved: 0, at: 1_700_000_000_000 };
+      await storeGuestMergeOutcome(outcome);
+
+      // An older bundle reads the same key and keeps only the statuses it
+      // knows; `not_eligible` is one, and it points at support.
+      const onDisk = JSON.parse(store.get('magicbooklet.guestMerge.outcome.v1') ?? 'null');
+      expect(onDisk).toMatchObject({ accountUserId: 'account-a', status: 'not_eligible', refused: true });
+      expect(['merged', 'already_merged', 'conflict', 'expired', 'not_eligible']).toContain(onDisk.status);
+
+      await expect(readGuestMergeOutcome()).resolves.toEqual(outcome);
+    });
+
+    it('reads a kept "not added yet" as itself', async () => {
+      const outcome = { accountUserId: 'account-a', status: 'not_eligible' as const, creditsMoved: 0, at: 1 };
+      await storeGuestMergeOutcome(outcome);
+
+      await expect(readGuestMergeOutcome()).resolves.toEqual(outcome);
     });
 
     it('never rejects, whatever the keychain does', async () => {

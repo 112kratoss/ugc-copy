@@ -3,6 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import {
   isWellFormedMergeTicket,
   type GuestMergeOutcome,
+  type GuestMergeOutcomeStatus,
   type StoredGuestMergeTicket,
 } from './guest-merge';
 import type { GuestAccountMergeStatus } from './types';
@@ -30,6 +31,7 @@ const defaultStorage: TicketStorage = {
 /** A kept outcome, with the account it was for: no other account is shown it. */
 export type KeptGuestMergeOutcome = GuestMergeOutcome & { accountUserId: string };
 
+/** The statuses a kept outcome is written under; `refused` travels as `not_eligible` (storeGuestMergeOutcome). */
 const MERGE_STATUSES: readonly GuestAccountMergeStatus[] = [
   'merged',
   'already_merged',
@@ -226,12 +228,15 @@ function parseOutcome(stored: string | null): KeptGuestMergeOutcome | null {
   try {
     const value: unknown = JSON.parse(stored);
     if (!isRecord(value)) return null;
-    const { accountUserId, status, creditsMoved, at } = value;
+    const { accountUserId, status, creditsMoved, at, refused } = value;
     if (typeof accountUserId !== 'string' || accountUserId.length === 0) return null;
     if (!MERGE_STATUSES.includes(status as GuestAccountMergeStatus)) return null;
     if (typeof creditsMoved !== 'number' || !Number.isFinite(creditsMoved) || creditsMoved < 0) return null;
     if (typeof at !== 'number' || !Number.isFinite(at)) return null;
-    return { accountUserId, status: status as GuestAccountMergeStatus, creditsMoved, at };
+    const kept: GuestMergeOutcomeStatus = status === 'not_eligible' && refused === true
+      ? 'refused'
+      : status as GuestAccountMergeStatus;
+    return { accountUserId, status: kept, creditsMoved, at };
   } catch {
     return null;
   }
@@ -244,12 +249,25 @@ export function readGuestMergeOutcome(
   return serialized(() => storage.getItem(OUTCOME_STORAGE_KEY)).then(parseOutcome, () => null);
 }
 
-/** Keeps `outcome` in place of the last one. Never rejects: the screen still shows it until the app closes. */
+/**
+ * Keeps `outcome` in place of the last one. Never rejects: the screen still
+ * shows it until the app closes.
+ *
+ * `refused` is written as `not_eligible` with `refused: true` (2026-11-25): a
+ * bundle from before it, reached by an OTA rollback, drops a status it does not
+ * know, and the ticket behind it is already gone, so the support notice would
+ * never come back. Read as `not_eligible`, it says what such a bundle said of
+ * the same refusal before this change: not added yet, contact support if they
+ * do not arrive.
+ */
 export async function storeGuestMergeOutcome(
   outcome: KeptGuestMergeOutcome,
   storage: TicketStorage = defaultStorage,
 ) {
-  await serialized(() => storage.setItem(OUTCOME_STORAGE_KEY, JSON.stringify(outcome))).catch(() => undefined);
+  const stored = outcome.status === 'refused'
+    ? { ...outcome, status: 'not_eligible', refused: true }
+    : outcome;
+  await serialized(() => storage.setItem(OUTCOME_STORAGE_KEY, JSON.stringify(stored))).catch(() => undefined);
 }
 
 /** Forgets the kept outcome. Never rejects. */
