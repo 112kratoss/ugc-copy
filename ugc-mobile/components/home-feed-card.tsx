@@ -24,6 +24,7 @@ import { buildImmersiveShowcaseItems } from '@/lib/immersive-preview-view-model'
 import type { NativeMenuModel } from '@/lib/native-menu';
 import { readRemixCredit } from '@/lib/remix-credit/remix-credit';
 import { getShowcasePreviewMediaItems } from '@/lib/showcase-media';
+import type { ShowcaseMediaItem } from '@/lib/types';
 import { accentColor, appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
@@ -41,6 +42,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onShare,
   onAssetPress,
   onVideoProgress,
+  onMediaUnavailable,
   remixLoading,
 }: {
   card: HomeFeedCard;
@@ -60,6 +62,8 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
   onAssetPress: () => void;
   /** How far the card's video has played inline, for the feed's ranking (Home). */
   onVideoProgress?: (progress: number, durationMs: number | null) => void;
+  /** A picture of the card failed to load; Home removes the card when its media is gone (lib/gone-feed-media.ts). */
+  onMediaUnavailable?: (mediaItem: ShowcaseMediaItem) => void;
   remixLoading?: boolean;
 }) {
   const theme = useAppTheme();
@@ -148,6 +152,7 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             videoActivation={videoActivation}
             onVideoReadyChange={reportVideoReady}
             onVideoProgress={onVideoProgress}
+            onMediaUnavailable={onMediaUnavailable}
             videoBackdrop="none"
             videoContentFit="cover"
           />

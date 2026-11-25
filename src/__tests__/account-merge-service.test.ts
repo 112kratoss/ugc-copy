@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
+  ACCOUNT_MERGE_REFUSAL_REASONS,
   hashAccountMergeTicket,
   mergeGuestAccountForRoute,
   prepareAccountMergeTicketForRoute,
@@ -310,6 +312,85 @@ describe('guest account merge tickets', () => {
         expect(result.ok && result.body.status).toBe(status);
         expect(result.ok && result.body.creditsMoved).toBe(0);
       }
+    });
+
+    describe('a refusal says why (2026-11-25)', () => {
+      const endpoint = mobileApiContract.endpoints.mergeGuestAccount;
+      type Answer = {
+        status: string;
+        creditsMoved: number;
+        promotionalCreditsMoved: number;
+        credits: number | null;
+        reason?: string;
+        retryable?: boolean;
+      };
+      const variants = endpoint.responseVariants as Record<string, Answer>;
+
+      /** The database's answer for one of the contract's bodies, as redeem_account_merge_ticket writes it. */
+      function rpcAnswerFor(body: Answer) {
+        return {
+          status: body.status,
+          ...(body.creditsMoved ? { credits_moved: body.creditsMoved } : {}),
+          ...(body.creditsMoved ? { promotional_credits_moved: body.promotionalCreditsMoved } : {}),
+          ...(body.credits === null ? {} : { credits: body.credits }),
+          ...('reason' in body ? { reason: body.reason } : {}),
+          ...('retryable' in body ? { retryable: body.retryable } : {}),
+        };
+      }
+
+      it.each(Object.entries({ merged: endpoint.response as Answer, ...variants }))(
+        'answers %s as the shared contract pins it',
+        async (_name, body) => {
+          const harness = createHarness({ rpcResult: { data: rpcAnswerFor(body), error: null } });
+          const result = await redeem(harness);
+
+          expect(result).toEqual({ ok: true, body });
+        },
+      );
+
+      it('says retryable only for the account not being ready', () => {
+        const refusals = Object.values(variants).filter((body) => body.reason !== undefined);
+        expect(refusals.filter((body) => body.retryable).map((body) => body.reason)).toEqual(['account_not_ready']);
+        expect(refusals.map((body) => body.reason).sort()).toEqual([...ACCOUNT_MERGE_REFUSAL_REASONS].sort());
+      });
+
+      it('passes on an older database answer without inventing a reason', async () => {
+        const harness = createHarness({ rpcResult: { data: { status: 'not_eligible' }, error: null } });
+        const result = await redeem(harness);
+
+        expect(result).toEqual({ ok: true, body: endpoint.responseVariants.notEligibleFromAnOlderServer });
+      });
+
+      it('leaves out a reason it does not know, and keeps what the database said of retrying', async () => {
+        const harness = createHarness({
+          rpcResult: { data: { status: 'not_eligible', reason: 'something_new', retryable: false }, error: null },
+        });
+        const result = await redeem(harness);
+
+        expect(result.ok && result.body).toEqual({
+          status: 'not_eligible',
+          creditsMoved: 0,
+          promotionalCreditsMoved: 0,
+          credits: null,
+          retryable: false,
+        });
+      });
+
+      it('never puts a refusal field on an answer that is not a refusal', async () => {
+        const harness = createHarness({
+          rpcResult: { data: { status: 'expired', reason: 'unknown_ticket', retryable: false }, error: null },
+        });
+        const result = await redeem(harness);
+
+        expect(result.ok && result.body).toEqual(endpoint.responseVariants.expired);
+      });
+
+      it('reads a missing status as a refusal to retry, as before', async () => {
+        const harness = createHarness({ rpcResult: { data: null, error: null } });
+        const result = await redeem(harness);
+
+        expect(result.ok && result.body).toEqual(endpoint.responseVariants.notEligibleFromAnOlderServer);
+      });
     });
 
     it('rate limits on the registering account', async () => {

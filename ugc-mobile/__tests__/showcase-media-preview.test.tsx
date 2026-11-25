@@ -255,6 +255,52 @@ describe('ShowcaseMediaPreview', () => {
     expect(findAllByNodeType(tree, 'feed-media-frame')[0].props.url).toBe('https://cdn.example.com/original.jpg');
   });
 
+  // Home asks whether the media is gone (lib/gone-feed-media.ts): at the
+  // preview's failure, while the original is still tried, and at the original's.
+  it('reports each failed picture of a slide with the slide’s media', () => {
+    const onMediaUnavailable = vi.fn();
+    const slide = media({ previewUrl: 'https://cdn.example.com/preview.webp' });
+    const tree = renderPreview(
+      <ShowcaseMediaPreview
+        accent="#60a5fa"
+        height={180}
+        mediaItems={[slide]}
+        onMediaUnavailable={onMediaUnavailable}
+        radius={12}
+        recyclingKey="home-feed:post-1"
+        width={160}
+      />
+    );
+
+    renderer.act(() => findAllByNodeType(tree, 'feed-media-frame')[0].props.onImageError());
+    expect(onMediaUnavailable).toHaveBeenCalledWith(slide);
+    expect(findAllByNodeType(tree, 'feed-media-frame')[0].props.url).toBe('https://cdn.example.com/original.jpg');
+
+    renderer.act(() => findAllByNodeType(tree, 'feed-media-frame')[0].props.onImageError());
+    expect(onMediaUnavailable).toHaveBeenCalledTimes(2);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('reports a failed picture from the carousel slide it is on', () => {
+    const onMediaUnavailable = vi.fn();
+    const second = media({ id: 'second', url: 'https://cdn.example.com/second.jpg', previewUrl: 'https://cdn.example.com/second.webp' });
+    const tree = renderPreview(
+      <ShowcaseMediaPreview
+        accent="#60a5fa"
+        height={180}
+        mediaItems={[media({ previewUrl: 'https://cdn.example.com/preview.webp' }), second]}
+        onMediaUnavailable={onMediaUnavailable}
+        radius={12}
+        recyclingKey="home-feed:post-1"
+        width={160}
+      />
+    );
+
+    renderer.act(() => findAllByNodeType(tree, 'feed-media-frame')[1].props.onImageError());
+    expect(onMediaUnavailable).toHaveBeenCalledWith(second);
+    renderer.act(() => tree.unmount());
+  });
+
   it('uses the feed video preview with the supplied poster', () => {
     const tree = renderPreview(
       <ShowcaseMediaPreview

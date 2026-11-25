@@ -1,20 +1,25 @@
 import type { Session } from '@supabase/auth-js';
 import { describe, expect, it } from 'vitest';
 
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   combineGuestMergeOutcomes,
   describeGuestMergeOutcome,
   describeMergeOutcome,
   guestMergeOutcomeOf,
+  isFinalMergeRefusal,
   isSuccessfulMergeStatus,
   isTerminalMergeStatus,
   keptGuestMergeTicketFor,
+  resolveMergeRedeemAction,
+  settleGuestMergeOutcome,
   shouldPrepareGuestMerge,
   shouldRedeemGuestMerge,
   isWellFormedMergeTicket,
   ticketsRedeemableFor,
   type StoredGuestMergeTicket,
 } from '@/lib/guest-merge';
+import type { GuestAccountMergeResponse } from '@/lib/types';
 
 function sessionFor(user: Record<string, unknown> | null) {
   return (user ? { access_token: 'token-1', user } : null) as unknown as Session | null;
@@ -171,5 +176,101 @@ describe('what a link is told as', () => {
     expect(notYet).toMatchObject({ tone: 'warning', title: 'Guest credits not added yet' });
     expect(notYet?.message).toMatch(/keep trying/);
     expect(notYet?.message).toMatch(/support/);
+  });
+});
+
+// 2026-11-25: a refusal says why, and whether the same ticket can ever pass.
+// The iPhone simulator held a ticket minted on another database; the server
+// answered not_eligible at every launch and Home said "not added yet" forever.
+describe('a refusal the server calls final', () => {
+  const endpoint = mobileApiContract.endpoints.mergeGuestAccount;
+  const variants = endpoint.responseVariants;
+  const at = Date.parse('2026-11-25T08:00:00.000Z');
+  const unexpired = { expiresAt: '2026-12-20T08:00:00.000Z', now: at };
+  const expired = { expiresAt: '2026-10-01T08:00:00.000Z', now: at };
+
+  it('clears the ticket for every final refusal the contract lists, and keeps it for the rest', () => {
+    for (const [name, answer] of Object.entries(variants) as Array<[string, GuestAccountMergeResponse]>) {
+      if (answer.status !== 'not_eligible') continue;
+      expect(resolveMergeRedeemAction(answer, unexpired).clearTicket, name).toBe(answer.retryable === false);
+    }
+    expect(resolveMergeRedeemAction(variants.accountNotReady as GuestAccountMergeResponse))
+      .toEqual({ clearTicket: false, nextState: 'pending' });
+    expect(resolveMergeRedeemAction(variants.notEligibleFromAnOlderServer as GuestAccountMergeResponse))
+      .toEqual({ clearTicket: false, nextState: 'pending' });
+  });
+
+  it('tells nothing for a ticket the server never had, or a guest that is gone or is this account', () => {
+    for (const answer of [variants.unknownTicket, variants.guestGone, variants.sameAccount]) {
+      expect(guestMergeOutcomeOf(answer as GuestAccountMergeResponse, at, unexpired), answer.reason).toBeNull();
+    }
+    // Nor for one whose expiry this device does not know.
+    expect(guestMergeOutcomeOf(variants.unknownTicket as GuestAccountMergeResponse, at, { expiresAt: null, now: at }))
+      .toBeNull();
+    expect(guestMergeOutcomeOf(variants.unknownTicket as GuestAccountMergeResponse, at)).toBeNull();
+  });
+
+  it('tells a ticket the server no longer has, past its expiry here, as expired: the server prunes it 30 days on', () => {
+    expect(guestMergeOutcomeOf(variants.unknownTicket as GuestAccountMergeResponse, at, expired))
+      .toEqual({ status: 'expired', creditsMoved: 0, at });
+  });
+
+  it("tells a guest whose credits are on another account as the conflict it is", () => {
+    for (const answer of [variants.guestRegistered, variants.guestLinked]) {
+      expect(guestMergeOutcomeOf(answer as GuestAccountMergeResponse, at, unexpired), answer.reason)
+        .toEqual({ status: 'conflict', creditsMoved: 0, at });
+    }
+  });
+
+  it('points at support for a final refusal it has no words of its own for', () => {
+    for (const answer of [
+      variants.accountLinked as GuestAccountMergeResponse,
+      variants.invalidRequest as GuestAccountMergeResponse,
+      { ...variants.invalidRequest, reason: 'a_reason_from_a_newer_server' } as GuestAccountMergeResponse,
+      { ...variants.invalidRequest, reason: undefined } as GuestAccountMergeResponse,
+    ]) {
+      expect(guestMergeOutcomeOf(answer, at, unexpired)).toEqual({ status: 'refused', creditsMoved: 0, at });
+    }
+    const refused = describeGuestMergeOutcome({ status: 'refused', creditsMoved: 0, at });
+    expect(refused).toMatchObject({ tone: 'warning', title: 'Guest credits not added' });
+    expect(refused?.message).toMatch(/support/);
+    expect(refused?.message).not.toMatch(/keep trying/);
+  });
+
+  it('still says "not added yet" for a refusal a retry can cure, or one from an older server', () => {
+    for (const answer of [variants.accountNotReady, variants.notEligibleFromAnOlderServer]) {
+      expect(guestMergeOutcomeOf(answer as GuestAccountMergeResponse, at, unexpired))
+        .toEqual({ status: 'not_eligible', creditsMoved: 0, at });
+    }
+  });
+
+  it('reads only an explicit retryable: false as final', () => {
+    expect(isFinalMergeRefusal({ status: 'not_eligible', retryable: false })).toBe(true);
+    expect(isFinalMergeRefusal({ status: 'not_eligible', retryable: true })).toBe(false);
+    expect(isFinalMergeRefusal({ status: 'not_eligible' })).toBe(false);
+    expect(isFinalMergeRefusal({ status: 'not_eligible', reason: 'unknown_ticket' })).toBe(false);
+    expect(isFinalMergeRefusal({ status: 'expired', retryable: false })).toBe(false);
+  });
+
+  it('lets a final refusal that cannot arrive outrank credits that did', () => {
+    const added = { status: 'merged' as const, creditsMoved: 100, at };
+    const refused = { status: 'refused' as const, creditsMoved: 0, at: at + 1 };
+    expect(combineGuestMergeOutcomes(added, refused)).toBe(refused);
+    expect(combineGuestMergeOutcomes(refused, added)).toBe(refused);
+  });
+
+  it('drops a kept "not added yet" once nothing is left waiting, and keeps it while something is', () => {
+    const notYet = { status: 'not_eligible' as const, creditsMoved: 0, at };
+    const added = { status: 'merged' as const, creditsMoved: 100, at: at + 1 };
+    const conflict = { status: 'conflict' as const, creditsMoved: 0, at: at + 1 };
+
+    expect(settleGuestMergeOutcome(notYet, null, { waiting: false })).toBeNull();
+    expect(settleGuestMergeOutcome(null, notYet, { waiting: false })).toBeNull();
+    expect(settleGuestMergeOutcome(notYet, null, { waiting: true })).toBe(notYet);
+    expect(settleGuestMergeOutcome(null, notYet, { waiting: true })).toBe(notYet);
+    // Anything else stands, and comes back as the same object when unchanged.
+    expect(settleGuestMergeOutcome(notYet, added, { waiting: false })).toBe(added);
+    expect(settleGuestMergeOutcome(conflict, null, { waiting: false })).toBe(conflict);
+    expect(settleGuestMergeOutcome(null, null, { waiting: false })).toBeNull();
   });
 });

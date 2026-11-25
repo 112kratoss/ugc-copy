@@ -51,6 +51,14 @@ describe('the reel reads the lane it was opened from', () => {
     expect(viewer).not.toMatch(/onScrollBeginDrag=\{[^}]*Neighbours/);
   });
 
+  // A For you refetch is a new ranked page: the posts the reel holds stay
+  // (`immersive-preview-source-data.test.ts`, "keeps a For you reel's posts").
+  it("keeps a For you reel's posts through a refetch, in the reel's own cache", () => {
+    expect(slice('const data = await loadImmersiveSourceData({', "        : data;")).toContain(
+      "return source === 'showcase-feed'\n        ? keepReelPagePosts(queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey), data, initialId)"
+    );
+  });
+
   it("keeps a lane's posts when the lane's refresh leaves them out, and never refreshes it twice", () => {
     expect(viewer).toContain('reconcileViewerSessionItems(sessionItems.ordered, sourceItems, { keepMissing: laneBacked })');
     expect(slice('onSourceRefresh: () => {', '},')).toContain('if (!laneBacked) void sourceQuery.refetch();');
@@ -80,7 +88,7 @@ describe('the reel reads the lane it was opened from', () => {
     expect(viewer).toContain('const grid = libraryBacked ? library : laneBacked ? laneSource : creatorBacked ? creatorReel : null;');
     // The grid is no ranked session: a post its pages no longer hold is gone.
     expect(viewer).toContain('{ keepMissing: laneBacked }');
-    expect(slice('queryFn: () => loadImmersiveSourceData({', '}),')).toContain('initialId,');
+    expect(slice('const data = await loadImmersiveSourceData({', '});')).toContain('initialId,');
   });
 
   it('comes back to the same lane after sign-in', () => {

@@ -871,6 +871,86 @@ describe('what the links came to (audit 02-8)', () => {
     await expect(readGuestMergeTickets()).resolves.toEqual([]);
     unmount();
   });
+
+  // 2026-11-25: the iPhone simulator held a ticket minted on another database.
+  // The server answered not_eligible at every launch, the app kept the ticket,
+  // and Home said "Guest credits not added yet" until the owner cleared it.
+  it('stops sending a ticket the server says it never had, and says nothing of it', async () => {
+    await storeGuestMergeTicket({ guestUserId: 'guest-1', ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    state.mergeGuestAccount.mockResolvedValue({
+      status: 'not_eligible', creditsMoved: 0, promotionalCreditsMoved: 0, credits: null,
+      reason: 'unknown_ticket', retryable: false,
+    });
+
+    const first = await mount(accountA());
+    expect(state.mergeGuestAccount).toHaveBeenCalledOnce();
+    expect(first.latest.current?.guestMergeOutcome).toBeNull();
+    expect(first.latest.current?.mergeState).toBe('idle');
+    await expect(readGuestMergeTickets()).resolves.toEqual([]);
+
+    await foreground();
+    first.unmount();
+    const second = await mount(accountA());
+    expect(state.mergeGuestAccount).toHaveBeenCalledOnce();
+    expect(second.latest.current?.guestMergeOutcome).toBeNull();
+    second.unmount();
+  });
+
+  it('drops a "not added yet" kept from before once the ticket is settled for good', async () => {
+    await storeGuestMergeTicket({ guestUserId: 'guest-1', ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    // An older server: a bare not_eligible, kept and told as "not added yet".
+    state.mergeGuestAccount.mockResolvedValue({ status: 'not_eligible', creditsMoved: 0, promotionalCreditsMoved: 0, credits: null });
+    const first = await mount(accountA());
+    expect(first.latest.current?.guestMergeOutcome).toMatchObject({ status: 'not_eligible' });
+    first.unmount();
+
+    // The server now says why: the guest became this account in place.
+    state.mergeGuestAccount.mockResolvedValue({
+      status: 'not_eligible', creditsMoved: 0, promotionalCreditsMoved: 0, credits: null,
+      reason: 'same_account', retryable: false,
+    });
+    const second = await mount(accountA());
+    expect(state.mergeGuestAccount).toHaveBeenCalledTimes(2);
+    expect(second.latest.current?.guestMergeOutcome).toBeNull();
+    await expect(readGuestMergeTickets()).resolves.toEqual([]);
+    second.unmount();
+
+    const third = await mount(accountA());
+    expect(state.mergeGuestAccount).toHaveBeenCalledTimes(2);
+    expect(third.latest.current?.guestMergeOutcome).toBeNull();
+    third.unmount();
+  });
+
+  it('points at support, once, for a final refusal whose guest credits are on another account', async () => {
+    await storeGuestMergeTicket({ guestUserId: 'guest-1', ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    state.mergeGuestAccount.mockResolvedValue({
+      status: 'not_eligible', creditsMoved: 0, promotionalCreditsMoved: 0, credits: null,
+      reason: 'guest_registered', retryable: false,
+    });
+
+    const { latest, unmount } = await mount(accountA());
+    expect(latest.current?.guestMergeOutcome).toEqual({ status: 'conflict', creditsMoved: 0, at: expect.any(Number) });
+    expect(latest.current?.mergeState).toBe('failed');
+    await expect(readGuestMergeTickets()).resolves.toEqual([]);
+
+    await foreground();
+    expect(state.mergeGuestAccount).toHaveBeenCalledOnce();
+    unmount();
+  });
+
+  it('keeps the ticket, and "not added yet", for the refusal a retry can cure', async () => {
+    await storeGuestMergeTicket({ guestUserId: 'guest-1', ticket: GUEST_TICKET, expiresAt: inDays(30) });
+    state.mergeGuestAccount.mockResolvedValue({
+      status: 'not_eligible', creditsMoved: 0, promotionalCreditsMoved: 0, credits: null,
+      reason: 'account_not_ready', retryable: true,
+    });
+
+    const { latest, unmount } = await mount(accountA());
+    expect(latest.current?.guestMergeOutcome).toMatchObject({ status: 'not_eligible' });
+    expect(latest.current?.mergeState).toBe('pending');
+    await expect(readGuestMergeTickets()).resolves.toHaveLength(1);
+    unmount();
+  });
 });
 
 describe('the balance (audit 03-4)', () => {

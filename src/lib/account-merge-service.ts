@@ -25,8 +25,9 @@ export const ACCOUNT_MERGE_TICKET_TTL_DAYS = 30;
  * `conflict` — this guest was already linked to a different account.
  * `expired` — the ticket outlived its window; the guest data still exists but
  *   needs support to attach.
- * `not_eligible` — refused, and deliberately *not* terminal: the ticket stays
- *   spendable so a later retry can succeed.
+ * `not_eligible` — refused without spending the ticket. `reason` says why and
+ *   `retryable` whether the same ticket can ever pass (2026-11-25); an answer
+ *   without them comes from a server before that, and a client retries it.
  */
 export type AccountMergeStatus =
   | 'merged'
@@ -35,11 +36,32 @@ export type AccountMergeStatus =
   | 'expired'
   | 'not_eligible';
 
+/**
+ * Why a link was refused, as `redeem_account_merge_ticket` says it
+ * (migration 20261125073220). Only `account_not_ready` is retryable.
+ */
+export const ACCOUNT_MERGE_REFUSAL_REASONS = [
+  'invalid_request',
+  'unknown_ticket',
+  'same_account',
+  'guest_gone',
+  'guest_registered',
+  'guest_linked',
+  'account_linked',
+  'account_not_ready',
+] as const;
+
+export type AccountMergeRefusalReason = (typeof ACCOUNT_MERGE_REFUSAL_REASONS)[number];
+
 export interface AccountMergeResult {
   status: AccountMergeStatus;
   creditsMoved: number;
   promotionalCreditsMoved: number;
   credits: number | null;
+  /** On `not_eligible` only: what refused it. */
+  reason?: AccountMergeRefusalReason;
+  /** On `not_eligible` only: false when no later attempt with this ticket can succeed. */
+  retryable?: boolean;
 }
 
 export interface AccountMergeTicketResult {
@@ -70,6 +92,23 @@ function failure(result: IdentityFailure): AccountMergeRouteResult<never> {
 
 function toNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function isAccountMergeRefusalReason(value: unknown): value is AccountMergeRefusalReason {
+  return (ACCOUNT_MERGE_REFUSAL_REASONS as readonly unknown[]).includes(value);
+}
+
+/**
+ * The reason and retryability of a refusal, as the database gave them. A field
+ * it did not give is left out rather than guessed: a client reads a refusal
+ * without `retryable` as one to try again, which is the safe direction for a
+ * ticket that may still carry credits.
+ */
+function refusalFields(payload: Record<string, unknown>): Pick<AccountMergeResult, 'reason' | 'retryable'> {
+  return {
+    ...(isAccountMergeRefusalReason(payload.reason) ? { reason: payload.reason } : {}),
+    ...(typeof payload.retryable === 'boolean' ? { retryable: payload.retryable } : {}),
+  };
 }
 
 /**
@@ -227,14 +266,16 @@ export async function mergeGuestAccountForRoute(
   }
 
   const payload = (data ?? {}) as Record<string, unknown>;
+  const status = String(payload.status ?? 'not_eligible') as AccountMergeStatus;
 
   return {
     ok: true,
     body: {
-      status: String(payload.status ?? 'not_eligible') as AccountMergeStatus,
+      status,
       creditsMoved: toNumber(payload.credits_moved),
       promotionalCreditsMoved: toNumber(payload.promotional_credits_moved),
       credits: typeof payload.credits === 'number' ? payload.credits : null,
+      ...(status === 'not_eligible' ? refusalFields(payload) : {}),
     },
   };
 }

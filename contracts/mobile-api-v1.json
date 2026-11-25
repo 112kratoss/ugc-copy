@@ -6206,6 +6206,120 @@
           }
         }
       }
+    },
+    "mergeGuestAccount": {
+      "method": "POST",
+      "path": "/api/account/merge",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "ticket": "6f1d0c3a9b8e7d6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a3928170605f4"
+      },
+      "response": {
+        "status": "merged",
+        "creditsMoved": 500,
+        "promotionalCreditsMoved": 0,
+        "credits": 525
+      },
+      "responseVariants": {
+        "alreadyMerged": {
+          "status": "already_merged",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null
+        },
+        "conflict": {
+          "status": "conflict",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null
+        },
+        "expired": {
+          "status": "expired",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null
+        },
+        "accountNotReady": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "account_not_ready",
+          "retryable": true
+        },
+        "unknownTicket": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "unknown_ticket",
+          "retryable": false
+        },
+        "sameAccount": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "same_account",
+          "retryable": false
+        },
+        "guestGone": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "guest_gone",
+          "retryable": false
+        },
+        "guestRegistered": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "guest_registered",
+          "retryable": false
+        },
+        "guestLinked": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "guest_linked",
+          "retryable": false
+        },
+        "accountLinked": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "account_linked",
+          "retryable": false
+        },
+        "invalidRequest": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "invalid_request",
+          "retryable": false
+        },
+        "notEligibleFromAnOlderServer": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null
+        }
+      },
+      "errors": {
+        "invalidTicket": {
+          "status": 400,
+          "response": {
+            "error": "A merge ticket is required.",
+            "code": "INVALID_TICKET"
+          }
+        }
+      }
     }
   },
   "profileInvalidPayload": {

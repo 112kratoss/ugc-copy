@@ -73,6 +73,7 @@ describe('GuestMergeBanner (audit 02-8)', () => {
     ['conflict', 'Guest credits not added', /different account/],
     ['expired', 'Guest credits not added', /waited too long/],
     ['not_eligible', 'Guest credits not added yet', /keep trying/],
+    ['refused', 'Guest credits not added', /could not be added/],
   ] as const)('tells a %s why the credits are not on the account, and what to do', (status, title, reason) => {
     state.auth.guestMergeOutcome = { status, creditsMoved: 0, at };
     const tree = render();
