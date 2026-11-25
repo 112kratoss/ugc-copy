@@ -62,6 +62,7 @@ import { clearGenerationAttemptForUser } from './generation-attempts';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { primeInviteShareCode } from './invite-share-code';
 import { forgetInviteShareCode } from './invite-share-code-state';
+import { configurePostViewReporter, flushPostViews } from './post-view-reporter';
 import { claimPendingReferral, retryPendingReferralVisit } from './referral-attribution';
 import {
   clearLocalMobilePushRegistration,
@@ -731,10 +732,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       getAccessToken,
       getIdentityUserId: () => sessionUserIdRef.current,
     });
+    // The views of posts seen outside the feed (post view counts, step 3): sent
+    // with the token the client holds as each batch leaves, so a batch goes only
+    // under the identity that saw its posts (`lib/post-view-reporter.ts`).
+    configurePostViewReporter({
+      send: (body) => api.recordPostViews(body),
+      currentIdentity: () => sessionUserIdRef.current,
+    });
     void restoreShowcaseFeedEvents();
     void flushShowcaseFeedEvents();
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') void flushShowcaseFeedEvents();
+      if (state !== 'active') {
+        void flushShowcaseFeedEvents();
+        void flushPostViews();
+      }
     });
     return () => subscription.remove();
   }, [api, getAccessToken, session?.user?.id]);

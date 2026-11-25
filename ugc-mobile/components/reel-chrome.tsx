@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { router } from 'expo-router';
-import { FileText, Globe, Heart, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
-import { cloneElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { Eye, FileText, Globe, Heart, Images, Lock, LockKeyhole, MessageCircle, MoreHorizontal, Repeat2, Wand2 } from 'lucide-react-native';
+import { cloneElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { ActivityIndicator, Animated, Easing, Pressable, Text, View } from 'react-native';
 
 import { creatorProfilePress } from '@/lib/creator-profile-opening';
@@ -23,6 +23,7 @@ import {
   type ViewerStateTone,
 } from '@/lib/viewer-actions';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
+import type { ViewCountLabels } from '@/lib/view-count/view-count';
 import { renderReelIcon } from '@/components/reel-icon';
 import { RemixCreditLine } from '@/components/remix-credit-line';
 import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
@@ -122,6 +123,13 @@ export function ReelSlideChrome({
   const [captionBlockHeight, setCaptionBlockHeight] = useState(0);
   const reelCaption = useMemo(() => buildReelCaption(item), [item]);
   const railSlots = useMemo(() => getViewerActionSlots(item), [item]);
+  // The views go under saves and comments (post view counts): after the last
+  // of the rail's own counts, the visibility control on an owned post standing
+  // in for Save. With none of them, first.
+  const viewCountAfterSlot = useMemo(
+    () => railSlots.reduce((at, slot, index) => (slot.id === 'save' || slot.id === 'comment' || slot.id === 'visibility' ? index : at), -1),
+    [railSlots],
+  );
   const stateChip = useMemo(() => getViewerStateChip(item), [item]);
   const mediaCount = item.mediaItems?.length ?? 0;
   const isTextPost = item.previewKind === 'text';
@@ -183,7 +191,7 @@ export function ReelSlideChrome({
           gap: 14,
         }}
       >
-        {railSlots.map((slot) => {
+        {withRailViewCount(item.viewLabels, viewCountAfterSlot, railSlots.map((slot) => {
           if (slot.id === 'save') {
             const saveCountLabel = getRailCountLabel(item.saveCount, formatCompactCount);
             return (
@@ -284,7 +292,7 @@ export function ReelSlideChrome({
               onPress={() => slot.action && onOwnerAction?.(slot.action)}
             />
           );
-        })}
+        }))}
         <ViewerActionsMenu
           item={item}
           enabled={deferredActionsMenuEnabled}
@@ -494,6 +502,52 @@ export function IconShadow({ children }: { children: ReactElement<ShadowableIcon
     <View>
       <View pointerEvents="none" style={{ position: 'absolute', top: 1.5, left: 0 }}>{shadow}</View>
       {children}
+    </View>
+  );
+}
+
+/**
+ * The rail's buttons with the post's views put in after `afterIndex` (post view
+ * counts; `-1` puts them first). Nothing is added where there are no labels:
+ * no count at 0, none on a post that is not public.
+ */
+function withRailViewCount(labels: ViewCountLabels | null | undefined, afterIndex: number, buttons: ReactNode[]): ReactNode[] {
+  if (!labels) return buttons;
+  const at = Math.min(Math.max(afterIndex + 1, 0), buttons.length);
+  return [...buttons.slice(0, at), <RailViewCount key="views" labels={labels} />, ...buttons.slice(at)];
+}
+
+/**
+ * A post's views among the rail's icons, under saves and comments (post view
+ * counts): the eye and the compact figure, in the rail's count type. It is no
+ * button: no press, no press state, a little smaller than the actions around
+ * it, and a screen reader hears the whole number ("1,234 views").
+ */
+function RailViewCount({ labels }: { labels: ViewCountLabels }) {
+  return (
+    <View
+      testID="reel-view-count"
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={labels.spoken}
+      style={{ alignItems: 'center', gap: 3, minWidth: 64, maxWidth: 76 }}
+    >
+      <IconShadow><Eye size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
+      <Text
+        numberOfLines={1}
+        style={{
+          color: '#fff',
+          fontSize: 12,
+          lineHeight: 15,
+          fontWeight: '700',
+          textShadowColor: 'rgba(0,0,0,0.6)',
+          textShadowOffset: { width: 0, height: 1 },
+          textShadowRadius: 6,
+          fontVariant: ['tabular-nums'],
+        }}
+      >
+        {labels.compact}
+      </Text>
     </View>
   );
 }

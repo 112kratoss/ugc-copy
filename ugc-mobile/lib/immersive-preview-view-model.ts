@@ -18,6 +18,7 @@ import { formatReturnedCredits, type PostDetailsSection } from './post-details-v
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
+import { postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
 
 export type PreviewViewerSource =
   | 'showcase-feed'
@@ -150,6 +151,12 @@ export interface ImmersivePreviewItem {
   saveCount: number;
   commentLabel: string;
   commentCount: number;
+  /**
+   * The post's views as the reel draws them beside saves and comments (post
+   * view counts; `lib/view-count`): null at 0, for a post that is not public or
+   * taken down, and for a list that carries no count. Never a button.
+   */
+  viewLabels?: ViewCountLabels | null;
   canComment: boolean;
   isSaved: boolean;
   canSave: boolean;
@@ -700,6 +707,8 @@ function showcaseToImmersiveItem(
     saveCount: item.saveCount,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount ?? 0,
+    // A card's `visibility` is set by the read by id; a list of public posts leaves it out.
+    viewLabels: postViewCountLabels({ viewCount: item.viewCount, visibility: item.visibility ?? 'public' }),
     canComment,
     isSaved,
     canSave: true,
@@ -1051,6 +1060,13 @@ function ownerPostToImmersiveItem(
     saveCount: 0,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount,
+    // The owner's own views: none for a post that is not public, and none where
+    // the server leaves the count out (hidden by review, flagged, tombstoned).
+    viewLabels: postViewCountLabels({
+      viewCount: item.viewCount,
+      visibility: item.visibility,
+      archived: Boolean(item.archivedAt),
+    }),
     canComment: item.visibility === 'public' && !item.archivedAt,
     isSaved: false,
     canSave: false,

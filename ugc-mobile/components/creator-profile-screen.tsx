@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { PostViewCountChip, TILE_VIEW_COUNT_CLEARANCE, TILE_VIEW_COUNT_INSET, withSpokenViewCount } from '@/components/post-view-count';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { TEXT_POST_PLATE_FEATURE_LINE_HEIGHT, TextPostPlate } from '@/components/text-post-plate';
 import { buildTextPostPlate, textPostPlateBodyLines, textPostPlateUnderCaption } from '@/lib/text-post-plate-view-model';
@@ -63,6 +64,7 @@ import { CreatorProfileSkeleton, SkeletonBone } from '@/components/skeleton';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { accentColor, appTheme, mediaColors, themes } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
+import { postViewCountLabels, viewCountLabels, VIEW_COUNT_TOTAL_LABEL } from '@/lib/view-count/view-count';
 import type { CreatorProfileResponse, CreatorProfileStats, ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { formatUnlockCreditPrice } from '@/lib/pricing';
@@ -832,18 +834,29 @@ function CreatorHeader({
 function CreatorStats({ stats }: { stats: CreatorProfileStats }) {
   const theme = useAppTheme();
   // "Saves" is the web's label too (decision D10): saves of this creator's posts.
-  const rows = [
-    { label: 'Posts', value: stats.publicCreations },
-    { label: 'Saves', value: stats.totalSaves },
-    { label: 'Remixes', value: stats.totalRemixes },
-    { label: 'Recipes', value: stats.unlocks },
+  // Views sit beside Posts, as on the web's header (post view counts): the
+  // creator's posts' views summed, in the shared rule's figure, and no column
+  // at all while there are none.
+  const views = viewCountLabels(stats.totalViews);
+  const rows: Array<{ label: string; value: string; spoken?: string }> = [
+    { label: 'Posts', value: formatCompactCount(stats.publicCreations) },
+    ...(views ? [{ label: VIEW_COUNT_TOTAL_LABEL, value: views.compact, spoken: views.spoken }] : []),
+    { label: 'Saves', value: formatCompactCount(stats.totalSaves) },
+    { label: 'Remixes', value: formatCompactCount(stats.totalRemixes) },
+    { label: 'Recipes', value: formatCompactCount(stats.unlocks) },
   ];
 
   return (
     <View style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: theme.colors.borderSubtle, paddingTop: 14 }}>
       {rows.map((stat, index) => (
-        <View key={stat.label} style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: theme.colors.borderSubtle, paddingHorizontal: 2 }}>
-          <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{formatCompactCount(stat.value)}</Text>
+        <View
+          key={stat.label}
+          // A figure like "1.2K" is read as the whole number it stands for.
+          accessible={Boolean(stat.spoken)}
+          accessibilityLabel={stat.spoken}
+          style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: theme.colors.borderSubtle, paddingHorizontal: 2 }}
+        >
+          <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
         </View>
       ))}
@@ -887,9 +900,11 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
     enabled: !isTextPost && hasShowcasePreviewMedia(item),
   });
   const open = () => zoomSource.capture(onPress);
+  // The post's views, bottom left on the picture (post view counts): none at 0.
+  const viewLabels = postViewCountLabels(item);
 
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${item.title || 'creator post'}`} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
+    <Pressable accessibilityRole="button" accessibilityLabel={withSpokenViewCount(`Open ${item.title || 'creator post'}`, viewLabels)} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
       <View style={{ minHeight: height + TILE_CAPTION_MIN_HEIGHT, overflow: 'hidden', borderRadius: appTheme.radii.lg, borderCurve: 'continuous', borderWidth: 1, borderColor: theme.colors.borderSubtle, backgroundColor: theme.colors.panel }}>
         <MediaZoomSourceView source={zoomSource} style={{ width, height }}>
         <View style={{ height, backgroundColor: theme.colors.surfaceInset }}>
@@ -900,12 +915,14 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
               content={textPostPlateUnderCaption(buildTextPostPlate(item))}
               size="feature"
               // Whole lines only, starting clear of the recipe chip when there is one
-              // (it sat on the tile's own glyph, which is gone: the plate says "text").
+              // (it sat on the tile's own glyph, which is gone: the plate says "text"),
+              // and ending clear of the views' chip when there is one.
               paddingTop={item.asset ? TEXT_PLATE_TOP_UNDER_CHIP : undefined}
+              paddingBottom={viewLabels ? TILE_VIEW_COUNT_CLEARANCE : undefined}
               bodyLines={textPostPlateBodyLines({
                 height,
                 paddingTop: item.asset ? TEXT_PLATE_TOP_UNDER_CHIP : 14,
-                paddingBottom: 14,
+                paddingBottom: viewLabels ? TILE_VIEW_COUNT_CLEARANCE : 14,
                 titleHeight: 0,
                 lineHeight: TEXT_POST_PLATE_FEATURE_LINE_HEIGHT,
               })}
@@ -927,6 +944,11 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
               <Text numberOfLines={1} style={{ color: themes.dark.colors.commerce, ...appTheme.type.caption, fontWeight: '700' }}>
                 {item.asset.accessMode === 'free' ? 'Free' : formatUnlockCreditPrice(item.asset.priceUsdCents)}
               </Text>
+            </View>
+          ) : null}
+          {viewLabels ? (
+            <View pointerEvents="none" style={{ position: 'absolute', left: TILE_VIEW_COUNT_INSET, bottom: TILE_VIEW_COUNT_INSET }}>
+              <PostViewCountChip labels={viewLabels} />
             </View>
           ) : null}
         </View>

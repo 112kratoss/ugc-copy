@@ -22,6 +22,7 @@ import { PostComments, type PostCommentsHandle } from '@/components/comments-she
 import { CreatorAvatar, IconButton, SecondaryButton } from '@/components/ui';
 import { FeedCardAction } from '@/components/feed-card-shell';
 import { PostDetailsPage } from '@/components/post-details-page';
+import { PostViewCount } from '@/components/post-view-count';
 import { ViewerActionSheet } from '@/components/viewer-action-sheet';
 import { ViewerActionsMenu, ViewerActionsMenuProvider } from '@/components/viewer-actions-menu';
 import { ApiError } from '@/lib/api-client';
@@ -33,6 +34,7 @@ import {
   hasImmersiveDetailsPage,
   immersiveViewerHref,
   textPostViewerHref,
+  type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { readCachedImmersiveSourceData, readCachedProfile } from '@/lib/immersive-preview-source-data';
 import { getCommentCountLabel } from '@/lib/comments-view-model';
@@ -40,6 +42,7 @@ import { creatorProfilePress } from '@/lib/creator-profile-opening';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
 import { readPostDetailsSection } from '@/lib/post-details-view-model';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
+import { isPostLookOnScreen, viewReportPostId } from '@/lib/post-view-look';
 import { getProfileHandle } from '@/lib/profile-view-model';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
@@ -50,6 +53,7 @@ import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedItem, ShowcasePostResponse } from '@/lib/types';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { useInviteShareCapture } from '@/lib/use-invite-share-capture';
+import { usePostViewLook } from '@/lib/use-post-view-look';
 import { useShowcaseSaveMutation } from '@/lib/use-showcase-save-mutation';
 import { getThemedSaveHeartIconProps, getViewerActionSlots, getViewerShareIntent, getViewerStateChip } from '@/lib/viewer-actions';
 import { verticalHitSlop } from '@/lib/hit-target';
@@ -93,7 +97,7 @@ export default function PostScreen() {
     : undefined;
   const isOwnerPost = source === 'profile-posts';
   const showcaseSource = source === 'profile-saved' ? 'profile-saved' : 'showcase-feed';
-  const { api, user } = useAuth();
+  const { api, user, identityUserId } = useAuth();
   const queryClient = useQueryClient();
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
@@ -330,6 +334,33 @@ export default function PostScreen() {
   // leave the screen. Focus-gated so a pushed profile keeps its own back key.
   useHardwareBack(isFocused && onDetailsPage, showPost);
 
+  // The post's view (post view counts, step 3): half of the post on screen, or
+  // across the screen's middle, for a second while the app is in front. The
+  // post heads the thread's list, so its place is read from its layout and the
+  // list's scroll, and only a change in the answer draws the page again. A
+  // media post goes on to the reel, which reports its own.
+  const postLookGeometryRef = useRef({ top: 0, height: 0, scrollOffset: 0, viewportHeight: height });
+  const [postInView, setPostInView] = useState(false);
+  const measurePostInView = useCallback(() => {
+    setPostInView(isPostLookOnScreen(postLookGeometryRef.current));
+  }, []);
+  const onPostLayout = useCallback((layout: { y: number; height: number }) => {
+    postLookGeometryRef.current = { ...postLookGeometryRef.current, top: layout.y, height: layout.height };
+    measurePostInView();
+  }, [measurePostInView]);
+  const onThreadScroll = useCallback((scroll: { offset?: number; viewportHeight: number }) => {
+    const geometry = postLookGeometryRef.current;
+    postLookGeometryRef.current = { ...geometry, scrollOffset: scroll.offset ?? geometry.scrollOffset, viewportHeight: scroll.viewportHeight };
+    measurePostInView();
+  }, [measurePostInView]);
+  usePostViewLook({
+    postId: item && item.previewKind === 'text' && !isOwnerPost
+      ? viewReportPostId(item, { viewerIdentity: identityUserId })
+      : null,
+    surface: 'post-page',
+    onScreen: postInView && isFocused && !onDetailsPage,
+  });
+
   const openComments = useCallback(() => {
     if (pageIndex !== 0) {
       goToPage(0);
@@ -481,11 +512,13 @@ export default function PostScreen() {
                 authReturnTo={authReturnTo}
                 commentCount={resolvedItem.commentCount}
                 deliveryId={deliveryId}
+                onListScroll={onThreadScroll}
                 contentHeader={(
                   <TextPostContent
                     item={resolvedItem}
                     commentsHidden={commentsHidden}
                     hasDetailsPage={pages.length > 1}
+                    onLayout={onPostLayout}
                     nsfwNotice={nsfwCovered ? (
                       <NsfwPostNotice
                         key={resolvedItem.id}
@@ -631,6 +664,7 @@ function TextPostContent({
   item,
   commentsHidden = false,
   hasDetailsPage,
+  onLayout,
   nsfwNotice,
   topInset,
   saving,
@@ -641,11 +675,13 @@ function TextPostContent({
   onSave,
   onShare,
 }: {
-  item: Parameters<typeof buildTextPostPage>[0];
+  item: Parameters<typeof buildTextPostPage>[0] & Pick<ImmersivePreviewItem, 'viewLabels'>;
   /** The thread is held back, so nothing here offers to open it. */
   commentsHidden?: boolean;
   /** The screen has a details page to turn to: a covered post has one only once revealed. */
   hasDetailsPage: boolean;
+  /** Where the post sits at the head of the thread, for its view. */
+  onLayout?: (layout: { y: number; height: number }) => void;
   /**
    * Drawn in place of the title and body while the post is an NSFW cover. The
    * cover has no details page until it is revealed (`hasDetailsPage`).
@@ -672,8 +708,72 @@ function TextPostContent({
     ...(commentsHidden ? ['comment'] : []),
   ];
 
+  const renderSlot = (slot: (typeof slots)[number]) => {
+    if (slot.id === 'save') {
+      const heart = getThemedSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave, colors: theme.colors });
+      return (
+        <FeedCardAction
+          key={slot.id}
+          accessibilityLabel={slot.a11yLabel ?? slot.label}
+          disabled={saving}
+          icon={<Heart size={appTheme.icon.compact} color={heart.color} fill={heart.fill} />}
+          label={slot.label}
+          onPress={onSave}
+        />
+      );
+    }
+    if (slot.id === 'comment') {
+      if (commentsHidden) return null;
+      return (
+        <FeedCardAction
+          key={slot.id}
+          accessibilityLabel={slot.a11yLabel ?? slot.label}
+          icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.faint} />}
+          label={slot.label}
+          onPress={onComments}
+        />
+      );
+    }
+    if (slot.id === 'share') {
+      return (
+        <FeedCardAction
+          key={slot.id}
+          accessibilityLabel={slot.a11yLabel ?? slot.label}
+          icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.faint} />}
+          label={slot.label}
+          onPress={onShare}
+        />
+      );
+    }
+    if (slot.id === 'details' && hasDetails) {
+      return (
+        <FeedCardAction
+          key={slot.id}
+          accessibilityLabel={slot.a11yLabel ?? slot.label}
+          icon={<FileText size={appTheme.icon.compact} color={theme.colors.faint} />}
+          label={slot.label}
+          onPress={onDetails}
+        />
+      );
+    }
+    if (slot.id === 'create') {
+      return (
+        <FeedCardAction
+          key={slot.id}
+          accessibilityLabel={slot.a11yLabel ?? slot.label}
+          icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.primary} />}
+          label={slot.label}
+          onPress={onActionsOpen}
+          tone="primary"
+        />
+      );
+    }
+    return null;
+  };
+
   return (
     <View
+      onLayout={onLayout ? (event) => onLayout(event.nativeEvent.layout) : undefined}
       style={{
         paddingTop: topInset + 66,
         paddingBottom: appTheme.spacing.panel,
@@ -792,68 +892,12 @@ function TextPostContent({
       <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginTop: 4 }} />
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
-        {slots.map((slot) => {
-          if (slot.id === 'save') {
-            const heart = getThemedSaveHeartIconProps({ isSaved: item.isSaved, enabled: item.canSave, colors: theme.colors });
-            return (
-              <FeedCardAction
-                key={slot.id}
-                accessibilityLabel={slot.a11yLabel ?? slot.label}
-                disabled={saving}
-                icon={<Heart size={appTheme.icon.compact} color={heart.color} fill={heart.fill} />}
-                label={slot.label}
-                onPress={onSave}
-              />
-            );
-          }
-          if (slot.id === 'comment') {
-            if (commentsHidden) return null;
-            return (
-              <FeedCardAction
-                key={slot.id}
-                accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<MessageCircle size={appTheme.icon.compact} color={theme.colors.faint} />}
-                label={slot.label}
-                onPress={onComments}
-              />
-            );
-          }
-          if (slot.id === 'share') {
-            return (
-              <FeedCardAction
-                key={slot.id}
-                accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.faint} />}
-                label={slot.label}
-                onPress={onShare}
-              />
-            );
-          }
-          if (slot.id === 'details' && hasDetails) {
-            return (
-              <FeedCardAction
-                key={slot.id}
-                accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<FileText size={appTheme.icon.compact} color={theme.colors.faint} />}
-                label={slot.label}
-                onPress={onDetails}
-              />
-            );
-          }
-          if (slot.id === 'create') {
-            return (
-              <FeedCardAction
-                key={slot.id}
-                accessibilityLabel={slot.a11yLabel ?? slot.label}
-                icon={<Repeat2 size={appTheme.icon.compact} color={theme.colors.primary} />}
-                label={slot.label}
-                onPress={onActionsOpen}
-                tone="primary"
-              />
-            );
-          }
-          return null;
-        })}
+        {slots.map(renderSlot)}
+        {/* The views end the row, right-aligned (post view counts): after
+            Comment they pushed Details alone onto a second line on a 360pt
+            phone. Where the actions fill the line, the count goes under them
+            on the right, and never takes an action's place on its line. */}
+        <PostViewCount labels={item.viewLabels} style={{ marginLeft: 'auto' }} />
       </View>
 
     </View>

@@ -25,6 +25,7 @@ import { currentInviteShareCode } from './invite-share-code-state';
 import { withInviteShareCode } from './invite-share-link/invite-share-link';
 import { mediaItemAspectRatio } from './media-zoom-transition';
 import { FREE_RECIPE_LABEL, UNKNOWN_AMOUNT_LABEL, formatUnlockCreditPrice } from './pricing';
+import { postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
 
 export type ProfilePreviewState = 'image' | 'videoPoster' | 'videoFallback' | 'text' | 'audio' | 'artFallback';
 
@@ -81,6 +82,12 @@ export interface ProfileMediaCard {
   avatarUrl?: string | null;
   avatarLabel?: string;
   countLabel?: string;
+  /**
+   * A Posts tile's views, drawn bottom left beside its state (post view counts;
+   * `lib/view-count`): null at 0, for a post that is not public or archived, and
+   * where the server leaves the count out. Creations and Saved draw none.
+   */
+  viewLabels?: ViewCountLabels | null;
   viewerSource: PreviewViewerSource;
   sourceId: string;
   artVariant: 'kingdom' | 'city' | 'runner' | 'tree' | 'portal';
@@ -610,6 +617,11 @@ export function ownerPostToProfileMediaCard(item: OwnerPostListItem): ProfileMed
     visibilityLabel: postVisibilityLabel(item.visibility),
     mediaTypeLabel: ownerPostBadge(item),
     countLabel: '0',
+    viewLabels: postViewCountLabels({
+      viewCount: item.viewCount,
+      visibility: item.visibility,
+      archived: Boolean(item.archivedAt),
+    }),
     viewerSource: 'profile-posts',
     sourceId: item.id,
     artVariant: item.bundle ? 'portal' : item.mediaKind === 'video' ? 'city' : isTextPost ? 'tree' : 'kingdom',

@@ -123,6 +123,7 @@ vi.mock('lucide-react-native', () => ({
   ChevronRight: (props: Record<string, unknown>) => React.createElement('chevron-right-icon', props),
   CircleAlert: (props: Record<string, unknown>) => React.createElement('circle-alert-icon', props),
   Crown: (props: Record<string, unknown>) => React.createElement('crown-icon', props),
+  Eye: (props: Record<string, unknown>) => React.createElement('eye-icon', props),
   FileText: (props: Record<string, unknown>) => React.createElement('file-text-icon', props),
   Gift: (props: Record<string, unknown>) => React.createElement('gift-icon', props),
   Globe: (props: Record<string, unknown>) => React.createElement('globe-icon', props),
@@ -1691,6 +1692,30 @@ describe('ProfileDashboard media tiles routing', () => {
     })).toBeTruthy();
     expect(findViewByTestId(tree!.root, 'profile-saved-overlay')).toHaveLength(0);
     expect(findViewByTestId(tree!.root, 'profile-minimal-overlay')).toHaveLength(1);
+  });
+
+  // Post view counts (step 3): a Post tile draws its views beside its state,
+  // over the tile's shade, and says them in its label; none where the owner list
+  // sends no count (a post the public cannot see) and none at 0.
+  it("draws a Post tile's views beside its state, and says them", () => {
+    const [first] = queryState.ownerPosts as Array<Record<string, unknown>>;
+    queryState.ownerPosts = [
+      { ...first, viewCount: 1234 },
+      { ...first, id: 'post-2', title: 'Unseen post', viewCount: 0 },
+      { ...first, id: 'post-3', title: 'Hidden post' },
+    ];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Posts" />);
+    });
+
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Post Title, Public, 1,234 views' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Unseen post, Public' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Post, Hidden post, Public' })).toBeTruthy();
+    const chips = findViewByTestId(tree!.root, 'post-view-count-chip');
+    expect(chips).toHaveLength(1);
+    expect(chips[0].findAll((node) => String(node.type) === 'Text' || String(node.type) === 'text')
+      .map((node) => node.props.children)).toContain('1.2K');
   });
 
   it('highlights the newly created post tile on the Posts tab', () => {

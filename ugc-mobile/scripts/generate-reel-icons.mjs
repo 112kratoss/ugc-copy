@@ -16,6 +16,7 @@ const variants = [
   ['heart', 'Heart', 30, '#ff3b64', '#ff3b64', true],
   ['heart', 'Heart', 30, 'rgba(255,255,255,0.5)', 'none', true],
   ['message-circle', 'MessageCircle', 30, '#ffffff', 'none', false],
+  ['eye', 'Eye', 24, '#ffffff', 'none', true],
   ['share', 'Share', 28, '#ffffff', 'none', true],
   ['share-2', 'Share2', 28, '#ffffff', 'none', true],
   ['ellipsis', 'Ellipsis', 28, '#ffffff', 'none', true],

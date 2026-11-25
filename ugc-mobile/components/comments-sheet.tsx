@@ -145,6 +145,11 @@ type PostCommentsProps = {
    * delivery. Absent anywhere the post was not reached through a ranked feed.
    */
   deliveryId?: string | null;
+  /**
+   * Inline, where the list carries the post at its head: where the list stands
+   * and how tall it is, as it scrolls, for the post's view (post view counts).
+   */
+  onListScroll?: (scroll: { offset?: number; viewportHeight: number }) => void;
 };
 
 export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(function PostComments({
@@ -162,6 +167,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   initialReplyToId,
   unavailableMessage,
   deliveryId,
+  onListScroll,
 }, ref) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
@@ -1062,6 +1068,13 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           {commentsHeader}
         </>
       ) : undefined}
+      // Coarse on purpose: the page asks only whether half its post is on screen.
+      onScroll={onListScroll ? (event) => onListScroll({
+        offset: event.nativeEvent.contentOffset.y,
+        viewportHeight: event.nativeEvent.layoutMeasurement.height,
+      }) : undefined}
+      scrollEventThrottle={onListScroll ? 100 : undefined}
+      onLayout={onListScroll ? (event) => onListScroll({ viewportHeight: event.nativeEvent.layout.height }) : undefined}
       onRefresh={enabled && !commentsUnavailable ? () => {
         setPullRefreshing(true);
         void commentsQuery.refetch().finally(() => setPullRefreshing(false));

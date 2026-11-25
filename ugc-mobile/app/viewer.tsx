@@ -88,6 +88,8 @@ import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
+import { isCountedByReelImpression, viewReportPostId } from '@/lib/post-view-look';
+import { usePostViewLook } from '@/lib/use-post-view-look';
 import {
   buildViewerItems,
   type ImmersiveSourceData,
@@ -1061,6 +1063,22 @@ function ImmersivePreviewViewer() {
       if (leaveEvent) recordViewerFeedEvent(current(), leaveEvent, { durationMs });
     };
   }, [activeItem?.id, initialPositionReady, isFocused, onEndSlide, recordViewerFeedEvent, source]);
+
+  // The view of a post this reel shows that no impression counts (post view
+  // counts, step 3): a reel opened from a profile, Saved, search, a link or
+  // Explore, or a post the feed did not deliver. Its second is the
+  // impression's own, the post on screen while the app is in front; a post a
+  // feed delivered, on the feed's own reel, is counted by the impression above.
+  usePostViewLook({
+    postId: initialPositionReady && activeItem
+      ? viewReportPostId(activeItem, {
+        viewerIdentity: identityUserId,
+        countedByFeedImpression: isCountedByReelImpression(source, activeItem),
+      })
+      : null,
+    surface: 'reel',
+    onScreen: initialPositionReady && isFocused && !onEndSlide,
+  });
 
   const reconcileShowcaseSave = useCallback((
     result: ShowcaseSaveStateResult,

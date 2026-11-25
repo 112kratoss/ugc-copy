@@ -3276,6 +3276,116 @@
         "following": true
       }
     },
+    "getCreatorProfile": {
+      "method": "GET",
+      "path": "/api/creators/:username",
+      "auth": "optional",
+      "cacheControl": "public, s-maxage=60, stale-while-revalidate=300",
+      "signedInCacheControl": "private, no-store",
+      "description": "A creator's page: the header, its totals with the views of the posts it shows (totalViews, post view counts), and its posts, each with its lifetime views (viewCount). The totals come with the first page (offset 0) only. A reader's token marks their saves and follow and turns the answer private.",
+      "response": {
+        "profile": {
+          "id": "creator-1",
+          "username": "luna",
+          "displayName": "Luna Studio",
+          "bio": "Creator portfolio",
+          "avatarUrl": "https://cdn.example.test/luna-avatar.png",
+          "coverUrl": null,
+          "websiteUrl": null,
+          "twitterHandle": null,
+          "instagramHandle": "lunastudio",
+          "tiktokHandle": null,
+          "location": "Kochi"
+        },
+        "stats": {
+          "publicCreations": 2,
+          "totalSaves": 12,
+          "totalRemixes": 3,
+          "totalViews": 1290,
+          "unlocks": 0,
+          "totalUnlockSales": 0,
+          "toolsUsed": [
+            {
+              "slug": "magicbooklet",
+              "label": "Magicbooklet",
+              "count": 2
+            }
+          ]
+        },
+        "items": [
+          {
+            "id": "post-1",
+            "mediaUrl": "https://cdn.example.test/post-1.png",
+            "mediaKind": "image",
+            "mediaItems": [],
+            "model": "nano-banana-2",
+            "title": "Launch frame",
+            "prompt": "Create a bright launch visual.",
+            "body": "",
+            "category": "image",
+            "creationMode": null,
+            "postFormat": "media",
+            "saveCount": 9,
+            "viewCount": 1234,
+            "remixCount": 3,
+            "commentCount": 2,
+            "createdAt": "2026-11-20T06:00:00.000Z",
+            "creator": {
+              "id": "creator-1",
+              "username": "luna",
+              "name": "Luna Studio",
+              "avatar": "https://cdn.example.test/luna-avatar.png"
+            },
+            "sourceKind": "magicbooklet",
+            "sourceTool": "Magicbooklet",
+            "generationId": "generation-1",
+            "asset": null,
+            "canRemix": true
+          },
+          {
+            "id": "post-2",
+            "mediaUrl": null,
+            "mediaKind": null,
+            "mediaItems": [],
+            "model": "manual",
+            "title": "Lighting notes",
+            "prompt": "",
+            "body": "Three lights, one bounce.",
+            "category": "text",
+            "creationMode": null,
+            "postFormat": "text",
+            "saveCount": 3,
+            "viewCount": 0,
+            "remixCount": 0,
+            "commentCount": 0,
+            "createdAt": "2026-11-18T06:00:00.000Z",
+            "creator": {
+              "id": "creator-1",
+              "username": "luna",
+              "name": "Luna Studio",
+              "avatar": "https://cdn.example.test/luna-avatar.png"
+            },
+            "sourceKind": "manual",
+            "sourceTool": null,
+            "generationId": null,
+            "asset": null,
+            "canRemix": false
+          }
+        ],
+        "pageInfo": {
+          "hasMore": false,
+          "nextLimit": null,
+          "nextOffset": null,
+          "limit": 24,
+          "offset": 0
+        },
+        "viewer": {
+          "isOwner": false,
+          "isFollowing": false,
+          "blockedByViewer": false
+        }
+      }
+    },
     "saveShowcasePost": {
       "method": "POST",
       "path": "/api/showcase/save",

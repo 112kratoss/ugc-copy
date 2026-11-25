@@ -1,9 +1,10 @@
 # Post view counts: counted where a post is shown large, shown to everyone
 
 Status: step 1 (counting, server only) shipped as #902 (`5d9366d98`), live
-2026-11-23; step 2 (web display and the web's views) is #905, built on
-2026-11-23 and reworked after its `max` review on 2026-11-24 on the branch
-`feat/post-view-counts-web`; step 3 (app display) is open.
+2026-11-23; step 2 (web display and the web's views) shipped as #905
+(`27c10e0fc`), live 2026-11-24 in `2534535ee`; step 3 (the app's display and
+views) is built on the branch `feat/post-view-counts-app` (2026-11-25), all but
+Home's cards, which wait for #925 (it changes the same Home code).
 The owner made the decisions in the first section in the planning session on
 2026-11-23. The defaults after them were chosen in planning and are open to
 change. Paths are relative to `ugc-app/`; app paths are under `ugc-mobile/`.
@@ -305,6 +306,29 @@ at the level AGENTS.md sets.
 3. **App display (size M).**
    - **Build:** the app places and beacons, the contract fields it reads, and
      `design-mobile.md`.
+   - **Built (2026-11-25):** counts through the shared rule on the post page
+     (a written post's; a media post opens the reel), at the end of its row of
+     actions, right-aligned: after Comment it pushed Details alone onto a second
+     line on a 360pt phone; the reel's rail under Save and Comment
+     (`reel-chrome.tsx`, a bundled eye raster); the creator page's tiles and
+     your profile's Posts tiles, bottom left on the tiles' glass chip (a
+     written post's tile ends its writing above it); and Views after Posts in
+     the creator header. The views: `lib/post-view-reporter.ts` (batched, 25 a
+     request, 5 s of quiet, 30 s at most, sent as the app leaves the
+     foreground; once a reader, post and UTC day; a failed send let go; only
+     under the identity that saw the post), `lib/post-view-look.ts` (the
+     feed's qualified impression: half the post on screen for a second, the
+     second starting over after the app was in the background) and
+     `lib/use-post-view-look.ts` (a look made before the session is known is
+     held for it). The post page and a reel opened from a profile, Saved,
+     search or a link send them; a reel slide a feed delivered, on the feed's
+     own lanes (Home and Explore), is counted by its impression and sends none.
+     Contracts: `viewCount` pinned on `getShowcaseFeed`, `getShowcasePost` and
+     `listOwnerPosts`, and a creator-page fixture, `getCreatorProfile`, with
+     `viewCount` and `totalViews`, in both suites. Checked on the Pixel_9a at
+     360dp and one iPhone 17 Pro against a local stack (record:
+     `archive/post-view-counts-step3-2026-11-25/`).
+   - **Not yet built:** the count on Home's cards (after #925 merges).
    - **Tests:** view-model tests.
    - **Check:** on the S24 or the emulator first, then one iPhone pass.
    - **Ship:** as an OTA (`ship-ota`, published on the owner's word in chat)

@@ -1109,6 +1109,12 @@ export interface ShowcaseFeedItem {
   creationMode?: 'motion' | null;
   postFormat: 'text' | 'media' | 'mixed';
   saveCount: number;
+  /**
+   * Lifetime views: one per person per UTC day while the post was public, never
+   * its creator's own (post view counts). Sent by the feed, Saved, the read by
+   * id and the creator page; left out by a legacy read, which draws none.
+   */
+  viewCount?: number;
   remixCount: number;
   commentCount: number;
   createdAt: string;
@@ -1430,6 +1436,8 @@ export interface DeletePostCommentResponse {
 export interface CreatorProfileStats {
   publicCreations: number;
   totalSaves: number;
+  /** The views of the posts the page shows, summed; left out by a server from before view counts. */
+  totalViews?: number;
   totalRemixes: number;
   unlocks: number;
   totalUnlockSales: number;
@@ -1857,6 +1865,12 @@ export interface OwnerPostListItem {
   sourceToolSlug?: string | null;
   sourceTools?: SourceToolSelection[];
   commentCount: number;
+  /**
+   * Lifetime views, counted while the post was public. Left out for a post the
+   * public cannot see whatever its visibility says (hidden by review, flagged,
+   * or deleted and kept for its recipe's holders), whose count nobody is shown.
+   */
+  viewCount?: number;
 }
 
 export interface OwnerPostsResponse {

@@ -1574,7 +1574,7 @@ export function createApiClient({
      * opened from a profile or search), up to 25 at a time, sent with the
      * session's token so each counts under its account; answered 204 with no
      * body. Home's cards and the feed's reel need no call: their impressions
-     * already count. Unused until the app draws counts (post view counts,
+     * already count. Sent by `lib/post-view-reporter.ts` (post view counts,
      * step 3).
      */
     recordPostViews: (body: {

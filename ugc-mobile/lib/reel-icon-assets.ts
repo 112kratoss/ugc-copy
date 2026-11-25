@@ -5,6 +5,7 @@ export const reelIconAssets: Record<string, number> = {
   "Heart|30|#ff3b64|#ff3b64|2.2|true": require('../assets/reel-icons/heart-ff3b64-shadow.png'),
   "Heart|30|rgba(255,255,255,0.5)|none|2.2|true": require('../assets/reel-icons/heart-rgba25525525505-shadow.png'),
   "MessageCircle|30|#ffffff|none|2.2|false": require('../assets/reel-icons/message-circle-ffffff-plain.png'),
+  "Eye|24|#ffffff|none|2.2|true": require('../assets/reel-icons/eye-ffffff-shadow.png'),
   "Share|28|#ffffff|none|2.2|true": require('../assets/reel-icons/share-ffffff-shadow.png'),
   "Share2|28|#ffffff|none|2.2|true": require('../assets/reel-icons/share-2-ffffff-shadow.png'),
   "Ellipsis|28|#ffffff|none|2.2|true": require('../assets/reel-icons/ellipsis-ffffff-shadow.png'),
