@@ -12,27 +12,18 @@ import type { ShowcaseFeedRemovalTarget } from './showcase-feed-events';
  * the one on screen among them, so a post that is merely absent stays where it
  * is; the reel takes posts out itself (`removeViewerSessionItems`) when the
  * reader removes them.
- *
- * `anchorId` is the post the reader is on. A post above it that the refresh
- * left out stays too, whatever the source: taking it out moves the reader's
- * row up by one, which is the same jump as a reorder. A For you reel a link
- * opened on Home's cached page refetches a new ranked page; on Android the
- * native list drew the post that moved into the old offset for 70 to 180 ms
- * before the alignment scroll put the reader back (Pixel_9a, 2026-11-25).
- * Below the reader a missing post still goes, as nothing above them moves.
  */
 export function reconcileViewerSessionItems(
   previous: ImmersivePreviewItem[],
   incoming: ImmersivePreviewItem[],
-  { keepMissing = false, anchorId = null }: { keepMissing?: boolean; anchorId?: string | null } = {}
+  { keepMissing = false }: { keepMissing?: boolean } = {}
 ): ImmersivePreviewItem[] {
   const remaining = new Map(incoming.map((item) => [item.id, item]));
-  const anchorIndex = anchorId ? previous.findIndex((item) => item.id === anchorId) : -1;
   const ordered: ImmersivePreviewItem[] = [];
-  for (const [index, item] of previous.entries()) {
+  for (const item of previous) {
     const refreshed = remaining.get(item.id);
     if (!refreshed) {
-      if (keepMissing || index < anchorIndex) ordered.push(item);
+      if (keepMissing) ordered.push(item);
       continue;
     }
     ordered.push(refreshed);

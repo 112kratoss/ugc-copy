@@ -437,6 +437,43 @@ export function isLinkedPostAlone(data: ImmersiveSourceData | undefined): boolea
 }
 
 /**
+ * A For you reel's refetch, as the reel keeps it: every post of the page it
+ * held stays in its place, the new page's copy where the new page has it, and
+ * the new page's other posts follow. A refetch is a new ranked page, and a
+ * post it left out is not gone; dropped, a post above the reader moved their
+ * row, and Android drew the post that moved into the old offset until the
+ * alignment scroll put them back (a link opened on Home's cached page,
+ * Pixel_9a, 2026-11-25). Kept in this cache rather than in the reel's list
+ * alone, so a save, an unlock or a comment count still reaches it, and a block
+ * or removal made elsewhere still takes it out.
+ *
+ * A post the new page left out keeps no delivery: the reel files events under
+ * the new page's session, which never served it. The opened post is kept only
+ * as read again: when that read found nothing (deleted, private, blocked) the
+ * reel says so. A read of the post alone, or data that held no page, is taken
+ * as it came.
+ */
+export function keepReelPagePosts(
+  previous: ImmersiveSourceData | undefined,
+  next: ImmersiveSourceData,
+  openedId: string
+): ImmersiveSourceData {
+  if (!previous?.showcaseItems?.length || !('feedSessionId' in previous) || !('feedSessionId' in next)) return next;
+  const incoming = new Map((next.showcaseItems ?? []).map((item) => [item.id, item]));
+  const showcaseItems: ShowcaseFeedItem[] = [];
+  for (const item of previous.showcaseItems) {
+    const refreshed = incoming.get(item.id);
+    if (refreshed) {
+      showcaseItems.push(refreshed);
+      incoming.delete(item.id);
+    } else if (item.id !== openedId) {
+      showcaseItems.push(withoutDelivery(item));
+    }
+  }
+  return { ...next, showcaseItems: [...showcaseItems, ...incoming.values()] };
+}
+
+/**
  * `profile-generations` is paginated; `generations` stays single-page. Owner
  * posts are not merged in: generation viewers load linked-post details as
  * separate enrichment.

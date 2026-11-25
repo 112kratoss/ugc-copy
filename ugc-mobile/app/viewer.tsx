@@ -93,6 +93,7 @@ import {
   type ImmersiveSourceData,
   isGenerationSource,
   isLinkedPostAlone,
+  keepReelPagePosts,
   linkReelEndSlideState,
   loadImmersiveSourceData,
   loadShowcaseReelNeighbours,
@@ -497,13 +498,20 @@ function ImmersivePreviewViewer() {
     initialDataUpdatedAt: () => (gridBacked
       ? undefined
       : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, identityUserId)?.updatedAt),
-    queryFn: () => loadImmersiveSourceData({
-      api,
-      source,
-      initialId,
-      mediaOnly,
-      withNeighbours: !linkRoute || neighboursStatus === 'success' || !isLinkedPostAlone(queryClient.getQueryData(sourceQueryKey)),
-    }),
+    queryFn: async () => {
+      const data = await loadImmersiveSourceData({
+        api,
+        source,
+        initialId,
+        mediaOnly,
+        withNeighbours: !linkRoute || neighboursStatus === 'success' || !isLinkedPostAlone(queryClient.getQueryData(sourceQueryKey)),
+      });
+      // A For you refetch is a new ranked page: the posts the reel holds stay
+      // where they are (`keepReelPagePosts`), read as the answer lands.
+      return source === 'showcase-feed'
+        ? keepReelPagePosts(queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey), data, initialId)
+        : data;
+    },
     staleTime: 1000 * 45,
   });
   // The post a link opened, once it is in hand and alone, or with the page
@@ -592,18 +600,13 @@ function ImmersivePreviewViewer() {
   // Reconcile before commit, rather than letting an effect paint stale data.
   // A lane's refresh is a new session that leaves out the posts already seen,
   // so those stay; the reel takes out what the reader removes (`removeFromReel`).
-  // Any refresh keeps the posts above the reader's, so the reader's row stays
-  // put: a link's reel opened on Home's cached page refetches a new one.
   const [sessionItems, setSessionItems] = useState({ key: sourceQueryKey, input: sourceItems, ordered: sourceItems });
   if (sessionItems.input !== sourceItems || sessionItems.key !== sourceQueryKey) {
     setSessionItems({
       key: sourceQueryKey,
       input: sourceItems,
       ordered: sessionItems.key === sourceQueryKey
-        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems, {
-          keepMissing: laneBacked,
-          anchorId: savedPosition?.itemId ?? initialId,
-        })
+        ? reconcileViewerSessionItems(sessionItems.ordered, sourceItems, { keepMissing: laneBacked })
         : sourceItems,
     });
   }
