@@ -42,11 +42,18 @@ export interface StoredGuestMergeTicket {
 }
 
 /**
+ * What the person is told about a link: a server status, or `refused` for a
+ * refusal the server calls final whose reason this build has no words of its
+ * own for (2026-11-25).
+ */
+export type GuestMergeOutcomeStatus = GuestAccountMergeStatus | 'refused';
+
+/**
  * What the person is told about a link, kept on the device until they dismiss
  * it (audit 02-8).
  */
 export interface GuestMergeOutcome {
-  status: GuestAccountMergeStatus;
+  status: GuestMergeOutcomeStatus;
   /** The credits the link moved onto the account; 0 unless it moved some. */
   creditsMoved: number;
   /** When the answer came, in epoch milliseconds. */
@@ -74,7 +81,8 @@ export const GUEST_MERGE_TICKET_MIN_VALIDITY_MS = 60 * 60 * 1000;
  * `not_eligible` is deliberately absent — the server leaves the ticket
  * redeemable for it, because it can be transient (a profile row still being
  * created). Clearing on it would throw away a link that the next attempt would
- * have completed.
+ * have completed. Only a refusal the server itself calls final is cleared
+ * (`isFinalMergeRefusal`).
  */
 const TERMINAL_STATUSES: readonly GuestAccountMergeStatus[] = [
   'merged',
@@ -84,7 +92,18 @@ const TERMINAL_STATUSES: readonly GuestAccountMergeStatus[] = [
 ];
 
 /** Outcomes where the guest's data really did arrive. */
-const SUCCESS_STATUSES: readonly GuestAccountMergeStatus[] = ['merged', 'already_merged'];
+const SUCCESS_STATUSES: readonly GuestMergeOutcomeStatus[] = ['merged', 'already_merged'];
+
+/** The server's answer to one redemption, as far as the decisions below read it. */
+export type GuestMergeAnswer = Pick<GuestAccountMergeResponse, 'status' | 'reason' | 'retryable'>;
+
+/** The kept ticket an answer was for, as far as the decisions below read it. */
+export interface GuestMergeTicketContext {
+  /** When the server stops honouring the ticket (ISO); null when not known. */
+  expiresAt: string | null;
+  /** Now, in epoch milliseconds. */
+  now: number;
+}
 
 /**
  * Shape check for a ticket, kept here rather than in the storage module so it
@@ -99,8 +118,60 @@ export function isTerminalMergeStatus(status: GuestAccountMergeStatus) {
   return TERMINAL_STATUSES.includes(status);
 }
 
-export function isSuccessfulMergeStatus(status: GuestAccountMergeStatus) {
+export function isSuccessfulMergeStatus(status: GuestMergeOutcomeStatus) {
   return SUCCESS_STATUSES.includes(status);
+}
+
+/**
+ * A refusal the server says no later attempt with this ticket can pass
+ * (2026-11-25): it names no ticket it has, or a guest that is gone, is this
+ * account, or belongs to another. Only an explicit `retryable: false` counts —
+ * an older server sends no such field, and its refusals keep being retried.
+ */
+export function isFinalMergeRefusal(answer: GuestMergeAnswer) {
+  return answer.status === 'not_eligible' && answer.retryable === false;
+}
+
+function ticketHadExpired(ticket: GuestMergeTicketContext | undefined) {
+  if (!ticket?.expiresAt) return false;
+  const expiresAt = Date.parse(ticket.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= ticket.now;
+}
+
+/**
+ * What the person is told of a final refusal, or null when there is nothing
+ * to tell because no credits could have been waiting:
+ *
+ * - `same_account`: the guest became this account in place, its credits with it.
+ * - `guest_gone`: the guest was deleted, and what it held with it.
+ * - `unknown_ticket`: the server has no such ticket. Told as `expired` when
+ *   this device knows the ticket had passed its expiry, since the server
+ *   prunes a ticket 30 days after it and the guest's credits may still be
+ *   there for support to attach; otherwise nothing, as for a ticket minted on
+ *   another server (the iPhone simulator of 2026-11-25) or one whose guest was
+ *   deleted.
+ * - `guest_registered`, `guest_linked`: the guest's credits are on another
+ *   account, which is what `conflict` says.
+ * - anything else, a reason a newer server added included: `refused`, which
+ *   points at support. Credits that may be waiting are never passed over in
+ *   silence.
+ */
+export function finalMergeRefusalOutcome(
+  reason: GuestMergeAnswer['reason'],
+  ticket?: GuestMergeTicketContext,
+): GuestMergeOutcomeStatus | null {
+  switch (reason) {
+    case 'same_account':
+    case 'guest_gone':
+      return null;
+    case 'unknown_ticket':
+      return ticketHadExpired(ticket) ? 'expired' : null;
+    case 'guest_registered':
+    case 'guest_linked':
+      return 'conflict';
+    default:
+      return 'refused';
+  }
 }
 
 /**
@@ -175,21 +246,33 @@ export type GuestMergeRedeemAction = {
  * component.
  */
 export function resolveMergeRedeemAction(
-  status: GuestAccountMergeStatus,
+  answer: GuestMergeAnswer,
+  ticket?: GuestMergeTicketContext,
 ): GuestMergeRedeemAction {
-  if (isSuccessfulMergeStatus(status)) {
+  if (isSuccessfulMergeStatus(answer.status)) {
     return { clearTicket: true, nextState: 'idle' };
   }
 
-  if (isTerminalMergeStatus(status)) {
+  if (isTerminalMergeStatus(answer.status)) {
     // conflict / expired: the ticket is spent server-side, so keeping it buys
     // nothing — but the user has to be told (guestMergeOutcomeOf), because
     // their balance is smaller than they expect and only support can fix it.
     return { clearTicket: true, nextState: 'failed' };
   }
 
-  // not_eligible: the server deliberately left the ticket redeemable. Keep it
-  // and stay pending so the next launch tries again.
+  if (isFinalMergeRefusal(answer)) {
+    // The server says no attempt with this ticket can ever pass, so sending it
+    // again at every launch only re-tells "not added yet" (2026-11-25). Failed
+    // only when there is something to tell (guestMergeOutcomeOf).
+    return {
+      clearTicket: true,
+      nextState: finalMergeRefusalOutcome(answer.reason, ticket) ? 'failed' : 'idle',
+    };
+  }
+
+  // not_eligible that a retry can cure, or from a server that does not say:
+  // the server deliberately left the ticket redeemable. Keep it and stay
+  // pending so the next launch tries again.
   return { clearTicket: false, nextState: 'pending' };
 }
 
@@ -206,20 +289,27 @@ export function resolveMergeRedeemFailureAction(): GuestMergeRedeemAction {
 
 /**
  * What one answer gives the person to read, or null when there is nothing to
- * say: a link that moved no credits, and `already_merged`, which repeats an
- * earlier answer (counting its credits again would add them twice).
+ * say: a link that moved no credits, `already_merged`, which repeats an
+ * earlier answer (counting its credits again would add them twice), and a
+ * final refusal that no credits could have been waiting behind
+ * (`finalMergeRefusalOutcome`).
  */
 export function guestMergeOutcomeOf(
-  answer: Pick<GuestAccountMergeResponse, 'status' | 'creditsMoved'>,
+  answer: GuestMergeAnswer & Pick<GuestAccountMergeResponse, 'creditsMoved'>,
   at: number,
+  ticket?: GuestMergeTicketContext,
 ): GuestMergeOutcome | null {
   switch (answer.status) {
     case 'merged':
       return answer.creditsMoved > 0 ? { status: 'merged', creditsMoved: answer.creditsMoved, at } : null;
     case 'conflict':
     case 'expired':
-    case 'not_eligible':
       return { status: answer.status, creditsMoved: 0, at };
+    case 'not_eligible': {
+      if (!isFinalMergeRefusal(answer)) return { status: 'not_eligible', creditsMoved: 0, at };
+      const status = finalMergeRefusalOutcome(answer.reason, ticket);
+      return status ? { status, creditsMoved: 0, at } : null;
+    }
     default:
       return null;
   }
@@ -230,8 +320,8 @@ export function guestMergeOutcomeOf(
  * not added yet: a not-yet is retried at every launch and comes back once the
  * person has read the rest.
  */
-function outcomeRank(status: GuestAccountMergeStatus) {
-  if (status === 'conflict' || status === 'expired') return 3;
+function outcomeRank(status: GuestMergeOutcomeStatus) {
+  if (status === 'conflict' || status === 'expired' || status === 'refused') return 3;
   if (isSuccessfulMergeStatus(status)) return 2;
   return 1;
 }
@@ -254,6 +344,23 @@ export function combineGuestMergeOutcomes(
 }
 
 /**
+ * The outcome to keep after a redemption run for one account: `next` folded
+ * into `kept` as above, except that a "not added yet" is dropped once nothing
+ * is left waiting for the account (2026-11-25). It promises another try, and
+ * with no ticket left to send there is none; kept, it stayed on Home until
+ * dismissed. Returns `kept` itself when nothing changes.
+ */
+export function settleGuestMergeOutcome(
+  kept: GuestMergeOutcome | null,
+  next: GuestMergeOutcome | null,
+  { waiting }: { waiting: boolean },
+): GuestMergeOutcome | null {
+  const combined = combineGuestMergeOutcomes(kept, next);
+  if (!waiting && combined?.status === 'not_eligible') return null;
+  return combined;
+}
+
+/**
  * What the user should be told, given a settled outcome.
  *
  * `conflict` and `expired` never claim the data arrived — that would be a lie
@@ -261,7 +368,7 @@ export function combineGuestMergeOutcomes(
  * support, because both are recoverable by a human with database access and by
  * nobody else.
  */
-export function describeMergeOutcome(status: GuestAccountMergeStatus): {
+export function describeMergeOutcome(status: GuestMergeOutcomeStatus): {
   tone: 'success' | 'warning';
   message: string;
 } {
@@ -285,6 +392,13 @@ export function describeMergeOutcome(status: GuestAccountMergeStatus): {
         message:
           'This device waited too long to link its guest credits. '
           + 'They are safe — contact support and we can attach them.',
+      };
+    case 'refused':
+      return {
+        tone: 'warning',
+        message:
+          'These guest credits could not be added to this account. '
+          + 'If you had credits as a guest, contact support and we can sort it out.',
       };
     default:
       return {

@@ -297,6 +297,7 @@ const expectedEndpointKeys = [
   'editSupportMessage',
   'deleteSupportMessage',
   'reactToSupportMessage',
+  'mergeGuestAccount',
 ] as const;
 
 describe('shared mobile API v1 contract fixture', () => {

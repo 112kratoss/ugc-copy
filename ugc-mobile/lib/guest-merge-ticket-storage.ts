@@ -3,9 +3,9 @@ import * as SecureStore from 'expo-secure-store';
 import {
   isWellFormedMergeTicket,
   type GuestMergeOutcome,
+  type GuestMergeOutcomeStatus,
   type StoredGuestMergeTicket,
 } from './guest-merge';
-import type { GuestAccountMergeStatus } from './types';
 
 /** Every ticket this device keeps, one per guest (audit 02-7, 04-8). */
 const TICKETS_STORAGE_KEY = 'magicbooklet.guestMerge.tickets.v2';
@@ -30,12 +30,13 @@ const defaultStorage: TicketStorage = {
 /** A kept outcome, with the account it was for: no other account is shown it. */
 export type KeptGuestMergeOutcome = GuestMergeOutcome & { accountUserId: string };
 
-const MERGE_STATUSES: readonly GuestAccountMergeStatus[] = [
+const MERGE_STATUSES: readonly GuestMergeOutcomeStatus[] = [
   'merged',
   'already_merged',
   'conflict',
   'expired',
   'not_eligible',
+  'refused',
 ];
 
 // One change at a time, in the order asked for: each reads the list and writes
@@ -228,10 +229,10 @@ function parseOutcome(stored: string | null): KeptGuestMergeOutcome | null {
     if (!isRecord(value)) return null;
     const { accountUserId, status, creditsMoved, at } = value;
     if (typeof accountUserId !== 'string' || accountUserId.length === 0) return null;
-    if (!MERGE_STATUSES.includes(status as GuestAccountMergeStatus)) return null;
+    if (!MERGE_STATUSES.includes(status as GuestMergeOutcomeStatus)) return null;
     if (typeof creditsMoved !== 'number' || !Number.isFinite(creditsMoved) || creditsMoved < 0) return null;
     if (typeof at !== 'number' || !Number.isFinite(at)) return null;
-    return { accountUserId, status: status as GuestAccountMergeStatus, creditsMoved, at };
+    return { accountUserId, status: status as GuestMergeOutcomeStatus, creditsMoved, at };
   } catch {
     return null;
   }

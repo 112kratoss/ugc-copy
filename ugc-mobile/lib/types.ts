@@ -280,11 +280,33 @@ export type GuestAccountMergeStatus =
   | 'expired'
   | 'not_eligible';
 
+/**
+ * Why the server refused a link (`not_eligible`), since 2026-11-25. Only
+ * `account_not_ready` is retryable. Read as a plain string: a newer server may
+ * name a reason this build does not know, and `retryable` still governs it.
+ */
+export type GuestAccountMergeRefusalReason =
+  | 'invalid_request'
+  | 'unknown_ticket'
+  | 'same_account'
+  | 'guest_gone'
+  | 'guest_registered'
+  | 'guest_linked'
+  | 'account_not_ready';
+
 export interface GuestAccountMergeResponse {
   status: GuestAccountMergeStatus;
   creditsMoved: number;
   promotionalCreditsMoved: number;
   credits: number | null;
+  /** On `not_eligible` only; absent from a server before 2026-11-25. */
+  reason?: GuestAccountMergeRefusalReason | (string & {});
+  /**
+   * On `not_eligible` only: false when no later attempt with the same ticket
+   * can succeed. Absent from a server before 2026-11-25, which is read as a
+   * refusal worth retrying.
+   */
+  retryable?: boolean;
 }
 
 /**

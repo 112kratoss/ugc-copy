@@ -14,6 +14,7 @@ import {
   keptGuestMergeTicketFor,
   resolveMergeRedeemAction,
   resolveMergeRedeemFailureAction,
+  settleGuestMergeOutcome,
   shouldPrepareGuestMerge,
   ticketsRedeemableFor,
   type GuestMergeOutcome,
@@ -1179,17 +1180,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   /**
-   * Folds a redemption's outcome into the one kept for the account (credits of
-   * two successes add up; one that cannot arrive outranks the rest), and keeps
-   * the result until the person dismisses it (audit 02-8).
+   * Folds a redemption run's outcome into the one kept for the account (credits
+   * of two successes add up; one that cannot arrive outranks the rest), and
+   * keeps the result until the person dismisses it (audit 02-8). A "not added
+   * yet" goes once no ticket is left waiting for the account (2026-11-25).
    */
-  const keepGuestMergeOutcome = useCallback(async (accountUserId: string, next: GuestMergeOutcome) => {
+  const keepGuestMergeOutcome = useCallback(async (
+    accountUserId: string,
+    next: GuestMergeOutcome | null,
+    { waiting }: { waiting: boolean },
+  ) => {
     await loadKeptMergeOutcome();
     const current = keptMergeOutcomeRef.current;
     const base = current?.accountUserId === accountUserId ? current : null;
-    const combined = combineGuestMergeOutcomes(base, next);
-    if (!combined || combined === base) return;
-    const kept: KeptGuestMergeOutcome = { ...combined, accountUserId };
+    const settled = settleGuestMergeOutcome(base, next, { waiting });
+    if (settled === base) return;
+    if (!settled) {
+      keptMergeOutcomeRef.current = null;
+      setKeptMergeOutcome(null);
+      await clearGuestMergeOutcome();
+      return;
+    }
+    const kept: KeptGuestMergeOutcome = { ...settled, accountUserId };
     keptMergeOutcomeRef.current = kept;
     setKeptMergeOutcome(kept);
     await storeGuestMergeOutcome(kept);
@@ -1220,7 +1232,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const accountUserId = getRegisteredUser(sessionRef.current)?.id;
     if (!accountUserId) return;
     const tickets = ticketsRedeemableFor(await readGuestMergeTickets(), accountUserId);
-    if (tickets.length === 0) return;
+    if (tickets.length === 0) {
+      // Nothing waits for this account, so a kept "not added yet" promises a
+      // try that will not come.
+      await keepGuestMergeOutcome(accountUserId, null, { waiting: false });
+      return;
+    }
 
     setMergeState('merging');
     let waiting = false;
@@ -1250,8 +1267,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       let action;
       try {
         const result = await api.mergeGuestAccount(stored.ticket);
-        action = resolveMergeRedeemAction(result.status);
-        outcome = combineGuestMergeOutcomes(outcome, guestMergeOutcomeOf(result, Date.now()));
+        const ticket = { expiresAt: stored.expiresAt, now: Date.now() };
+        action = resolveMergeRedeemAction(result, ticket);
+        outcome = combineGuestMergeOutcomes(outcome, guestMergeOutcomeOf(result, ticket.now, ticket));
         // The account's balance once the credits moved, as the server counted it.
         if (typeof result.credits === 'number' && sessionUserIdRef.current === accountUserId) {
           creditsSettledVersionRef.current = authStateVersionRef.current;
@@ -1273,7 +1291,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     setMergeState(waiting ? 'pending' : lost ? 'failed' : 'idle');
-    if (outcome) await keepGuestMergeOutcome(accountUserId, outcome);
+    await keepGuestMergeOutcome(accountUserId, outcome, { waiting });
   }, [api, keepGuestMergeOutcome]);
 
   /**
