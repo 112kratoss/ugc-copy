@@ -331,6 +331,8 @@ it('draws the views the feed, the read by id and the owner list carry, in the re
   expect(items[0].viewCount).toBe(128);
   expect(buildImmersiveShowcaseItems('showcase-feed', items)[0].viewLabels)
     .toEqual({ count: 128, compact: '128', visible: '128 views', spoken: '128 views' });
+  // A Home card draws the same figure at its action row's far end.
+  expect(buildHomeFeedCards(items)[0].viewLabels?.spoken).toBe('128 views');
 
   const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
   expect(item.viewCount).toBe(128);

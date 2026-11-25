@@ -3,8 +3,8 @@
 Status: step 1 (counting, server only) shipped as #902 (`5d9366d98`), live
 2026-11-23; step 2 (web display and the web's views) shipped as #905
 (`27c10e0fc`), live 2026-11-24 in `2534535ee`; step 3 (the app's display and
-views) is built on the branch `feat/post-view-counts-app` (2026-11-25), all but
-Home's cards, which wait for #925 (it changes the same Home code).
+views) is built on the branch `feat/post-view-counts-app` (2026-11-25), Home's
+cards included, on top of #925 (which changed the same Home code).
 The owner made the decisions in the first section in the planning session on
 2026-11-23. The defaults after them were chosen in planning and are open to
 change. Paths are relative to `ugc-app/`; app paths are under `ugc-mobile/`.
@@ -328,7 +328,9 @@ at the level AGENTS.md sets.
      `viewCount` and `totalViews`, in both suites. Checked on the Pixel_9a at
      360dp and one iPhone 17 Pro against a local stack (record:
      `archive/post-view-counts-step3-2026-11-25/`).
-   - **Not yet built:** the count on Home's cards (after #925 merges).
+   - **Home cards (built after #925 merged):** the count at the action row's
+     far end, in one box with the recipe chip, the count first, as the web's
+     card; at 360pt the two wrap under the actions together.
    - **Tests:** view-model tests.
    - **Check:** on the S24 or the emulator first, then one iPhone pass.
    - **Ship:** as an OTA (`ship-ota`, published on the owner's word in chat)

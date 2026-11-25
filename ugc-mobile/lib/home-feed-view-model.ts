@@ -6,6 +6,7 @@ import { postName } from './placeholder-title';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
+import { postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
 
 export type HomeFeedChipId = 'for-you' | 'recent' | 'unlocks' | 'notes';
 
@@ -73,6 +74,12 @@ export interface HomeFeedCard {
   remixAccessibilityLabel: string;
   /** The recipe behind the post, where the action row has reason to name it. */
   recipeChip: HomeFeedRecipeChip | null;
+  /**
+   * The post's views, at the action row's far end with the recipe chip (post
+   * view counts; `lib/view-count`): null at 0, and for a card that carries no
+   * count. Never a button: the card's views are counted by its impression.
+   */
+  viewLabels: ViewCountLabels | null;
   isSaved: boolean;
 }
 
@@ -186,6 +193,8 @@ export function showcaseToHomeFeedCard(
     recipeChip: homeRecipeChip(item, title, remixAccess, {
       isOwner: Boolean(viewerId && item.creator.id === viewerId),
     }),
+    // A feed lists public posts only, so its cards leave their visibility out.
+    viewLabels: postViewCountLabels({ viewCount: item.viewCount, visibility: item.visibility ?? 'public' }),
     isSaved: Boolean(item.isSaved),
   };
 }
