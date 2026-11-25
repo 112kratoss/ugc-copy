@@ -28,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, PanResponder, Platform, Pressable, Share, Text, useWindowDimensions, View, type PanResponderGestureState } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { PostViewCountChip, withSpokenViewCount } from '@/components/post-view-count';
 import { StableMediaImage } from '@/components/media-preview';
 import { ReturnedVideoPreview } from '@/components/returned-video-preview';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
@@ -1701,7 +1702,8 @@ function ProfileMediaTile({
   // badge draws, from the one place that decides it.
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
-    : `${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`;
+    // A Post tile says its views too, as its chip draws them (post view counts).
+    : withSpokenViewCount(`${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`, item.viewLabels);
   // UIKit captures this view at its laid-out size. A simultaneous press scale
   // shifts the zoom source.
   const motion = usePressMotion(nativeZoomTile, { scale: appTheme.motion.scale.pressed });
@@ -1975,23 +1977,25 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           glyph carries the state and the tile's accessibility label says it in
           words -- the same pairing the card feed already uses for these posts
           through `ProfileStateChip`. */}
-      <View
-        testID="profile-tile-state-badge"
-        style={{
-          position: 'absolute',
-          bottom: 8,
-          left: 8,
-          width: 22,
-          height: 22,
-          borderRadius: appTheme.radii.pill,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: mediaColors.mediaChip,
-          borderWidth: 1,
-          borderColor: state.color,
-        }}
-      >
-        <StateGlyph size={appTheme.icon.xs} color={state.color} />
+      {/* The state, then a Post's views beside it (post view counts): bottom
+          left, over the tile's shade, as the creator page's tiles draw them. */}
+      <View style={{ position: 'absolute', bottom: 8, left: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+        <View
+          testID="profile-tile-state-badge"
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: appTheme.radii.pill,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: mediaColors.mediaChip,
+            borderWidth: 1,
+            borderColor: state.color,
+          }}
+        >
+          <StateGlyph size={appTheme.icon.xs} color={state.color} />
+        </View>
+        {item.label === 'Post' ? <PostViewCountChip labels={item.viewLabels} /> : null}
       </View>
 
       {/* The library sends a run's first file only, so a run that made

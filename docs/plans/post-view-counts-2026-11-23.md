@@ -1,9 +1,11 @@
 # Post view counts: counted where a post is shown large, shown to everyone
 
 Status: step 1 (counting, server only) shipped as #902 (`5d9366d98`), live
-2026-11-23; step 2 (web display and the web's views) is #905, built on
-2026-11-23 and reworked after its `max` review on 2026-11-24 on the branch
-`feat/post-view-counts-web`; step 3 (app display) is open.
+2026-11-23; step 2 (web display and the web's views) shipped as #905
+(`27c10e0fc`), live 2026-11-24 in `2534535ee`; step 3 (the app's display and
+views) is up as #929 on the branch `feat/post-view-counts-app` (2026-11-25),
+Home's cards included, on top of #925 (which changed the same Home code), with
+its `max` review's findings fixed the same day.
 The owner made the decisions in the first section in the planning session on
 2026-11-23. The defaults after them were chosen in planning and are open to
 change. Paths are relative to `ugc-app/`; app paths are under `ugc-mobile/`.
@@ -108,11 +110,12 @@ order, so two requests never wait on each other in a cycle.
   left out.
 - **Way in 2, a new beacon.** `POST /api/showcase/views` takes a batch of up
   to 25 `{ postId, surface }`, where `surface` is `feed` (a Home card),
-  `post-page` or `reel`, and answers 204 whatever was counted. The post page,
-  a reel opened outside the feed and every web guest's Home card send it after
-  the same second on screen (steps 2 and 3). Both ways meet in the same
-  per-day mark, so a view reported twice counts once and the clients don't
-  need to coordinate.
+  `post-page` or `reel`, and answers 204 whatever was counted. Home's cards,
+  the post page and every reel slide send it after the same second on screen,
+  on both clients (steps 2 and 3; planned at first only where no impression
+  counted, which the `max` review of #929 showed loses views). Both ways meet
+  in the same per-day mark, so a view reported twice counts once and the
+  clients don't need to coordinate.
 
 **Why a web guest's feed impression doesn't count:** a web guest is known only
 by the feed cookie, which a script can mint afresh for every request, and a
@@ -223,11 +226,14 @@ It also fixes an edge case today's `formatCompactCount` has: 999,950 reads
 | Admin content | `src/app/admin/(console)/content/page.tsx` (step 1) | — | `src/lib/admin-content-service.ts` |
 | Agents | `get_post`'s `counts.views` (step 1) | — | `src/lib/agent-post-read.ts` |
 
-- **The beacons.** The web sends a view for a Home card (`feed`), the post page
-  and the reel, for every viewer (a signed-in viewer's Home card is already
-  counted by its impression; the mark dedupes it). The app sends one for the
-  post page and a reel opened outside the feed; its Home cards and feed reels
-  are counted by their impressions.
+- **The beacons.** Both clients send a view for a Home card (`feed`), the post
+  page (`post-page`) and every reel slide (`reel`), for every viewer. A feed's
+  impression of the same post is counted too, and the mark keeps one a
+  person, post and day, so whichever arrives first counts. An impression alone
+  is not enough (the `max` review of #929): Home's Recent chip files none, a
+  lane's feed session refuses them once it expires, the device needs a session
+  for the trigger to count one, and a reel opened from Explore files its
+  impression as a repeat of the grid tile's, which the trigger never sees.
 - **A view count is information, not an action.** It is never a button: no
   press, no hover state. It's Lucide's `Eye` with the figure. On a tile it
   sits bottom left, over the tile's scrim.
@@ -305,6 +311,43 @@ at the level AGENTS.md sets.
 3. **App display (size M).**
    - **Build:** the app places and beacons, the contract fields it reads, and
      `design-mobile.md`.
+   - **Built (2026-11-25):** counts through the shared rule on the post page
+     (a written post's; a media post opens the reel), at the end of its row of
+     actions, right-aligned: after Comment it pushed Details alone onto a second
+     line on a 360pt phone; the reel's rail under Save and Comment
+     (`reel-chrome.tsx`, a bundled eye raster); the creator page's tiles and
+     your profile's Posts tiles, bottom left on the tiles' glass chip (a
+     written post's tile ends its writing above it); and Views after Posts in
+     the creator header. The views: `lib/post-view-reporter.ts` (batched, 25 a
+     request, 5 s of quiet, 30 s at most, sent as the app leaves the
+     foreground; once a reader, post and UTC day; a failed send let go; sent
+     only under the identity that saw the post, with that session's token read
+     and checked for it, and a leaving identity's views sent with its own token
+     at a sign-in or sign-out; a view seen before the session is known, or on a
+     device whose guest sign-in failed, held for the identity the device gets
+     next), `lib/post-view-look.ts` (the feed's qualified impression: half the
+     post on screen for a second, the second starting over after the app was
+     in the background, and Home's looks one a card) and
+     `lib/use-post-view-look.ts`. Home's cards (`feed`), the post page and
+     every reel slide send them, a slide a feed delivered included; none
+     while Details, the comments or a sheet covers the slide, and the feed
+     reel's own impression waits for the same uncovered second in front. A
+     post Saved lists without its visibility (Saved holds unlisted posts too)
+     shows no count and sends no view until the read by id says it is public.
+     Contracts: `viewCount` pinned on `getShowcaseFeed`, `getShowcasePost` and
+     `listOwnerPosts`, and a creator-page fixture, `getCreatorProfile`, with
+     `viewCount` and `totalViews`, in both suites. Checked on the Pixel_9a at
+     360dp and one iPhone 17 Pro against a local stack (record:
+     `archive/post-view-counts-step3-2026-11-25/` in the workspace folder
+     above `ugc-app/`, outside the repository).
+   - **Home cards (built after #925 merged):** the count at the action row's
+     far end, in one box with the recipe chip, the count first, as the web's
+     card; at 360pt the two wrap under the actions together, and at the
+     largest text sizes the chip goes under the count, both on the right.
+   - **Text size (the `max` review of #929):** a tile's chip follows the
+     reader's text size up to metadata's cap (1.6×), a written tile ends its
+     writing above the chip at that size, the chip sits above a carousel's page
+     dots, and the header's figures keep to one line.
    - **Tests:** view-model tests.
    - **Check:** on the S24 or the emulator first, then one iPhone pass.
    - **Ship:** as an OTA (`ship-ota`, published on the owner's word in chat)

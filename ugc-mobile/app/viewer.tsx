@@ -88,6 +88,9 @@ import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
+import { isAppForeground } from '@/lib/app-foreground';
+import { createPostViewLook, isReelSlideOnScreen, viewReportPostId, type PostViewLook } from '@/lib/post-view-look';
+import { usePostViewLook } from '@/lib/use-post-view-look';
 import {
   buildViewerItems,
   type ImmersiveSourceData,
@@ -1003,6 +1006,16 @@ function ImmersivePreviewViewer() {
   useLayoutEffect(() => {
     latestItemsRef.current = items;
   });
+  // Whether Details, the comments or a sheet covers the slide, for the
+  // impression's second below, which is counted as the post's view: it runs
+  // only while the slide is uncovered and the app in front, as the reel's own
+  // view does (review of #929). The stretch the dwell measures is unchanged.
+  const slideCoveredRef = useRef(false);
+  const impressionLookRef = useRef<PostViewLook | null>(null);
+  useEffect(() => {
+    slideCoveredRef.current = Boolean(overlayOpenItemId);
+    impressionLookRef.current?.setOnScreen(!overlayOpenItemId);
+  }, [overlayOpenItemId]);
   useEffect(() => {
     if (!initialPositionReady || !isFocused || onEndSlide || source !== 'showcase-feed' || !activeItem?.showcasePostId) return;
     const first = activeItem;
@@ -1027,10 +1040,15 @@ function ImmersivePreviewViewer() {
         },
       });
     };
-    const timer = setTimeout(
-      recordQualifiedImpression,
-      SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime
-    );
+    // A second on screen while uncovered and in front, not just a second since
+    // the slide landed: time under Details or in the background is no look.
+    const impressionLook = createPostViewLook({
+      onLooked: recordQualifiedImpression,
+      qualifyMs: SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime,
+    });
+    impressionLookRef.current = impressionLook;
+    impressionLook.setForeground(isAppForeground());
+    impressionLook.setOnScreen(!slideCoveredRef.current);
 
     // Max playback progress for this delivery: flushed at milestone crossings,
     // on app-background (app kills would lose an exit-only flush), and on item
@@ -1050,25 +1068,46 @@ function ImmersivePreviewViewer() {
       }
     });
     const appStateSubscription = AppState.addEventListener('change', (state) => {
+      impressionLook.setForeground(state === 'active');
       if (state !== 'active') {
         flushMediaProgress();
       }
     });
 
     return () => {
-      clearTimeout(timer);
+      // Its second may be up with its timer still to run (a busy thread).
+      if (impressionLook.hasQualified()) recordQualifiedImpression();
+      impressionLook.dispose();
+      if (impressionLookRef.current === impressionLook) impressionLookRef.current = null;
       appStateSubscription.remove();
       setShowcaseMediaProgressSink(null);
       flushMediaProgress();
       const durationMs = Date.now() - startedAt;
-      if (durationMs >= SHOWCASE_QUALIFIED_IMPRESSION_VIEWABILITY.minimumViewTime) {
-        recordQualifiedImpression();
-      }
       // A landing under 250 ms is a flick passing through, not a skip.
       const leaveEvent = reelLeaveEventType(durationMs);
       if (leaveEvent) recordViewerFeedEvent(current(), leaveEvent, { durationMs });
     };
   }, [activeItem?.id, initialPositionReady, isFocused, onEndSlide, recordViewerFeedEvent, source]);
+
+  // The view of the post on screen (post view counts, step 3), on every
+  // slide, as the web's reel reports: a post a feed delivered too, whose
+  // impression above may be refused (a lane's expired session, a device with
+  // no session) or filed as a repeat of the grid's (Explore), so counts
+  // nothing (review of #929). The server keeps one a person, post and day.
+  // Its second is the impression's own, the post on screen while the app is
+  // in front, and it stops while Details, the comments or a sheet covers it.
+  usePostViewLook({
+    postId: initialPositionReady && activeItem
+      ? viewReportPostId(activeItem, { viewerIdentity: identityUserId })
+      : null,
+    surface: 'reel',
+    onScreen: isReelSlideOnScreen({
+      initialPositionReady,
+      focused: isFocused,
+      onEndSlide,
+      overlayOpen: Boolean(overlayOpenItemId),
+    }),
+  });
 
   const reconcileShowcaseSave = useCallback((
     result: ShowcaseSaveStateResult,

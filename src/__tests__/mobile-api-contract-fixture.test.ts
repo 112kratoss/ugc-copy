@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { getAppVersionRouteResponse } from '@/lib/app-version-route-adapter-service';
 import { setBackendLogSink, type BackendLogRecord } from '@/lib/backend-logger';
 import { getCreditHistoryRouteResponse } from '@/lib/credit-history-route-adapter-service';
+import type { getCreatorProfilePageData } from '@/lib/creator-profile';
+import { getCreatorProfileRouteResponse } from '@/lib/creator-profile-route-adapter-service';
 import { postResourceBundleCreditUnlockRouteResponse } from '@/lib/credit-unlock-route-adapter-service';
 import type { HomeShelfAction, HomeShelfBadge, HomeShelfCreation, HomeShelfPrice } from '@/lib/home-shelf';
 import { formatHomeShelfPrice, homeShelfActionCopy, homeShelfBadge } from '@/lib/home-shelf-copy';
@@ -93,6 +95,7 @@ import {
   SEARCH_RELATED_SEARCHES_PARAM,
   searchRelatedSearches,
 } from '../../ugc-mobile/lib/public-search-policy/public-search-policy';
+import { postViewCountLabels, viewCountLabels } from '../../ugc-mobile/lib/view-count/view-count';
 
 type MobileApiContractEndpoint<Response> = {
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -245,6 +248,7 @@ const expectedEndpointKeys = [
   'updatePostComment',
   'deletePostComment',
   'setCreatorFollowing',
+  'getCreatorProfile',
   'saveShowcasePost',
   'recordSaverNotice',
   'remixShowcasePost',
@@ -478,6 +482,51 @@ describe('shared mobile API v1 contract fixture', () => {
       tombstonedAt: null,
       bundle: { reviewStatus: 'visible', quality: { eligible: true, message: null }, retiredAt: null },
     });
+  });
+
+  // Post view counts (step 3): the app draws a post's views from the `viewCount`
+  // each post read carries, and the creator header's total from `totalViews`.
+  it('pins the views each post read carries, as both clients draw them', () => {
+    const feedCard = contract.endpoints.getShowcaseFeed.response as { items: Array<{ viewCount?: number }> };
+    const post = contract.endpoints.getShowcasePost.response as { item: { viewCount?: number; visibility?: string } };
+    const ownerPosts = contract.endpoints.listOwnerPosts.response as { posts: Array<{ viewCount?: number; visibility: string }> };
+    for (const shape of [feedCard.items[0], post.item, ownerPosts.posts[0]]) {
+      expect(shape.viewCount).toBe(128);
+      expect(postViewCountLabels(shape)).toEqual({ count: 128, compact: '128', visible: '128 views', spoken: '128 views' });
+    }
+  });
+
+  it('answers the creator page with each post\'s views and the total, as the fixture pins', async () => {
+    const endpoint = contract.endpoints.getCreatorProfile as MobileApiContractEndpoint<{
+      profile: Record<string, unknown>;
+      stats: { totalViews?: number };
+      items: Array<{ viewCount?: number }>;
+      pageInfo: Record<string, unknown>;
+      viewer: Record<string, unknown>;
+    }> & { signedInCacheControl: string };
+    const { viewer: _viewer, ...page } = endpoint.response;
+    const getCreatorProfilePageDataMock = vi.fn(async () => page);
+
+    const response = await getCreatorProfileRouteResponse({
+      request: new Request('http://localhost/api/creators/luna'),
+      context: { params: Promise.resolve({ username: 'luna' }) },
+      dependencies: {
+        createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+        createUserClient: vi.fn(),
+        enforceBackendRateLimit: vi.fn(async () => undefined) as never,
+        getCreatorProfilePageData: getCreatorProfilePageDataMock as unknown as typeof getCreatorProfilePageData,
+        loadCreatorBlockRelationship: vi.fn(),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Cache-Control')).toBe(endpoint.cacheControl);
+    await expect(response.json()).resolves.toEqual(endpoint.response);
+    expect(endpoint.signedInCacheControl).toBe('private, no-store');
+    // The header's Views, then a tile's count, and none for a post nobody has seen.
+    expect(viewCountLabels(endpoint.response.stats.totalViews)).toMatchObject({ compact: '1.3K', spoken: '1,290 views' });
+    expect(postViewCountLabels(endpoint.response.items[0])).toMatchObject({ compact: '1.2K', spoken: '1,234 views' });
+    expect(postViewCountLabels(endpoint.response.items[1])).toBeNull();
   });
 
   // The critical-update lever (04-9) rides on the same answer: null until the

@@ -28,7 +28,7 @@ import { readUsernameRejection } from '../lib/edit-profile-form';
 import { createFeedAttentionTracker, feedAttentionEventDetails } from '../lib/feed-attention-view-model';
 import { buildHomeFeedCards } from '../lib/home-feed-view-model';
 import { formatGenerationSetupLine } from '../lib/generation-setup/generation-setup';
-import { buildImmersiveGenerationItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
+import { buildImmersiveGenerationItems, buildImmersiveOwnerPostItems, buildImmersiveShowcaseItems } from '../lib/immersive-preview-view-model';
 import { buildPostDetailsMeta, shouldReadPostGenerationSetup } from '../lib/post-details-view-model';
 import {
   profileArchivedGenerationsQueryOptions,
@@ -36,7 +36,8 @@ import {
   selectFailedCreations,
 } from '../lib/profile-media-query';
 import { applyProfileStatsDelta } from '../lib/profile-stats';
-import { getOwnerCreationScopeCounts, getProfileScopeTotal } from '../lib/profile-view-model';
+import { getOwnerCreationScopeCounts, getProfileScopeTotal, ownerPostToProfileMediaCard } from '../lib/profile-view-model';
+import { postViewCountLabels, viewCountLabels, VIEW_COUNT_TOTAL_LABEL } from '../lib/view-count/view-count';
 import { buildShowcaseFeedEventRequest } from '../lib/showcase-feed-events';
 import { getShowcaseRemixAccess } from '../lib/showcase-remix-access';
 import type {
@@ -319,6 +320,52 @@ it('draws the settings a feed card carries, from the feed and Saved alike, with 
   expect(shouldReadPostGenerationSetup(savedCard)).toBe(false);
 });
 
+// Post view counts (step 3): the app draws each post's views from the `viewCount`
+// its read carries, through the shared rule (`lib/view-count`), and the creator
+// header's Views from `totalViews`.
+it('draws the views the feed, the read by id and the owner list carry, in the reel and on a profile tile', async () => {
+  const { items } = await clientForEndpoint('getShowcaseFeed').getShowcaseFeed(
+    { limit: 10, ...mobileApiContract.endpoints.getShowcaseFeed.query },
+    { auth: false },
+  );
+  expect(items[0].viewCount).toBe(128);
+  expect(buildImmersiveShowcaseItems('showcase-feed', items)[0].viewLabels)
+    .toEqual({ count: 128, compact: '128', visible: '128 views', spoken: '128 views' });
+  // A Home card draws the same figure at its action row's far end.
+  expect(buildHomeFeedCards(items)[0].viewLabels?.spoken).toBe('128 views');
+
+  const { item } = await clientForEndpoint('getShowcasePost').getShowcasePost('post-1');
+  expect(item.viewCount).toBe(128);
+  expect(buildImmersiveShowcaseItems('showcase-feed', [item])[0].viewLabels?.spoken).toBe('128 views');
+  // Nothing at 0, and nothing for a post that is not public.
+  expect(buildImmersiveShowcaseItems('showcase-feed', [{ ...item, viewCount: 0 }])[0].viewLabels).toBeNull();
+  expect(buildImmersiveShowcaseItems('showcase-feed', [{ ...item, visibility: 'unlisted' }])[0].viewLabels).toBeNull();
+
+  const { posts } = await clientForEndpoint('listOwnerPosts').listOwnerPosts({ limit: 10, listingsOnly: true, includeSummary: true });
+  expect(posts[0].viewCount).toBe(128);
+  expect(ownerPostToProfileMediaCard(posts[0]).viewLabels?.compact).toBe('128');
+  const [ownerItem] = buildImmersiveOwnerPostItems('profile-posts', posts, { creatorLabel: '@creator' });
+  expect(ownerItem.viewLabels?.spoken).toBe('128 views');
+  // A post the server keeps the count of from everyone (hidden by review,
+  // flagged, tombstoned) arrives without one and draws none; nor does a
+  // private or archived one.
+  expect(ownerPostToProfileMediaCard({ ...posts[0], viewCount: undefined }).viewLabels).toBeNull();
+  expect(ownerPostToProfileMediaCard({ ...posts[0], visibility: 'private' }).viewLabels).toBeNull();
+  expect(ownerPostToProfileMediaCard({ ...posts[0], archivedAt: '2026-11-20T00:00:00.000Z' }).viewLabels).toBeNull();
+});
+
+it("draws a creator page's views: each tile's, and the header's total beside its posts", async () => {
+  const page = await clientForEndpoint('getCreatorProfile').getCreatorProfile('luna');
+  expect(page.stats?.totalViews).toBe(1290);
+  expect(VIEW_COUNT_TOTAL_LABEL).toBe('Views');
+  expect(viewCountLabels(page.stats?.totalViews)).toMatchObject({ compact: '1.3K', spoken: '1,290 views' });
+  expect(page.items.map((post) => postViewCountLabels(post)?.compact ?? null)).toEqual(['1.2K', null]);
+  expect(postViewCountLabels(page.items[0])?.spoken).toBe('1,234 views');
+  // The reel opened on the page reads the same list.
+  expect(buildImmersiveShowcaseItems('creator-profile', page.items).map((post) => post.viewLabels?.compact ?? null))
+    .toEqual(['1.2K', null]);
+});
+
 it("names no model and offers no Remix for a template result's post, on its card, in the reel and in its details", async () => {
   // A template's model is its author's: the server sends Studio's
   // `template-workflow` in its place and no Remix, which the app reads as no
@@ -416,6 +463,7 @@ const successCases: Array<{
   },
   { key: 'updatePostComment', call: (api) => api.updatePostComment('post-1', 'comment-1', { reaction: 'like' }) },
   { key: 'deletePostComment', call: (api) => api.deletePostComment('post-1', 'comment-1') },
+  { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('luna') },
   {
     key: 'setCreatorFollowing',
     call: (api) => api.setCreatorFollowing('creator-1', true, {
@@ -647,7 +695,6 @@ const extendedOperationCases: Array<{
       sourceSurface: 'showcase',
     }),
   },
-  { key: 'getCreatorProfile', call: (api) => api.getCreatorProfile('creator-one') },
   { key: 'searchPublicContent', call: (api) => api.searchPublicContent({ query: 'product', type: 'top' }) },
   { key: 'suggestSearch', call: (api) => api.suggestSearch({ query: 'lu' }) },
   { key: 'searchStarter', call: (api) => api.searchStarter() },
@@ -657,6 +704,7 @@ const extendedOperationCases: Array<{
       mobileApiContract.endpoints.recordPostViews.request as {
         views: Array<{ postId: string; surface: 'feed' | 'post-page' | 'reel' }>;
       },
+      { accessToken: 'token-1' },
     ),
   },
   {

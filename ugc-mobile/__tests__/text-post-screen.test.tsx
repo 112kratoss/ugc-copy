@@ -31,8 +31,17 @@ const mocks = vi.hoisted(() => ({
       resolveShowcasePost: vi.fn(),
     },
     user: { id: 'viewer-1' } as { id: string } | null,
+    identityUserId: 'viewer-1' as string | null,
+    isLoading: false,
   },
   showcasePost: { data: undefined, isError: false, error: null, refetch: vi.fn() } as {
+    data: unknown;
+    isError: boolean;
+    error: unknown;
+    refetch: () => unknown;
+  },
+  // The owner's read of their own post (`api.getOwnerPost`), from Profile.
+  ownerPost: { data: undefined, isError: false, error: null, refetch: vi.fn() } as {
     data: unknown;
     isError: boolean;
     error: unknown;
@@ -50,6 +59,9 @@ const mocks = vi.hoisted(() => ({
   callbacksFor: { current: null as ((item: ImmersivePreviewItem) => ViewerActionCallbacks) | null },
   // The shared link's invite (`lib/use-invite-share-capture.ts`): what the page hands it.
   inviteShareCapture: vi.fn(),
+  // The post's view (post view counts): the app in front, and what the page reports.
+  appState: { currentState: 'active', addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
+  reportPostView: vi.fn(() => true),
 }));
 
 vi.mock('react-native', () => {
@@ -77,6 +89,7 @@ vi.mock('react-native', () => {
   }
   return {
   ActivityIndicator: (props: MockProps) => React.createElement('activity-indicator', props),
+  AppState: mocks.appState,
   Animated: {
     Value: AnimatedValue,
     event: () => () => undefined,
@@ -100,6 +113,7 @@ vi.mock('lucide-react-native', () => {
   return {
     ArrowLeft: icon('arrow-left'),
     ChevronLeft: icon('chevron-left'),
+    Eye: icon('eye'),
     FileText: icon('file'),
     Heart: icon('heart'),
     MessageCircle: icon('message'),
@@ -130,7 +144,9 @@ vi.mock('@tanstack/react-query', () => ({
       ? mocks.showcasePost
       : options.queryKey[0] === 'showcase-post-resolve'
         ? mocks.resolvedPost
-        : { data: undefined, isError: false, error: null, refetch: vi.fn() };
+        : options.queryKey[0] === 'owner-text-post'
+          ? mocks.ownerPost
+          : { data: undefined, isError: false, error: null, refetch: vi.fn() };
   },
   useQueryClient: () => ({}),
 }));
@@ -142,6 +158,7 @@ vi.mock('@/lib/immersive-preview-source-data', () => ({
   readCachedProfile: () => undefined,
 }));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
+vi.mock('@/lib/post-view-reporter', () => ({ reportPostView: mocks.reportPostView }));
 // The hook reads the session and SecureStore; its own rules are tested in
 // use-invite-share-capture.test.ts. Here: what the post page asks of it.
 vi.mock('@/lib/use-invite-share-capture', () => ({ useInviteShareCapture: mocks.inviteShareCapture }));
@@ -290,10 +307,14 @@ beforeEach(() => {
   mocks.platform.OS = 'ios';
   mocks.params = { id: 'post-1' };
   mocks.auth.user = { id: 'viewer-1' };
+  mocks.auth.identityUserId = 'viewer-1';
+  mocks.auth.isLoading = false;
+  mocks.appState.currentState = 'active';
   mocks.auth.api.recordShareVisit.mockResolvedValue({ success: true });
   mocks.saveOptions.current = null;
   mocks.callbacksFor.current = null;
   mocks.queryOptions = [];
+  mocks.ownerPost = { data: undefined, isError: false, error: null, refetch: vi.fn() };
   showPost(textPost());
   // The resolver finds nothing unless a test says otherwise.
   resolveTo(null);
@@ -790,3 +811,152 @@ describe('a revealed NSFW post with a recipe', () => {
   });
 });
 
+
+// Post view counts (step 3): the page draws the post's views at the end of its
+// row of actions, and reports its view once half the post has been on screen
+// for a second while the app is in front.
+describe("a written post's views", () => {
+  /** Where the post is laid out at the head of the thread, and how far the thread is scrolled. */
+  function lay(tree: renderer.ReactTestRenderer, { height, offset = 0 }: { height: number; offset?: number }) {
+    const post = byType(tree, 'view').find((node) => typeof node.props.onLayout === 'function');
+    const thread = byType(tree, 'post-comments')[0];
+    renderer.act(() => {
+      post?.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 400, height } } });
+      thread.props.onListScroll({ offset, viewportHeight: 800 });
+    });
+  }
+
+  function rowOrder(tree: renderer.ReactTestRenderer) {
+    return tree.root
+      .findAll((node) => String(node.type) === 'feed-card-action' || (String(node.type) === 'view' && node.props.testID === 'post-view-count'))
+      .map((node) => (String(node.type) === 'view' ? 'views' : node.props.label as string));
+  }
+
+  it('ends the row with the views, right-aligned, as no button, with the whole number spoken', () => {
+    showPost(textPost({ viewCount: 1234 }));
+    const tree = renderScreen();
+    // After every action: placed after Comment, it pushed Details alone onto a
+    // second line on a 360pt phone; at the end, a full line puts it under the
+    // actions on the right.
+    expect(rowOrder(tree)).toEqual(['2', '3', 'Share', 'Details', 'views']);
+    const count = byType(tree, 'view').find((node) => node.props.testID === 'post-view-count');
+    expect(count?.props).toMatchObject({ accessible: true, accessibilityRole: 'text', accessibilityLabel: '1,234 views' });
+    expect([count?.props.style].flat(2)).toContainEqual({ marginLeft: 'auto' });
+    expect(count?.props.onPress).toBeUndefined();
+    expect(textValues(tree)).toContain('1.2K');
+  });
+
+  it('draws none at 0, and none for a post that is not public', () => {
+    showPost(textPost({ viewCount: 0 }));
+    expect(rowOrder(renderScreen())).not.toContain('views');
+    showPost(textPost({ viewCount: 12, visibility: 'unlisted' }));
+    expect(rowOrder(renderScreen())).not.toContain('views');
+  });
+
+  it('reports the view a second after half the post is on screen, under the reader', () => {
+    vi.useFakeTimers();
+    try {
+      const tree = renderScreen();
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(999); });
+      expect(mocks.reportPostView).not.toHaveBeenCalled();
+      renderer.act(() => { vi.advanceTimersByTime(1); });
+      expect(mocks.reportPostView).toHaveBeenCalledWith({ postId: 'post-1', surface: 'post-page', identity: 'viewer-1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports nothing while the thread holds the post off the screen', () => {
+    vi.useFakeTimers();
+    try {
+      const tree = renderScreen();
+      // Opened at the comments (a reply's alert): the post scrolled past.
+      lay(tree, { height: 600, offset: 700 });
+      renderer.act(() => { vi.advanceTimersByTime(5_000); });
+      expect(mocks.reportPostView).not.toHaveBeenCalled();
+      // Scrolled back up to it: a look, and its view.
+      lay(tree, { height: 600, offset: 0 });
+      renderer.act(() => { vi.advanceTimersByTime(1_000); });
+      expect(mocks.reportPostView).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports none for the reader's own post, or one opened from the owner list", () => {
+    vi.useFakeTimers();
+    try {
+      mocks.auth.identityUserId = 'creator-1';
+      let tree = renderScreen();
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(5_000); });
+      tree.unmount();
+
+      // The owner's own copy, from their Profile (review of #929: this half
+      // read no post before, so it could not fail).
+      mocks.auth.identityUserId = 'viewer-1';
+      mocks.params = { id: 'post-1', source: 'profile-posts' };
+      mocks.ownerPost = {
+        data: {
+          success: true,
+          post: {
+            id: 'post-1',
+            title: 'Three hooks that keep working',
+            createdAt: '2026-10-12T09:00:00.000Z',
+            visibility: 'public',
+            mediaUrl: null,
+            mediaKind: null,
+            mediaItems: [],
+            body: 'Open with tension.',
+            category: 'text',
+            postFormat: 'text',
+            bundle: null,
+            archivedAt: null,
+            commentCount: 3,
+            viewCount: 42,
+          },
+        },
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      };
+      tree = renderScreen();
+      expect(textValues(tree)).toContain('Open with tension.');
+      expect(textValues(tree)).toContain('42');
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(5_000); });
+      expect(mocks.reportPostView).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('draws and reports nothing for a post from Saved until its read by id says it is public (review of #929)', () => {
+    vi.useFakeTimers();
+    try {
+      // Saved's copy says nothing of the post's visibility; Saved lists unlisted posts too.
+      mocks.params = { id: 'post-1', source: 'profile-saved' };
+      showPost(textPost({ viewCount: 12, visibility: undefined }));
+      let tree = renderScreen();
+      expect(rowOrder(tree)).not.toContain('views');
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(5_000); });
+      expect(mocks.reportPostView).not.toHaveBeenCalled();
+      // The page reads the post by id at once rather than keeping Saved's copy for 45 s.
+      expect(mocks.queryOptions.find((options) => options.queryKey[0] === 'showcase-post'))
+        .toMatchObject({ initialDataUpdatedAt: 0 });
+      tree.unmount();
+
+      // The read says it is public: its views are drawn and its view reported.
+      showPost(textPost({ viewCount: 12, visibility: 'public' }));
+      tree = renderScreen();
+      expect(rowOrder(tree)).toContain('views');
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(1_000); });
+      expect(mocks.reportPostView).toHaveBeenCalledWith({ postId: 'post-1', surface: 'post-page', identity: 'viewer-1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

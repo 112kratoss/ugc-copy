@@ -63,6 +63,7 @@ import { clearGenerationAttemptForUser } from './generation-attempts';
 import { GENERATION_MODEL_CATALOG_SCHEMA_VERSION } from './generation-model-catalog';
 import { primeInviteShareCode } from './invite-share-code';
 import { forgetInviteShareCode } from './invite-share-code-state';
+import { configurePostViewReporter, flushPostViews, flushPostViewsOfLeavingIdentity } from './post-view-reporter';
 import { claimPendingReferral, retryPendingReferralVisit } from './referral-attribution';
 import {
   clearLocalMobilePushRegistration,
@@ -732,10 +733,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       getAccessToken,
       getIdentityUserId: () => sessionUserIdRef.current,
     });
+    // The app's views (post view counts, step 3): a batch goes only under the
+    // identity that saw its posts, with that session's token, read and checked
+    // here as the feed's events are, around the wait for it
+    // (`lib/post-view-reporter.ts`). A leaving identity's own token comes with
+    // its batch (`beginFeedIdentityTransition`).
+    configurePostViewReporter({
+      send: async (body, { identity, accessToken }) => {
+        if (accessToken) return api.recordPostViews(body, { accessToken });
+        if (sessionUserIdRef.current !== identity) throw new Error('The session changed before the views were sent.');
+        const token = await getAccessToken();
+        if (!token || sessionUserIdRef.current !== identity) {
+          throw new Error('The session changed before the views were sent.');
+        }
+        return api.recordPostViews(body, { accessToken: token });
+      },
+      currentIdentity: () => sessionUserIdRef.current,
+    });
     void restoreShowcaseFeedEvents();
     void flushShowcaseFeedEvents();
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') void flushShowcaseFeedEvents();
+      if (state !== 'active') {
+        void flushShowcaseFeedEvents();
+        void flushPostViews();
+      }
     });
     return () => subscription.remove();
   }, [api, getAccessToken, session?.user?.id]);
@@ -1384,6 +1405,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const beginFeedIdentityTransition = (previousSession: Session | null) => {
     const userId = previousSession?.user?.id;
     const accessToken = previousSession?.access_token;
+    // The leaving identity's views go now, with its own token (review of #929).
+    if (userId && accessToken) void flushPostViewsOfLeavingIdentity({ identity: userId, accessToken });
     if (!userId || !accessToken) {
       // Installation-scoped events stay universally sendable, including after
       // an anonymous guest session is minted.

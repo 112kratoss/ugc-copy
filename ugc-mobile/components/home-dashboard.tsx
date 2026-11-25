@@ -39,6 +39,7 @@ import {
   homeFeedEmptyState,
   buildHomeFeedCards,
   getHomeFeedCardOpenTarget,
+  homeFeedCardViewTarget,
   type HomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
@@ -70,6 +71,8 @@ import {
   feedAttentionEventDetails,
   type FeedAttentionEvent,
 } from '@/lib/feed-attention-view-model';
+import { createPostViewLookSet, viewReportPostId, type PostViewLookSet } from '@/lib/post-view-look';
+import { reportPostView } from '@/lib/post-view-reporter';
 import { resourceOpenGate } from '@/lib/reel-feed-events';
 import {
   SHOWCASE_DWELL_VIEWABILITY,
@@ -350,6 +353,39 @@ export function HomeDashboard() {
   // removal that puts other posts at the same places says nothing, so the
   // cards on screen are read again from these whenever the data changes.
   const dwellIndexesRef = useRef<number[]>([]);
+  // The views of the cards (post view counts, step 3), as the web's Home
+  // reports them (`feed`): each card half on screen for a second while Home is
+  // in front, read from the dwell's viewable set. A delivered card's impression
+  // counts as its view too, but Recent files none and a lane's expired session
+  // refuses them (review of #929); the server keeps one a person, post and day.
+  const viewIdentityRef = useRef<string | null>(null);
+  useEffect(() => {
+    viewIdentityRef.current = isAuthLoading ? null : identityUserId;
+  });
+  // Made after render, as its reports read the identity's ref.
+  const viewLooksRef = useRef<PostViewLookSet | null>(null);
+  useEffect(() => {
+    const looks = createPostViewLookSet({
+      onLooked: (postId) => {
+        reportPostView({ postId, surface: 'feed', identity: viewIdentityRef.current });
+      },
+    });
+    viewLooksRef.current = looks;
+    return () => {
+      looks.dispose();
+      if (viewLooksRef.current === looks) viewLooksRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    viewLooksRef.current?.setForeground(isFocused && foreground);
+    return () => viewLooksRef.current?.setForeground(false);
+  }, [foreground, isFocused]);
+  const setViewLookCards = useCallback((visibleCards: HomeFeedCard[]) => {
+    viewLooksRef.current?.setOnScreen(visibleCards.flatMap((card) => {
+      const postId = viewReportPostId(homeFeedCardViewTarget(card), { viewerIdentity: viewIdentityRef.current });
+      return postId ? [postId] : [];
+    }));
+  }, []);
   // A stretch on screen counts only while Home is in front: focused (search
   // and posts are screens pushed over it), with the app in the foreground.
   // Leaving ends it, and the dwell goes then.
@@ -401,7 +437,8 @@ export function HomeDashboard() {
       .map((token) => token.index)
       .filter((index): index is number => typeof index === 'number');
     recordAttention(attention.setVisible(visible.map((token) => token.item.item), Date.now()));
-  }, [attention, recordAttention]);
+    setViewLookCards(visible.map((token) => token.item));
+  }, [attention, recordAttention, setViewLookCards]);
 
   // Built once from the first render's callbacks, which FlashList needs to stay
   // stable. State rather than a ref, which render may not read.
@@ -480,11 +517,12 @@ export function HomeDashboard() {
   // With the viewer's id, so their own recipe reads "Your recipe" (`homeRecipeChip`).
   const cards = useMemo(() => buildHomeFeedCards(feedItems, undefined, user?.id ?? null), [feedItems, user?.id]);
   useEffect(() => {
-    const visible = dwellIndexesRef.current
-      .map((index) => cards[index]?.item)
-      .filter((item): item is ShowcaseFeedItem => Boolean(item));
-    recordAttention(attention.setVisible(visible, Date.now()));
-  }, [attention, cards, recordAttention]);
+    const visibleCards = dwellIndexesRef.current
+      .map((index) => cards[index])
+      .filter((card): card is HomeFeedCard => Boolean(card));
+    recordAttention(attention.setVisible(visibleCards.map((card) => card.item), Date.now()));
+    setViewLookCards(visibleCards);
+  }, [attention, cards, recordAttention, setViewLookCards]);
   useEffect(() => {
     feedItemsRef.current = cards.map((card) => card.item);
     dispatchPlaybackItems();

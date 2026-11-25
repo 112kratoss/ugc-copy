@@ -12,6 +12,7 @@ import { useAppTheme } from '@/lib/theme-context';
 import { FeedVideoPreview } from '@/components/feed-video-preview';
 import { IMMERSIVE_HORIZONTAL_LIST_TUNING } from '@/lib/media-performance';
 import { useMediaZoomTileShaped } from '@/lib/media-zoom-tile-shape';
+import { SHOWCASE_MEDIA_DOTS_BOTTOM, SHOWCASE_MEDIA_DOTS_HEIGHT } from '@/lib/showcase-media-dots';
 import { measureSourceVideoProgress } from '@/lib/showcase-media-progress';
 import {
   getShowcaseFeedStreamUrl,
@@ -260,7 +261,7 @@ function ShowcaseMediaCarousel({
         pointerEvents="none"
         style={{
           position: 'absolute',
-          bottom: 10,
+          bottom: SHOWCASE_MEDIA_DOTS_BOTTOM,
           left: 0,
           right: 0,
           flexDirection: 'row',
@@ -272,7 +273,7 @@ function ShowcaseMediaCarousel({
           <View
             key={mediaItem.id}
             style={{
-              height: 5,
+              height: SHOWCASE_MEDIA_DOTS_HEIGHT,
               width: index === currentIndex ? 12 : 5,
               borderRadius: appTheme.radii.pill,
               backgroundColor: index === currentIndex ? mediaColors.onMedia : hexWithAlpha(mediaColors.onMedia, 0.45),

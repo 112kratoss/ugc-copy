@@ -1570,17 +1570,21 @@ export function createApiClient({
     recordSearchOpen: (body: SearchOpenBody) =>
       request<unknown>(SEARCH_OPENED_PATH, { method: 'POST', body: JSON.stringify(body) }, { auth: true }),
     /**
-     * Views of posts seen large outside the feed (the post page, a reel
-     * opened from a profile or search), up to 25 at a time, sent with the
-     * session's token so each counts under its account; answered 204 with no
-     * body. Home's cards and the feed's reel need no call: their impressions
-     * already count. Unused until the app draws counts (post view counts,
-     * step 3).
+     * Views of posts looked at (Home's cards, the post page, a reel's slides),
+     * up to 25 at a time, answered 204 with no body. Sent with the token of
+     * the session that saw them, which the caller reads for that identity and
+     * passes here, never the one the client holds as the request leaves: a
+     * sign-in in between would count them for another account. Sent by
+     * `lib/post-view-reporter.ts` (post view counts, step 3).
      */
-    recordPostViews: (body: {
-      views: Array<{ postId: string; surface: 'feed' | 'post-page' | 'reel' }>;
-    }) =>
-      request<unknown>('/api/showcase/views', { method: 'POST', body: JSON.stringify(body) }, { auth: true }),
+    recordPostViews: (
+      body: { views: Array<{ postId: string; surface: 'feed' | 'post-page' | 'reel' }> },
+      options: { accessToken: string },
+    ) => request<unknown>('/api/showcase/views', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${options.accessToken}` },
+      body: JSON.stringify(body),
+    }, { auth: false }),
     recordShowcaseFeedEvent: (body: ShowcaseFeedEventRequest) =>
       request<ShowcaseFeedEventResponse>('/api/showcase/feed/events', {
         method: 'POST',

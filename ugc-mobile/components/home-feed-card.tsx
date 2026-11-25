@@ -1,8 +1,10 @@
 import { CheckCircle2, Lock, MessageCircle, Repeat2, ShoppingBag } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { memo, useCallback, useContext } from 'react';
+import { View } from 'react-native';
 
 import { FeedCardAction, FeedCardShell } from '@/components/feed-card-shell';
+import { PostViewCount } from '@/components/post-view-count';
 import { RemixCreditLine } from '@/components/remix-credit-line';
 import { NativeMenu } from '@/components/native-menu';
 import { MediaZoomSourceView, useMediaZoomSource } from '@/components/media-zoom';
@@ -192,26 +194,40 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
             icon={<ShareGlyph size={appTheme.icon.compact} color={theme.colors.faint} />}
             onPress={onShare}
           />
-          {/* The recipe behind the post, last in the row and only where it adds
-              something: a price, a free recipe on a card with no Remix, one the
-              viewer has ("Unlocked", with a check) or their own
-              (`homeRecipeChip`). Last, so that on a narrow phone it is the one
-              control that wraps. */}
-          {card.recipeChip ? (
-            <FeedCardAction
-              accessibilityLabel={card.recipeChip.accessibilityLabel}
-              icon={card.recipeChip.kind === 'unlocked' ? (
-                <CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />
-              ) : (
-                <ShoppingBag
-                  size={appTheme.icon.compact}
-                  color={card.recipeChip.tone === 'paid' ? theme.colors.commerce : theme.colors.faint}
+          {/* The post's views and its recipe chip, together at the row's far end
+              (post view counts, as the web's card has them): where a phone has no
+              room for them they go under the actions as one, still at the end,
+              and never push an action onto a line of its own. At the largest text
+              sizes, where the two do not fit one line, the chip goes under the
+              views, both on the right, rather than past the card's edge (review of
+              #929). The views are a count, never a control. */}
+          {card.viewLabels || card.recipeChip ? (
+            <View
+              testID="home-feed-card-row-end"
+              style={{ marginLeft: 'auto', flexShrink: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}
+            >
+              <PostViewCount labels={card.viewLabels} />
+              {/* The recipe behind the post, last in the row and only where it
+                  adds something: a price, a free recipe on a card with no Remix,
+                  one the viewer has ("Unlocked", with a check) or their own
+                  (`homeRecipeChip`). */}
+              {card.recipeChip ? (
+                <FeedCardAction
+                  accessibilityLabel={card.recipeChip.accessibilityLabel}
+                  icon={card.recipeChip.kind === 'unlocked' ? (
+                    <CheckCircle2 size={appTheme.icon.compact} color={theme.colors.success} />
+                  ) : (
+                    <ShoppingBag
+                      size={appTheme.icon.compact}
+                      color={card.recipeChip.tone === 'paid' ? theme.colors.commerce : theme.colors.faint}
+                    />
+                  )}
+                  label={card.recipeChip.label}
+                  tone={card.recipeChip.tone === 'paid' ? 'commerce' : 'default'}
+                  onPress={onAssetPress}
                 />
-              )}
-              label={card.recipeChip.label}
-              tone={card.recipeChip.tone === 'paid' ? 'commerce' : 'default'}
-              onPress={onAssetPress}
-            />
+              ) : null}
+            </View>
           ) : null}
         </>
       )}

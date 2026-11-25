@@ -3,7 +3,7 @@ import { router } from 'expo-router';
 import { Check, Heart, MoreHorizontal, Pin, SendHorizontal, ThumbsDown, ThumbsUp } from 'lucide-react-native';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { AccessibilityInfo, type AccessibilityState, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { AccessibilityInfo, type AccessibilityState, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { NativeMenu } from '@/components/native-menu';
@@ -145,6 +145,11 @@ type PostCommentsProps = {
    * delivery. Absent anywhere the post was not reached through a ranked feed.
    */
   deliveryId?: string | null;
+  /**
+   * Inline, where the list carries the post at its head: where the list stands
+   * and how tall it is, as it scrolls, for the post's view (post view counts).
+   */
+  onListScroll?: (scroll: { offset?: number; viewportHeight: number }) => void;
 };
 
 export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(function PostComments({
@@ -162,6 +167,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   initialReplyToId,
   unavailableMessage,
   deliveryId,
+  onListScroll,
 }, ref) {
   const theme = useAppTheme();
   const reducedMotion = useReducedMotion();
@@ -1044,6 +1050,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     </View>
   );
 
+  const reportListScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => onListScroll?.({
+    offset: event.nativeEvent.contentOffset.y,
+    viewportHeight: event.nativeEvent.layoutMeasurement.height,
+  });
+
   const list = (
     <FlatList
       ref={commentsListRef}
@@ -1062,6 +1073,13 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
           {commentsHeader}
         </>
       ) : undefined}
+      // At the list's own rate (no throttle: it windows its rows from these
+      // events), and again where a drag or a fling ends, whose last position
+      // a throttled scroll event can miss on Android (review of #929).
+      onScroll={onListScroll ? reportListScroll : undefined}
+      onScrollEndDrag={onListScroll ? reportListScroll : undefined}
+      onMomentumScrollEnd={onListScroll ? reportListScroll : undefined}
+      onLayout={onListScroll ? (event) => onListScroll({ viewportHeight: event.nativeEvent.layout.height }) : undefined}
       onRefresh={enabled && !commentsUnavailable ? () => {
         setPullRefreshing(true);
         void commentsQuery.refetch().finally(() => setPullRefreshing(false));
