@@ -301,9 +301,14 @@ test("the posts' creator is offered no Remix on them, nor told of one by their o
     const path = `/showcase/${post.post.id}`;
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1, name: post.post.title })).toBeVisible(COLD_PAGE);
-    // Their own read has landed: the recipe reads as theirs, open.
+    // The recipe reads as theirs from the server's HTML on ("Your recipe", owner-first-paint.ts), so
+    // that says nothing of the page's script. Its References come only with their own read of it,
+    // which the page sends once its script has loaded and knows the session, so that wait holds the
+    // page's whole start in the browser and gets the cold page's time: on CI on 2026-11-25 the dev
+    // server answered the page's late chunks (the Supabase client, the account) about ten seconds
+    // after "Your recipe" showed, and a 10 s wait failed with no References drawn.
     await expect(page.locator('#recipe').getByText('Your recipe', { exact: true })).toBeVisible(COLD_PAGE);
-    await expect(page.locator('#recipe').getByRole('heading', { level: 3, name: 'References' })).toBeVisible();
+    await expect(page.locator('#recipe').getByRole('heading', { level: 3, name: 'References' })).toBeVisible(COLD_PAGE);
 
     expectNoRemixInAnyFrame(await recordedFrames(page, path), name);
   }
