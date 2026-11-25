@@ -2951,19 +2951,15 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     setIsLeavingAfterSave(true);
     if (isStudioPath(backHref)) rememberStudioReturnedPost(postId);
     pushToast({ tone: 'success', message: 'Changes saved.' });
+    // The guard starts this a task after the popstate that takes the page off
+    // its guard entry, so Next's restore of the editor's entry cannot drop it
+    // (use-leave-guard.ts, #894).
     leaveComposer(() => {
-      // A task later, once every listener of the popstate that took the page
-      // off its guard entry has run: Next's restores the editor's entry and
-      // drops a navigation started before it, and on an editor that was the
-      // document's first page it runs after the guard's (React runs a
-      // child's effects before its parents').
-      window.setTimeout(() => {
-        if (isPreviousHistoryEntry(backHref)) {
-          router.back();
-        } else {
-          router.replace(backHref);
-        }
-      }, 0);
+      if (isPreviousHistoryEntry(backHref)) {
+        router.back();
+      } else {
+        router.replace(backHref);
+      }
     });
   };
 
