@@ -1,13 +1,13 @@
 /**
  * The app's views (post view counts, step 3; plan:
- * docs/plans/post-view-counts-2026-11-23.md). A post shown large outside the
- * feed, half of it on screen for a second while the app is in front, is
- * reported to `POST /api/showcase/views` through `api.recordPostViews`: the
- * post page (`post-page`) and a reel opened from a profile, Saved, search, a
- * link or Explore (`reel`). Home's cards and a reel opened on the feed send
- * nothing: their impressions are counted by the server already (the
- * `feed_events` trigger), and a view reported both ways would count once
- * anyway, since the server keeps one mark per person, post and UTC day.
+ * docs/plans/post-view-counts-2026-11-23.md). A post looked at, half of it on
+ * screen for a second while the app is in front, is reported to
+ * `POST /api/showcase/views` through `api.recordPostViews`: Home's cards
+ * (`feed`), the post page (`post-page`) and every slide of a reel (`reel`),
+ * as the web reports them. A feed's impression of the same post is counted as
+ * its view too; the server keeps one mark a person, post and UTC day, so the
+ * two count once (review of #929: an impression alone missed Explore's reel,
+ * Home's Recent chip and an expired feed session).
  *
  * Modelled on the web's `src/app/showcase/post-view-reporter.ts`:
  *
@@ -19,16 +19,22 @@
  * - A send that is not answered for good (offline, a 5xx, 401, 408 or 429)
  *   lets its views go, so the next look at the post reports it again; a look
  *   on a new UTC day is that day's view.
- * - A view goes under the identity that saw it. The API client puts the
- *   session's token on a request as it leaves, so a view queued before a
- *   sign-in or a sign-out is let go rather than counted for someone else.
+ * - A view goes under the identity that saw it, and only with that session's
+ *   token: the sender reads the token for that identity and sends it itself
+ *   (`send`'s `identity`), so a sign-in or a sign-out while a batch waits for
+ *   its token never counts it for someone else. A sign-in or a sign-out sends
+ *   the leaving identity's views at once with its own token
+ *   (`flushIdentity`); a view of another identity found at a batch is let go.
+ * - A view seen while the session is unknown (a cold start still reading it,
+ *   or a device whose guest sign-in failed and is being tried again) is held
+ *   and reported under the next identity the device has, the same person's.
  *
  * Nothing is kept on disk: a view lost to a killed app is a look's worth, and
  * the next look reports it.
  */
 
 /** Where a view was seen: the surfaces the route takes from the app. */
-export type PostViewSurface = 'post-page' | 'reel';
+export type PostViewSurface = 'feed' | 'post-page' | 'reel';
 
 /** The most views one request carries (`recordPostViews.maxViews` in the contract). */
 export const POST_VIEWS_MAX_BATCH = 25;
@@ -38,6 +44,8 @@ export const POST_VIEW_FLUSH_DELAY_MS = 5_000;
 export const POST_VIEW_MAX_WAIT_MS = 30_000;
 /** The views remembered as reported, oldest forgotten first. */
 const REPORTED_VIEW_MEMORY_LIMIT = 2_000;
+/** The views held for an identity to come, oldest dropped first. */
+const HELD_VIEWS_LIMIT = 100;
 
 export type PostViewRequestBody = { views: Array<{ postId: string; surface: PostViewSurface }> };
 
@@ -51,11 +59,30 @@ type QueuedPostView = {
   queuedAt: number;
 };
 
+type HeldPostView = {
+  postId: string;
+  surface: PostViewSurface;
+  heldAt: number;
+};
+
 type Timer = ReturnType<typeof setTimeout>;
+
+/** How one batch is to be sent. */
+export interface PostViewSendOptions {
+  /** The identity every view of the batch was seen by. */
+  identity: string;
+  /**
+   * The token to send it with, given only for an identity a sign-in or a
+   * sign-out is leaving (its session's own). Without it the sender reads the
+   * session's token and sends only while that session is `identity`'s,
+   * rejecting otherwise, which lets the views go.
+   */
+  accessToken?: string;
+}
 
 export interface PostViewReporterDependencies {
   /** Sends one batch: `api.recordPostViews`, which answers 204. */
-  send: (body: PostViewRequestBody) => Promise<unknown>;
+  send: (body: PostViewRequestBody, options: PostViewSendOptions) => Promise<unknown>;
   /** The identity the API client is signed in as now, or null with no session. */
   currentIdentity: () => string | null;
   now?: () => number;
@@ -91,6 +118,7 @@ export function createPostViewReporter({
   clearTimer = clearTimeout,
 }: PostViewReporterDependencies) {
   let pending: QueuedPostView[] = [];
+  let held: HeldPostView[] = [];
   const reported = new Set<string>();
   let timer: Timer | null = null;
 
@@ -101,37 +129,24 @@ export function createPostViewReporter({
     if (oldest !== undefined) reported.delete(oldest);
   };
 
-  /**
-   * Sends every view queued now, 25 to a request, those of the identity
-   * signed in now; a view of another identity, or whose send is not answered
-   * for good, is let go for a later look. Never rejects.
-   */
-  const flush = (): Promise<void> => {
-    if (timer !== null) {
-      clearTimer(timer);
-      timer = null;
-    }
-    const queued = pending;
-    pending = [];
-    if (queued.length === 0) return Promise.resolve();
+  const cancelTimer = () => {
+    if (timer === null) return;
+    clearTimer(timer);
+    timer = null;
+  };
 
-    const identity = currentIdentity();
-    const sendable: QueuedPostView[] = [];
-    for (const view of queued) {
-      if (view.identity === identity) sendable.push(view);
-      else reported.delete(view.key);
-    }
-
+  /** Sends `views`, all seen by `identity`, 25 to a request; a send not answered for good lets its views go. */
+  const sendViews = (views: QueuedPostView[], options: PostViewSendOptions): Promise<void> => {
     const requests: Array<Promise<void>> = [];
-    for (let index = 0; index < sendable.length; index += POST_VIEWS_MAX_BATCH) {
-      const chunk = sendable.slice(index, index + POST_VIEWS_MAX_BATCH);
+    for (let index = 0; index < views.length; index += POST_VIEWS_MAX_BATCH) {
+      const chunk = views.slice(index, index + POST_VIEWS_MAX_BATCH);
       const letGo = (error: unknown) => {
         if (isSettledPostViewFailure(error)) return;
         chunk.forEach((view) => reported.delete(view.key));
       };
       requests.push(
         Promise.resolve()
-          .then(() => send({ views: chunk.map(({ postId, surface }) => ({ postId, surface })) }))
+          .then(() => send({ views: chunk.map(({ postId, surface }) => ({ postId, surface })) }, options))
           .then(() => undefined, letGo),
       );
     }
@@ -139,13 +154,41 @@ export function createPostViewReporter({
   };
 
   /**
-   * A post was seen, half of it on screen for a second, by `identity`. Queued
-   * for the next batch, unless that reader reported the post already today.
-   * Answers whether it was queued.
+   * Sends every view queued now, those of the identity signed in now; a view
+   * of another identity, or whose send is not answered for good, is let go
+   * for a later look. Held views go first to the identity signed in now, if
+   * there is one. Never rejects.
    */
-  const report = ({ postId, surface, identity }: { postId: string; surface: PostViewSurface; identity: string }): boolean => {
-    if (!postId || !identity) return false;
-    const at = now();
+  const flush = (): Promise<void> => {
+    adoptHeldViews();
+    cancelTimer();
+    const queued = pending;
+    pending = [];
+    if (queued.length === 0) return Promise.resolve();
+
+    const identity = currentIdentity();
+    const sendable: QueuedPostView[] = [];
+    for (const view of queued) {
+      if (identity && view.identity === identity) sendable.push(view);
+      else reported.delete(view.key);
+    }
+    return identity && sendable.length > 0 ? sendViews(sendable, { identity }) : Promise.resolve();
+  };
+
+  /**
+   * A sign-in or a sign-out is leaving `identity`: its queued views go now,
+   * with that session's own token, rather than being let go at the next batch
+   * as another identity's. Never rejects.
+   */
+  const flushIdentity = ({ identity, accessToken }: { identity: string; accessToken: string }): Promise<void> => {
+    const leaving = pending.filter((view) => view.identity === identity);
+    if (leaving.length === 0) return Promise.resolve();
+    pending = pending.filter((view) => view.identity !== identity);
+    if (pending.length === 0) cancelTimer();
+    return sendViews(leaving, { identity, accessToken });
+  };
+
+  const queue = (postId: string, surface: PostViewSurface, identity: string, at: number): boolean => {
     const key = `${identity}:${postId}:${utcDay(at)}`;
     if (reported.has(key)) return false;
     remember(key);
@@ -165,16 +208,49 @@ export function createPostViewReporter({
     return true;
   };
 
-  const reset = () => {
-    if (timer !== null) {
-      clearTimer(timer);
-      timer = null;
+  /**
+   * The views held while the session was unknown, queued under the identity
+   * signed in now: the same person's, now that the device has one. Nothing
+   * while there is still none.
+   */
+  function adoptHeldViews() {
+    if (held.length === 0) return;
+    const identity = currentIdentity();
+    if (!identity) return;
+    const views = held;
+    held = [];
+    const at = now();
+    for (const view of views) queue(view.postId, view.surface, identity, at);
+  }
+
+  /**
+   * A post was seen, half of it on screen for a second, by `identity`, or
+   * while the session is unknown (null). Queued for the next batch, unless
+   * that reader reported the post already today, or held for the identity to
+   * come. Answers whether it was queued or held.
+   */
+  const report = ({ postId, surface, identity }: { postId: string; surface: PostViewSurface; identity: string | null }): boolean => {
+    if (!postId) return false;
+    const at = now();
+    if (!identity) {
+      const day = utcDay(at);
+      if (held.some((view) => view.postId === postId && utcDay(view.heldAt) === day)) return false;
+      held.push({ postId, surface, heldAt: at });
+      if (held.length > HELD_VIEWS_LIMIT) held = held.slice(held.length - HELD_VIEWS_LIMIT);
+      return true;
     }
+    adoptHeldViews();
+    return queue(postId, surface, identity, at);
+  };
+
+  const reset = () => {
+    cancelTimer();
     pending = [];
+    held = [];
     reported.clear();
   };
 
-  return { report, flush, reset, pendingCount: () => pending.length };
+  return { report, flush, flushIdentity, adoptHeldViews, reset, pendingCount: () => pending.length };
 }
 
 export type PostViewReporter = ReturnType<typeof createPostViewReporter>;
@@ -188,26 +264,39 @@ function getAppReporter(): PostViewReporter | null {
   if (!appReporter) {
     appReporter = createPostViewReporter({
       // Read at send time, so a client the auth provider made anew is used.
-      send: (body) => (runtime ? runtime.send(body) : Promise.resolve()),
+      send: (body, options) => (runtime ? runtime.send(body, options) : Promise.resolve()),
       currentIdentity: () => runtime?.currentIdentity() ?? null,
     });
   }
   return appReporter;
 }
 
-/** Hands the reporter the API client's send and the identity it is signed in as. */
+/**
+ * Hands the reporter the API client's send and the identity it is signed in
+ * as: the auth provider calls it again whenever its session changes, which is
+ * when views held for an identity are reported under it.
+ */
 export function configurePostViewReporter(next: Pick<PostViewReporterDependencies, 'send' | 'currentIdentity'>) {
   runtime = next;
+  appReporter?.adoptHeldViews();
 }
 
 /** Queues a view with the app's reporter; nothing before the auth provider configured it. */
-export function reportPostView(view: { postId: string; surface: PostViewSurface; identity: string }): boolean {
+export function reportPostView(view: { postId: string; surface: PostViewSurface; identity: string | null }): boolean {
   return getAppReporter()?.report(view) ?? false;
 }
 
 /** Sends the app's queued views now: the app is leaving the foreground. Never rejects. */
 export function flushPostViews(): Promise<void> {
   return getAppReporter()?.flush() ?? Promise.resolve();
+}
+
+/**
+ * Sends the views of an identity a sign-in or a sign-out is leaving, with
+ * that session's own token, while the token still answers. Never rejects.
+ */
+export function flushPostViewsOfLeavingIdentity(leaving: { identity: string; accessToken: string }): Promise<void> {
+  return getAppReporter()?.flushIdentity(leaving) ?? Promise.resolve();
 }
 
 export function resetPostViewReporterForTests() {

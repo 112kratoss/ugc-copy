@@ -18,7 +18,7 @@ import { formatReturnedCredits, type PostDetailsSection } from './post-details-v
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from './showcase-display';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
-import { postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
+import { isViewCountShown, postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
 
 export type PreviewViewerSource =
   | 'showcase-feed'
@@ -157,6 +157,13 @@ export interface ImmersivePreviewItem {
    * taken down, and for a list that carries no count. Never a button.
    */
   viewLabels?: ViewCountLabels | null;
+  /**
+   * Whether the post is known to be public and up, so a look at it is a view
+   * (`viewReportPostId`): set for someone else's post only. Saved lists
+   * unlisted posts as well and says which only in the read by id, so there a
+   * post it says nothing of shows no views and reports none.
+   */
+  viewsCountable?: boolean;
   canComment: boolean;
   isSaved: boolean;
   canSave: boolean;
@@ -683,6 +690,11 @@ function showcaseToImmersiveItem(
   const canComment = item.visibility !== 'unlisted';
   const generationSetup = readGenerationSetup(item.generationSetup);
   const remixCredit = readRemixCredit(item.remixCredit);
+  // The post's visibility as far as the list knows it: the read by id says it;
+  // a feed, a creator's page and search list public posts only and leave it
+  // out; Saved lists unlisted posts too, and there a post it says nothing of is
+  // not known to be public (review of #929).
+  const knownVisibility = item.visibility ?? (source === 'profile-saved' ? null : 'public');
 
   return {
     id: item.id,
@@ -707,8 +719,8 @@ function showcaseToImmersiveItem(
     saveCount: item.saveCount,
     commentLabel: formatCompactCount(item.commentCount),
     commentCount: item.commentCount ?? 0,
-    // A card's `visibility` is set by the read by id; a list of public posts leaves it out.
-    viewLabels: postViewCountLabels({ viewCount: item.viewCount, visibility: item.visibility ?? 'public' }),
+    viewLabels: postViewCountLabels({ viewCount: item.viewCount, visibility: knownVisibility }),
+    viewsCountable: isViewCountShown({ visibility: knownVisibility }),
     canComment,
     isSaved,
     canSave: true,

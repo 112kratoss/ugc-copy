@@ -171,6 +171,8 @@ describe("the reel rail's views", () => {
     const count = tree.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'reel-view-count')[0];
     expect(count.props).toMatchObject({ accessible: true, accessibilityRole: 'text', accessibilityLabel: '1,234 views' });
     expect(count.props.onPress).toBeUndefined();
+    // A tap on it reaches the post under it, as one between the buttons does (review of #929).
+    expect(count.props.pointerEvents).toBe('none');
     // No button holds it.
     expect(tree.root.findAll((node) => String(node.type) === 'pressable').some((button) => button.findAll((node) => node === count).length > 0)).toBe(false);
     expect(count.findAll((node) => String(node.type) === 'eye-icon')).toHaveLength(1);

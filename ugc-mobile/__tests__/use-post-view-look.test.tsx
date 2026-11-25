@@ -26,7 +26,7 @@ const { appState, authState, reportPostView } = vi.hoisted(() => {
   };
 });
 
-vi.mock('react-native', () => ({ AppState: appState }));
+vi.mock('react-native', () => ({ AppState: appState, Platform: { OS: 'ios' } }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 vi.mock('@/lib/post-view-reporter', () => ({ reportPostView }));
 
@@ -105,17 +105,42 @@ describe('usePostViewLook', () => {
     expect(reportPostView).not.toHaveBeenCalled();
   });
 
-  it('holds a look made before the session is known, and reports it once it is', () => {
+  it('hands a look made before the session is known to the reporter with no identity, which holds it for the one to come', () => {
     authState.isLoading = true;
     authState.identityUserId = null;
     mount({ postId: 'post-1', surface: 'reel', onScreen: true });
     act(() => { vi.advanceTimersByTime(1_000); });
-    expect(reportPostView).not.toHaveBeenCalled();
+    expect(reportPostView).toHaveBeenCalledTimes(1);
+    expect(reportPostView).toHaveBeenCalledWith({ postId: 'post-1', surface: 'reel', identity: null });
 
+    // The session lands: the look is not reported again by the page.
     authState.isLoading = false;
     authState.identityUserId = 'guest-1';
     update({ postId: 'post-1', surface: 'reel', onScreen: true });
-    expect(reportPostView).toHaveBeenCalledWith({ postId: 'post-1', surface: 'reel', identity: 'guest-1' });
+    act(() => { vi.advanceTimersByTime(5_000); });
+    expect(reportPostView).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps no look of a post the page stopped reporting (review of #929)', () => {
+    // A post looked at before the session was known, which turns out to be
+    // the reader's own: the reporter got the look, and the page none after.
+    authState.isLoading = true;
+    authState.identityUserId = null;
+    mount({ postId: 'post-1', surface: 'post-page', onScreen: true });
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(reportPostView).toHaveBeenCalledWith({ postId: 'post-1', surface: 'post-page', identity: null });
+    authState.isLoading = false;
+    authState.identityUserId = 'creator-1';
+    update({ postId: null, surface: 'post-page', onScreen: true });
+    act(() => { vi.advanceTimersByTime(5_000); });
+    // Someone else signs in on the phone and the page reports the post again:
+    // nothing of the earlier look is theirs; a look of their own needs its second.
+    authState.identityUserId = 'reader-2';
+    update({ postId: 'post-1', surface: 'post-page', onScreen: true });
+    expect(reportPostView).toHaveBeenCalledTimes(1);
+    act(() => { vi.advanceTimersByTime(1_000); });
+    expect(reportPostView).toHaveBeenCalledTimes(2);
+    expect(reportPostView).toHaveBeenLastCalledWith({ postId: 'post-1', surface: 'post-page', identity: 'reader-2' });
   });
 
   it('reports nothing where the page reports no view', () => {

@@ -1,5 +1,5 @@
 import { Eye } from 'lucide-react-native';
-import { Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Text, View, useWindowDimensions, type StyleProp, type ViewStyle } from 'react-native';
 
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors } from '@/lib/theme';
@@ -58,8 +58,28 @@ export function PostViewCount({
 export const TILE_VIEW_COUNT_INSET = 8;
 /** The chip's height at the default text size. */
 const TILE_VIEW_COUNT_HEIGHT = 22;
-/** What a tile's writing leaves clear at its foot for the views' chip: the inset, the chip and a gap. */
-export const TILE_VIEW_COUNT_CLEARANCE = TILE_VIEW_COUNT_INSET + TILE_VIEW_COUNT_HEIGHT + 8;
+/** The chip figure's line at the default text size. */
+const TILE_VIEW_COUNT_LINE_HEIGHT = 14;
+/**
+ * How far the chip's figure follows the reader's text size: metadata's cap
+ * (`appTheme.typeScale.control`), so the chip stays a chip on a small tile.
+ */
+const TILE_VIEW_COUNT_MAX_SCALE = appTheme.typeScale.control;
+
+/** The chip's height at the reader's text size (`useWindowDimensions().fontScale`). */
+export function tileViewCountChipHeight(fontScale: number): number {
+  const scale = Math.min(Math.max(Number.isFinite(fontScale) ? fontScale : 1, 1), TILE_VIEW_COUNT_MAX_SCALE);
+  return Math.max(TILE_VIEW_COUNT_HEIGHT, Math.ceil(TILE_VIEW_COUNT_LINE_HEIGHT * scale) + 8);
+}
+
+/**
+ * What a tile's writing leaves clear at its foot for the views' chip at the
+ * reader's text size: the inset, the chip and a gap (review of #929: a fixed
+ * clearance let a chip grown with large text cover the last line).
+ */
+export function tileViewCountClearance(fontScale: number): number {
+  return TILE_VIEW_COUNT_INSET + tileViewCountChipHeight(fontScale) + 8;
+}
 
 /**
  * On a grid tile, over its picture or plate, bottom left: the tile's badge
@@ -68,6 +88,7 @@ export const TILE_VIEW_COUNT_CLEARANCE = TILE_VIEW_COUNT_INSET + TILE_VIEW_COUNT
  * button whose label carries the spoken figure.
  */
 export function PostViewCountChip({ labels }: { labels: ViewCountLabels | null | undefined }) {
+  const { fontScale } = useWindowDimensions();
   if (!labels) return null;
   return (
     <View
@@ -76,7 +97,7 @@ export function PostViewCountChip({ labels }: { labels: ViewCountLabels | null |
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
       style={{
-        minHeight: TILE_VIEW_COUNT_HEIGHT,
+        minHeight: tileViewCountChipHeight(fontScale),
         flexDirection: 'row',
         alignItems: 'center',
         gap: 3,
@@ -88,7 +109,10 @@ export function PostViewCountChip({ labels }: { labels: ViewCountLabels | null |
       }}
     >
       <Eye size={appTheme.icon.xs} color={mediaColors.onMedia} />
-      <Text style={{ color: mediaColors.onMedia, fontSize: 11, lineHeight: 14, fontWeight: '800', fontVariant: ['tabular-nums'] }}>
+      <Text
+        maxFontSizeMultiplier={TILE_VIEW_COUNT_MAX_SCALE}
+        style={{ color: mediaColors.onMedia, fontSize: 11, lineHeight: TILE_VIEW_COUNT_LINE_HEIGHT, fontWeight: '800', fontVariant: ['tabular-nums'] }}
+      >
         {labels.compact}
       </Text>
     </View>

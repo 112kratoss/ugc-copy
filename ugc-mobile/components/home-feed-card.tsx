@@ -197,10 +197,15 @@ export const HomeFeedCardView = memo(function HomeFeedCardView({
           {/* The post's views and its recipe chip, together at the row's far end
               (post view counts, as the web's card has them): where a phone has no
               room for them they go under the actions as one, still at the end,
-              and never push an action onto a line of its own. The views are a
-              count, never a control. */}
+              and never push an action onto a line of its own. At the largest text
+              sizes, where the two do not fit one line, the chip goes under the
+              views, both on the right, rather than past the card's edge (review of
+              #929). The views are a count, never a control. */}
           {card.viewLabels || card.recipeChip ? (
-            <View testID="home-feed-card-row-end" style={{ marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View
+              testID="home-feed-card-row-end"
+              style={{ marginLeft: 'auto', flexShrink: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}
+            >
               <PostViewCount labels={card.viewLabels} />
               {/* The recipe behind the post, last in the row and only where it
                   adds something: a price, a free recipe on a card with no Remix,

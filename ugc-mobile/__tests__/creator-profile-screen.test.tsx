@@ -17,6 +17,8 @@ import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } f
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const mocks = vi.hoisted(() => ({
+  // The reader's text size (`useWindowDimensions().fontScale`).
+  fontScale: 1,
   router: { push: vi.fn(), replace: vi.fn(), back: vi.fn(), canGoBack: vi.fn(() => true) },
   api: {
     getCreatorProfile: vi.fn(),
@@ -50,7 +52,7 @@ vi.mock('react-native', () => ({
   Share: { share: vi.fn(), sharedAction: 'sharedAction' },
   Text: ({ children, ...props }: MockProps) => React.createElement('text', props, children),
   View: ({ children, ...props }: MockProps) => React.createElement('view', props, children),
-  useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
+  useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: mocks.fontScale }),
 }));
 
 vi.mock('lucide-react-native', () => {
@@ -272,6 +274,7 @@ const menuIds = (tree: renderer.ReactTestRenderer) => (byType(tree, 'native-menu
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.fontScale = 1;
   mocks.user = { id: 'viewer-1' };
   mocks.list.stickyHeaderIndices = undefined;
   mocks.imageMounts = [];
@@ -742,5 +745,52 @@ describe("a tile's views", () => {
     const plates = tree.root.findAll((node) => node.props.testID === 'creator-text-post-plate' && typeof node.props.bodyLines === 'number');
     expect(plates.map((plate) => plate.props.paddingBottom)).toEqual([38, undefined]);
     expect(plates[0].props.bodyLines).toBeLessThan(plates[1].props.bodyLines);
+  });
+
+  it('keeps the written tile clear of a chip grown with large text, whose figure stops at the controls’ cap (review of #929)', async () => {
+    mocks.fontScale = 2;
+    mocks.api.getCreatorProfile.mockResolvedValue(creatorPage({
+      items: [{ ...post('note-1'), category: 'text' as const, postFormat: 'text' as const, body: 'Open with a hard rim light.', viewCount: 56 }],
+    }));
+    const tree = await renderScreen(newQueryClient());
+
+    const chip = byType(tree, 'view').find((node) => node.props.testID === 'post-view-count-chip');
+    const figure = chip!.findAll((node) => String(node.type) === 'text')[0];
+    // 14pt lines at 1.6x at most, and 8 for the chip's own room.
+    expect(figure.props.maxFontSizeMultiplier).toBe(1.6);
+    expect(chip!.props.style).toMatchObject({ minHeight: 31 });
+    const plate = tree.root.findAll((node) => node.props.testID === 'creator-text-post-plate' && typeof node.props.bodyLines === 'number')[0];
+    // The inset, the grown chip and a gap.
+    expect(plate.props.paddingBottom).toBe(8 + 31 + 8);
+  });
+
+  it('lifts the views above a carousel’s page dots, and leaves them at the corner on a single picture (review of #929)', async () => {
+    const pictures = (id: string, count: number) => ({
+      ...post(id),
+      mediaUrl: `https://cdn.example.test/${id}-0.png`,
+      mediaKind: 'image' as const,
+      mediaItems: Array.from({ length: count }, (_, index) => ({
+        id: `${id}:${index}`,
+        url: `https://cdn.example.test/${id}-${index}.png`,
+        previewUrl: `https://cdn.example.test/${id}-${index}.png`,
+        mediaKind: 'image' as const,
+        contentType: 'image/png',
+        originalName: null,
+        width: 400,
+        height: 500,
+        durationSeconds: null,
+        sortOrder: index,
+        gridReady: true,
+      })),
+      viewCount: 345,
+    });
+    mocks.api.getCreatorProfile.mockResolvedValue(creatorPage({ items: [pictures('five', 5), pictures('one', 1)] }));
+    const tree = await renderScreen(newQueryClient());
+
+    const placements = byType(tree, 'view')
+      .filter((node) => node.findAll((child) => child.props.testID === 'post-view-count-chip').length > 0 && node.props.style?.position === 'absolute')
+      .map((node) => node.props.style.bottom);
+    // Dots 5 tall, 10 up, and a gap of 6; the corner's inset of 8 without them.
+    expect(placements).toEqual([21, 8]);
   });
 });

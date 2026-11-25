@@ -48,7 +48,7 @@ import { showcaseToHomeFeedCard } from '../lib/home-feed-view-model';
  * row's far end, in one box with the recipe chip, as the web's card does, so a
  * phone with no room for them puts the two under the actions together and
  * never pushes an action onto a line of its own. The views are a count, never
- * a control; the card's view is counted by its feed impression.
+ * a control.
  */
 
 function post(overrides: Partial<ShowcaseFeedItem> = {}): ShowcaseFeedItem {
@@ -150,6 +150,10 @@ describe("a Home card's views", () => {
   it('keeps the views and the recipe chip in one box at the far end, the views first', () => {
     const tree = renderCard(post({ viewCount: 56, asset: freeRecipe }));
     expect(row(tree).at(-1)).toEqual(['views', 'Free recipe']);
+    // At the largest text sizes the box keeps to the card's width and puts the
+    // chip under the views, both on the right (review of #929).
+    const end = tree.root.findAll((node) => String(node.type) === 'view' && node.props.testID === 'home-feed-card-row-end')[0];
+    expect(end.props.style).toMatchObject({ flexShrink: 1, flexWrap: 'wrap', justifyContent: 'flex-end' });
   });
 
   it('puts the recipe chip at the far end alone where there are no views, and draws no box with neither', () => {

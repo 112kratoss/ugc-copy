@@ -40,6 +40,13 @@ const mocks = vi.hoisted(() => ({
     error: unknown;
     refetch: () => unknown;
   },
+  // The owner's read of their own post (`api.getOwnerPost`), from Profile.
+  ownerPost: { data: undefined, isError: false, error: null, refetch: vi.fn() } as {
+    data: unknown;
+    isError: boolean;
+    error: unknown;
+    refetch: () => unknown;
+  },
   // The legacy-id resolver's read (`api.resolveShowcasePost`).
   resolvedPost: { data: undefined, isError: false, error: null, refetch: vi.fn() } as {
     data: unknown;
@@ -137,7 +144,9 @@ vi.mock('@tanstack/react-query', () => ({
       ? mocks.showcasePost
       : options.queryKey[0] === 'showcase-post-resolve'
         ? mocks.resolvedPost
-        : { data: undefined, isError: false, error: null, refetch: vi.fn() };
+        : options.queryKey[0] === 'owner-text-post'
+          ? mocks.ownerPost
+          : { data: undefined, isError: false, error: null, refetch: vi.fn() };
   },
   useQueryClient: () => ({}),
 }));
@@ -305,6 +314,7 @@ beforeEach(() => {
   mocks.saveOptions.current = null;
   mocks.callbacksFor.current = null;
   mocks.queryOptions = [];
+  mocks.ownerPost = { data: undefined, isError: false, error: null, refetch: vi.fn() };
   showPost(textPost());
   // The resolver finds nothing unless a test says otherwise.
   resolveTo(null);
@@ -883,11 +893,68 @@ describe("a written post's views", () => {
       renderer.act(() => { vi.advanceTimersByTime(5_000); });
       tree.unmount();
 
+      // The owner's own copy, from their Profile (review of #929: this half
+      // read no post before, so it could not fail).
       mocks.auth.identityUserId = 'viewer-1';
       mocks.params = { id: 'post-1', source: 'profile-posts' };
+      mocks.ownerPost = {
+        data: {
+          success: true,
+          post: {
+            id: 'post-1',
+            title: 'Three hooks that keep working',
+            createdAt: '2026-10-12T09:00:00.000Z',
+            visibility: 'public',
+            mediaUrl: null,
+            mediaKind: null,
+            mediaItems: [],
+            body: 'Open with tension.',
+            category: 'text',
+            postFormat: 'text',
+            bundle: null,
+            archivedAt: null,
+            commentCount: 3,
+            viewCount: 42,
+          },
+        },
+        isError: false,
+        error: null,
+        refetch: vi.fn(),
+      };
       tree = renderScreen();
+      expect(textValues(tree)).toContain('Open with tension.');
+      expect(textValues(tree)).toContain('42');
+      lay(tree, { height: 600 });
       renderer.act(() => { vi.advanceTimersByTime(5_000); });
       expect(mocks.reportPostView).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('draws and reports nothing for a post from Saved until its read by id says it is public (review of #929)', () => {
+    vi.useFakeTimers();
+    try {
+      // Saved's copy says nothing of the post's visibility; Saved lists unlisted posts too.
+      mocks.params = { id: 'post-1', source: 'profile-saved' };
+      showPost(textPost({ viewCount: 12, visibility: undefined }));
+      let tree = renderScreen();
+      expect(rowOrder(tree)).not.toContain('views');
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(5_000); });
+      expect(mocks.reportPostView).not.toHaveBeenCalled();
+      // The page reads the post by id at once rather than keeping Saved's copy for 45 s.
+      expect(mocks.queryOptions.find((options) => options.queryKey[0] === 'showcase-post'))
+        .toMatchObject({ initialDataUpdatedAt: 0 });
+      tree.unmount();
+
+      // The read says it is public: its views are drawn and its view reported.
+      showPost(textPost({ viewCount: 12, visibility: 'public' }));
+      tree = renderScreen();
+      expect(rowOrder(tree)).toContain('views');
+      lay(tree, { height: 600 });
+      renderer.act(() => { vi.advanceTimersByTime(1_000); });
+      expect(mocks.reportPostView).toHaveBeenCalledWith({ postId: 'post-1', surface: 'post-page', identity: 'viewer-1' });
     } finally {
       vi.useRealTimers();
     }

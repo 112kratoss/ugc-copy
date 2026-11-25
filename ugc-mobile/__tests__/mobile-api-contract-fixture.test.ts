@@ -704,6 +704,7 @@ const extendedOperationCases: Array<{
       mobileApiContract.endpoints.recordPostViews.request as {
         views: Array<{ postId: string; surface: 'feed' | 'post-page' | 'reel' }>;
       },
+      { accessToken: 'token-1' },
     ),
   },
   {

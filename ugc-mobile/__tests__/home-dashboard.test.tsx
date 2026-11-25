@@ -275,6 +275,13 @@ vi.mock('@/lib/feed-event-queue', () => ({
   isBatchedShowcaseFeedEventType: () => false,
 }));
 
+// The app's views of the cards (post view counts, step 3), as Home hands them on.
+const postViewReports = vi.hoisted(() => vi.fn((_view: { postId: string; surface: string; identity: string | null }) => true));
+
+vi.mock('@/lib/post-view-reporter', () => ({
+  reportPostView: postViewReports,
+}));
+
 vi.mock('@/lib/persisted-home-feed', () => ({
   PERSISTED_HOME_FEED_CHIP_ID: 'for-you',
   cancelScheduledPersistHomeFeed: vi.fn(),
@@ -750,6 +757,45 @@ describe('Home screen', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  // Review of #929: a card was counted only through its impression, which
+  // Recent never files and a lane's expired session refuses. Each card half on
+  // screen for a second while Home is in front reports its view (`feed`), as
+  // the web's Home does; the server keeps one a person, post and day.
+  it('reports each card’s view after a second half on screen, delivered or not, and none of the reader’s own', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { recommendation: _delivery, ...undelivered } = mediaItem('b', 'unused');
+    const own = { ...textItem('c', 'delivery-views-c'), creator: { id: 'viewer-1', username: 'viewer', name: 'Viewer', avatar: null } };
+    queryState.pages = [page([mediaItem('a', 'delivery-views-a'), undelivered, own])];
+    const { tree } = renderHome();
+    reportOnScreen(tree, [0, 1, 2]);
+    renderer.act(() => { vi.advanceTimersByTime(999); });
+    expect(postViewReports).not.toHaveBeenCalled();
+    renderer.act(() => { vi.advanceTimersByTime(1); });
+    expect(postViewReports.mock.calls.map(([view]) => view)).toEqual([
+      { postId: 'a', surface: 'feed', identity: 'viewer-1' },
+      { postId: 'b', surface: 'feed', identity: 'viewer-1' },
+    ]);
+
+    // A card that leaves the screen before its second reports nothing.
+    postViewReports.mockClear();
+    reportOnScreen(tree, [1]);
+    renderer.act(() => { vi.advanceTimersByTime(5_000); });
+    expect(postViewReports).not.toHaveBeenCalled();
+
+    // Home leaves the front: the looks end, and coming back needs a second again.
+    navState.focused = false;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    reportOnScreen(tree, [0, 1]);
+    renderer.act(() => { vi.advanceTimersByTime(5_000); });
+    expect(postViewReports).not.toHaveBeenCalled();
+    navState.focused = true;
+    renderer.act(() => tree.update(<HomeDashboard />));
+    renderer.act(() => { vi.advanceTimersByTime(1_000); });
+    expect(postViewReports.mock.calls.map(([view]) => view.postId).sort()).toEqual(['a', 'b']);
+
+    renderer.act(() => tree.unmount());
   });
 
   // 2026-10-14 fix run (01-1): FlashList reports viewability by index, so a

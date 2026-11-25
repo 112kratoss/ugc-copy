@@ -6,7 +6,8 @@ import { postName } from './placeholder-title';
 import { FREE_RECIPE_LABEL, formatUnlockCreditPrice } from './pricing';
 import type { ShowcaseFeedFilters } from './showcase-feed-query';
 import { getShowcaseRemixAccess, type ShowcaseRemixAccess } from './showcase-remix-access';
-import { postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
+import { isViewCountShown, postViewCountLabels, type ViewCountLabels } from './view-count/view-count';
+import type { PostViewReportTarget } from './post-view-look';
 
 export type HomeFeedChipId = 'for-you' | 'recent' | 'unlocks' | 'notes';
 
@@ -77,10 +78,26 @@ export interface HomeFeedCard {
   /**
    * The post's views, at the action row's far end with the recipe chip (post
    * view counts; `lib/view-count`): null at 0, and for a card that carries no
-   * count. Never a button: the card's views are counted by its impression.
+   * count. Never a button.
    */
   viewLabels: ViewCountLabels | null;
+  /**
+   * Whether a look at the card is the post's view (`viewReportPostId`, sent
+   * by Home as `feed`): the feed lists public posts only, so one it says
+   * nothing of is public.
+   */
+  viewsCountable: boolean;
   isSaved: boolean;
+}
+
+/** The card's post as a look at the card reports it (`viewReportPostId`). */
+export function homeFeedCardViewTarget(card: HomeFeedCard): PostViewReportTarget {
+  return {
+    showcasePostId: card.item.id,
+    sourceType: 'showcase',
+    creatorId: card.item.creator.id,
+    viewsCountable: card.viewsCountable,
+  };
 }
 
 /**
@@ -195,6 +212,7 @@ export function showcaseToHomeFeedCard(
     }),
     // A feed lists public posts only, so its cards leave their visibility out.
     viewLabels: postViewCountLabels({ viewCount: item.viewCount, visibility: item.visibility ?? 'public' }),
+    viewsCountable: isViewCountShown({ visibility: item.visibility ?? 'public' }),
     isSaved: Boolean(item.isSaved),
   };
 }

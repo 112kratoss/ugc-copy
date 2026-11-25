@@ -158,6 +158,10 @@ export default function PostScreen() {
       )?.showcaseItems?.find((candidate) => candidate.id === postId);
       return post ? { success: true, item: post } : undefined;
     },
+    // Saved's copy is shown at once and read again by id straight away: Saved
+    // does not say whether a post is public, which its views wait for (review
+    // of #929), and the read by id does.
+    initialDataUpdatedAt: 0,
     queryFn: () => api.getShowcasePost(postId!) as Promise<ShowcasePostResponse>,
     staleTime: 1000 * 45,
   });

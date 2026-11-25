@@ -530,6 +530,9 @@ function RailViewCount({ labels }: { labels: ViewCountLabels }) {
       accessible
       accessibilityRole="text"
       accessibilityLabel={labels.spoken}
+      // Touches go through it to the post, as they do between the rail's
+      // buttons: a count is no control, and the post's tap is its own.
+      pointerEvents="none"
       style={{ alignItems: 'center', gap: 3, minWidth: 64, maxWidth: 76 }}
     >
       <IconShadow><Eye size={appTheme.icon.feature} color="#ffffff" /></IconShadow>

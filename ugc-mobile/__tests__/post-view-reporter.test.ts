@@ -5,6 +5,7 @@ import {
   configurePostViewReporter,
   createPostViewReporter,
   flushPostViews,
+  flushPostViewsOfLeavingIdentity,
   isSettledPostViewFailure,
   POST_VIEW_FLUSH_DELAY_MS,
   POST_VIEW_MAX_WAIT_MS,
@@ -13,6 +14,7 @@ import {
   resetPostViewReporterForTests,
   utcDay,
   type PostViewRequestBody,
+  type PostViewSendOptions,
 } from '../lib/post-view-reporter';
 
 /**
@@ -23,10 +25,13 @@ import {
 
 const reader = 'reader-1';
 
-function setup({ identity = reader as string | null, send }: { identity?: string | null; send?: (body: PostViewRequestBody) => Promise<unknown> } = {}) {
+function setup({ identity = reader as string | null, send }: {
+  identity?: string | null;
+  send?: (body: PostViewRequestBody, options: PostViewSendOptions) => Promise<unknown>;
+} = {}) {
   const sent: PostViewRequestBody[] = [];
   const state = { identity };
-  const sender = vi.fn(send ?? (async (body: PostViewRequestBody) => {
+  const sender = vi.fn(send ?? (async (body: PostViewRequestBody, _options: PostViewSendOptions) => {
     sent.push(body);
     return null;
   }));
@@ -64,7 +69,7 @@ describe('post view reporter', () => {
 
   it('keeps the batch the contract pins: 25 a request, and the surfaces the route takes', async () => {
     expect(POST_VIEWS_MAX_BATCH).toBe(mobileApiContract.endpoints.recordPostViews.maxViews);
-    for (const surface of ['post-page', 'reel'] as const) {
+    for (const surface of ['feed', 'post-page', 'reel'] as const) {
       expect(mobileApiContract.endpoints.recordPostViews.surfaces).toContain(surface);
     }
 
@@ -175,21 +180,80 @@ describe('post view reporter', () => {
     expect(reporter.report({ postId: 'post-1', surface: 'reel', identity: reader })).toBe(true);
   });
 
-  it('queues nothing without a post or an identity', () => {
+  it('queues nothing without a post', () => {
     const { reporter } = setup();
     expect(reporter.report({ postId: '', surface: 'reel', identity: reader })).toBe(false);
-    expect(reporter.report({ postId: 'post-1', surface: 'reel', identity: '' })).toBe(false);
     expect(reporter.pendingCount()).toBe(0);
+  });
+
+  it('sends each batch with the identity that saw its views, for the sender to send under that session only', async () => {
+    const { reporter, sender } = setup();
+    reporter.report({ postId: 'post-1', surface: 'feed', identity: reader });
+    await reporter.flush();
+    expect(sender).toHaveBeenCalledWith({ views: [{ postId: 'post-1', surface: 'feed' }] }, { identity: reader });
+  });
+
+  it('holds a view seen while the session is unknown, and reports it under the session that comes (review of #929, 7)', async () => {
+    // A cold start still reading its session, or a device whose guest sign-in
+    // failed (offline, or the network's limit on new guests): no identity yet.
+    const { reporter, sent, sender, state } = setup({ identity: null });
+    expect(reporter.report({ postId: 'post-1', surface: 'post-page', identity: null })).toBe(true);
+    expect(reporter.report({ postId: 'post-1', surface: 'reel', identity: null })).toBe(false);
+    expect(reporter.report({ postId: 'post-2', surface: 'reel', identity: '' })).toBe(true);
+    expect(reporter.pendingCount()).toBe(0);
+    await reporter.flush();
+    vi.advanceTimersByTime(POST_VIEW_MAX_WAIT_MS);
+    await settle();
+    expect(sender).not.toHaveBeenCalled();
+
+    // The guest session lands (or the stored one is read): the held views are that reader's.
+    state.identity = reader;
+    reporter.adoptHeldViews();
+    expect(reporter.pendingCount()).toBe(2);
+    await reporter.flush();
+    expect(sent).toEqual([{ views: [{ postId: 'post-1', surface: 'post-page' }, { postId: 'post-2', surface: 'reel' }] }]);
+    // Reported for the day under that reader now.
+    expect(reporter.report({ postId: 'post-1', surface: 'reel', identity: reader })).toBe(false);
+  });
+
+  it('sends the views of an identity a sign-in or sign-out is leaving at once, with that session’s own token (review of #929, 12)', async () => {
+    const { reporter, sender } = setup();
+    reporter.report({ postId: 'post-1', surface: 'reel', identity: reader });
+    reporter.report({ postId: 'post-2', surface: 'reel', identity: 'reader-2' });
+    await reporter.flushIdentity({ identity: reader, accessToken: 'outgoing-token' });
+    expect(sender).toHaveBeenCalledTimes(1);
+    expect(sender).toHaveBeenCalledWith(
+      { views: [{ postId: 'post-1', surface: 'reel' }] },
+      { identity: reader, accessToken: 'outgoing-token' },
+    );
+    // Another identity's views wait for their own batch.
+    expect(reporter.pendingCount()).toBe(1);
   });
 
   it('reports through the app’s reporter once the auth provider has configured it', async () => {
     expect(reportPostView({ postId: 'post-1', surface: 'reel', identity: reader })).toBe(false);
     await expect(flushPostViews()).resolves.toBeUndefined();
 
-    const send = vi.fn(async () => null);
-    configurePostViewReporter({ send, currentIdentity: () => reader });
+    const send = vi.fn(async (_body: PostViewRequestBody, _options: PostViewSendOptions) => null);
+    const auth = { identity: null as string | null };
+    configurePostViewReporter({ send, currentIdentity: () => auth.identity });
+    // Seen before the session was read: held until it is.
+    expect(reportPostView({ postId: 'post-0', surface: 'reel', identity: null })).toBe(true);
+    auth.identity = reader;
+    // The auth provider configures the reporter again as its session changes.
+    configurePostViewReporter({ send, currentIdentity: () => auth.identity });
     expect(reportPostView({ postId: 'post-1', surface: 'reel', identity: reader })).toBe(true);
     await flushPostViews();
-    expect(send).toHaveBeenCalledWith({ views: [{ postId: 'post-1', surface: 'reel' }] });
+    expect(send).toHaveBeenCalledWith(
+      { views: [{ postId: 'post-0', surface: 'reel' }, { postId: 'post-1', surface: 'reel' }] },
+      { identity: reader },
+    );
+
+    reportPostView({ postId: 'post-2', surface: 'feed', identity: reader });
+    await flushPostViewsOfLeavingIdentity({ identity: reader, accessToken: 'outgoing-token' });
+    expect(send).toHaveBeenLastCalledWith(
+      { views: [{ postId: 'post-2', surface: 'feed' }] },
+      { identity: reader, accessToken: 'outgoing-token' },
+    );
   });
 });

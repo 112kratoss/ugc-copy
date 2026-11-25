@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AccessibilityInfo, ActivityIndicator, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PostViewCountChip, TILE_VIEW_COUNT_CLEARANCE, TILE_VIEW_COUNT_INSET, withSpokenViewCount } from '@/components/post-view-count';
+import { PostViewCountChip, TILE_VIEW_COUNT_INSET, tileViewCountClearance, withSpokenViewCount } from '@/components/post-view-count';
 import { ShowcaseMediaPreview } from '@/components/showcase-media-preview';
 import { TEXT_POST_PLATE_FEATURE_LINE_HEIGHT, TextPostPlate } from '@/components/text-post-plate';
 import { buildTextPostPlate, textPostPlateBodyLines, textPostPlateUnderCaption } from '@/lib/text-post-plate-view-model';
@@ -57,6 +57,7 @@ import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { BackGlyph, ShareGlyph } from '@/lib/platform-glyphs';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { getShowcasePreviewMediaItems, hasShowcasePreviewMedia, hasShowcaseVideoWithoutPreview } from '@/lib/showcase-media';
+import { SHOWCASE_MEDIA_DOTS_BOTTOM, SHOWCASE_MEDIA_DOTS_HEIGHT } from '@/lib/showcase-media-dots';
 import { shareLinkContent } from '@/lib/share-sheet-content';
 import { getShowcasePostDisplayText, isTextOnlyShowcasePost } from '@/lib/showcase-display';
 import { createShowcaseFeedViewerQueryKey, createShowcasePostQueryKey } from '@/lib/showcase-feed-query';
@@ -856,7 +857,9 @@ function CreatorStats({ stats }: { stats: CreatorProfileStats }) {
           accessibilityLabel={stat.spoken}
           style={{ flex: 1, minWidth: 0, alignItems: 'center', gap: 3, borderLeftWidth: index ? 1 : 0, borderLeftColor: theme.colors.borderSubtle, paddingHorizontal: 2 }}
         >
-          <Text style={{ color: theme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
+          {/* One line whatever the text size: five columns share the width, and a
+              figure like "123.4K" broke in two at the largest sizes (review of #929). */}
+          <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6} style={{ color: theme.colors.text, fontSize: 18, lineHeight: 22, fontWeight: '800', fontVariant: ['tabular-nums'] }}>{stat.value}</Text>
           <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} style={{ color: theme.colors.muted, ...appTheme.type.caption }}>{stat.label}</Text>
         </View>
       ))}
@@ -902,6 +905,14 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
   const open = () => zoomSource.capture(onPress);
   // The post's views, bottom left on the picture (post view counts): none at 0.
   const viewLabels = postViewCountLabels(item);
+  // Clear of a written post's last line at any text size, and above a
+  // carousel's page dots, which a row of five reached (review of #929).
+  const { fontScale } = useWindowDimensions();
+  const viewCountClearance = tileViewCountClearance(fontScale);
+  const showsPageDots = !isTextPost && hasShowcasePreviewMedia(item) && tileMediaItems.length > 1;
+  const viewCountInset = showsPageDots
+    ? SHOWCASE_MEDIA_DOTS_BOTTOM + SHOWCASE_MEDIA_DOTS_HEIGHT + 6
+    : TILE_VIEW_COUNT_INSET;
 
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={withSpokenViewCount(`Open ${item.title || 'creator post'}`, viewLabels)} onPress={open} onPressIn={zoomSource.prepare} style={({ pressed }) => ({ width, opacity: pressed ? appTheme.opacity.pressed : 1 })}>
@@ -918,11 +929,11 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
               // (it sat on the tile's own glyph, which is gone: the plate says "text"),
               // and ending clear of the views' chip when there is one.
               paddingTop={item.asset ? TEXT_PLATE_TOP_UNDER_CHIP : undefined}
-              paddingBottom={viewLabels ? TILE_VIEW_COUNT_CLEARANCE : undefined}
+              paddingBottom={viewLabels ? viewCountClearance : undefined}
               bodyLines={textPostPlateBodyLines({
                 height,
                 paddingTop: item.asset ? TEXT_PLATE_TOP_UNDER_CHIP : 14,
-                paddingBottom: viewLabels ? TILE_VIEW_COUNT_CLEARANCE : 14,
+                paddingBottom: viewLabels ? viewCountClearance : 14,
                 titleHeight: 0,
                 lineHeight: TEXT_POST_PLATE_FEATURE_LINE_HEIGHT,
               })}
@@ -947,7 +958,7 @@ function CreatorPostTile({ activeVideoPreview, item, onPress, width }: { activeV
             </View>
           ) : null}
           {viewLabels ? (
-            <View pointerEvents="none" style={{ position: 'absolute', left: TILE_VIEW_COUNT_INSET, bottom: TILE_VIEW_COUNT_INSET }}>
+            <View pointerEvents="none" style={{ position: 'absolute', left: TILE_VIEW_COUNT_INSET, bottom: viewCountInset }}>
               <PostViewCountChip labels={viewLabels} />
             </View>
           ) : null}
