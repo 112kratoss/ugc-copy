@@ -20,7 +20,10 @@ import switchOffPost from './fixtures/upload-post-recipe-without-remix.json';
 // In `next dev` a page compiles on its first request.
 const COLD_PAGE = { timeout: 45_000 };
 
-test.describe.configure({ timeout: 240_000 });
+// Each test draws two posts, with up to 145 s of waits on each (the visitor's three cold-page waits
+// and one of 10 s: 290 s at worst), after any recipe reads its setup makes, so a missing heading
+// fails its own wait, not the test's timeout.
+test.describe.configure({ timeout: 300_000 });
 
 type UploadPost = typeof switchOffPost;
 
@@ -301,9 +304,14 @@ test("the posts' creator is offered no Remix on them, nor told of one by their o
     const path = `/showcase/${post.post.id}`;
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1, name: post.post.title })).toBeVisible(COLD_PAGE);
-    // Their own read has landed: the recipe reads as theirs, open.
+    // The recipe reads as theirs from the server's HTML on ("Your recipe", owner-first-paint.ts), so
+    // that says nothing of the page's script. Its References come only with their own read of it,
+    // which the page sends once its script has loaded and knows the session, so that wait holds the
+    // page's whole start in the browser and gets the cold page's time: on CI on 2026-11-25 the
+    // page's late chunks (the Supabase client, the account) were still unanswered ten seconds after
+    // "Your recipe" showed, the read never went out, and a 10 s wait failed with no References drawn.
     await expect(page.locator('#recipe').getByText('Your recipe', { exact: true })).toBeVisible(COLD_PAGE);
-    await expect(page.locator('#recipe').getByRole('heading', { level: 3, name: 'References' })).toBeVisible();
+    await expect(page.locator('#recipe').getByRole('heading', { level: 3, name: 'References' })).toBeVisible(COLD_PAGE);
 
     expectNoRemixInAnyFrame(await recordedFrames(page, path), name);
   }

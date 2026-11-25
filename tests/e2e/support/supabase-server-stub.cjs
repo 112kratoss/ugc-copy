@@ -526,6 +526,16 @@ const READS = [
     answer: ({ wantsObject }) => json(wantsObject ? uploadRecipePost.bundle : [uploadRecipePost.bundle], { 'content-range': '0-0/1' }),
   },
   {
+    // ...with no revision since it went up (loadLatestContentRevisionTimes), so "Updated" is the
+    // row's own time. Unanswered, this read failed on every render of the post's page and of its
+    // recipe's route, and its logged error came back in the browser's console, where the dev
+    // overlay sends it to the server to look up its stack (2026-11-25).
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundle_revisions',
+    filters: { bundle_id: `in.(${uploadRecipePost.bundle.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
+  },
+  {
     // hydrateBundleRows: the recipe's seller (loadProfileMap)...
     methods: ['GET'],
     path: '/rest/v1/profiles',
@@ -569,6 +579,13 @@ const READS = [
       wantsObject ? uploadRecipeSwitchOnPost.bundle : [uploadRecipeSwitchOnPost.bundle],
       { 'content-range': '0-0/1' },
     ),
+  },
+  {
+    // ...with no revision since it went up, as the first's.
+    methods: ['GET'],
+    path: '/rest/v1/post_resource_bundle_revisions',
+    filters: { bundle_id: `in.(${uploadRecipeSwitchOnPost.bundle.id})` },
+    answer: () => json([], { 'content-range': '*/0' }),
   },
   {
     // ...and the post it belongs to (loadLinkedPostMap; loadNsfwPostIds when the recipe is read
