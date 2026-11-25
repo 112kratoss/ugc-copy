@@ -5,18 +5,19 @@ import { RouterContext } from 'next/dist/shared/lib/router-context.shared-runtim
 import type { NextRouter } from 'next/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { REMIX_RECIPE_MUST_BE_PAID } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
+import { describeUncopiedCreationInputs, REMIX_RECIPE_MUST_BE_PAID } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
 import NewPostClient from '@/app/post/new/NewPostClient';
 import type { EditablePostDraft } from '@/app/post/new/post-editor-types';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
+import { forgetStudioReturnedPost, readStudioReturnedPost } from '@/lib/creations-workspace-cache';
 import { RECIPE_TITLE_TOO_SHORT_HINT, RECIPE_TITLE_TOO_SHORT_REFUSAL } from '@/lib/marketplace-trust';
 import { TITLE_MAX_LENGTH } from '@/lib/posts-server';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 
 // One router object for every render: the composer's effects list the router
 // as a dependency, and a fresh object per render reruns them on every render.
-const routerMock = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+const routerMock = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }));
 const mockPush = routerMock.push;
 const fetchMock = vi.fn();
 const temporaryUploadMock = vi.hoisted(() => vi.fn());
@@ -227,6 +228,8 @@ describe('NewPostClient', () => {
   beforeEach(() => {
     mockPush.mockReset();
     routerMock.replace.mockReset();
+    routerMock.back.mockReset();
+    forgetStudioReturnedPost();
     sharePublicGenerationMock.mockReset();
     fetchMock.mockReset();
     loadOwnProfileMock.mockReset();
@@ -560,6 +563,31 @@ describe('NewPostClient', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(priceInput).not.toHaveFocus();
+  });
+
+  // A save goes back to Studio, and a free recipe has no price to focus: the
+  // note promised one on every recipe Studio opened.
+  it('says that saving a recipe opened from Studio goes back there', () => {
+    searchParamsState.value = new URLSearchParams('resourceMode=free&focus=price&from=creations');
+    render(<NewPostClient initialPost={createLegacyPrivateResourcePost()} />);
+
+    expect(screen.getByText(/^You came from My Studio to manage this post's recipe\. Saving takes you back there\.$/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/price field is focused/i)).not.toBeInTheDocument();
+  });
+
+  // A recipe taken off while people have it is retired: the post has none,
+  // and the editor reads it so. Studio's link still named its old mode
+  // (`resourceMode=free`), which chose Free again over the saved No recipe,
+  // so the removal looked undone and the next save would bring a recipe back.
+  it('opens an edit on the recipe it has saved, whatever mode its link names', () => {
+    searchParamsState.value = new URLSearchParams('resourceMode=free&focus=price&from=creations');
+    const post = createLegacyPrivateResourcePost();
+    post.resourceBundle = { accessMode: 'none' };
+    render(<NewPostClient initialPost={post} />);
+
+    expect(screen.getByRole('radio', { name: /no recipe/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /free recipe/i })).not.toBeChecked();
   });
 
   // Saving an empty card produced a row the publish gate silently discarded,
@@ -1349,8 +1377,9 @@ describe('NewPostClient', () => {
       }),
     });
 
+    // A paid recipe with nothing in it, as Studio's Manage recipe opens it.
     const post = createGenerationRecipePost();
-    post.resourceBundle = { accessMode: 'none' };
+    post.resourceBundle = { accessMode: 'paid', priceUsdCents: 500, previewText: '', resources: { items: [] } };
 
     render(<NewPostClient initialPost={post} />);
 
@@ -3184,8 +3213,12 @@ describe('NewPostClient', () => {
           mediaUrl: null,
           mediaKind: null,
           archivedAt: null,
+          // Manage recipe names the mode the recipe has.
           resourceBundle: {
-            accessMode: 'none',
+            accessMode: 'paid',
+            priceUsdCents: 500,
+            previewText: 'A private recipe preview.',
+            resources: { items: [] },
           },
           hasPaidOrders: false,
         }}
@@ -5420,6 +5453,207 @@ describe('NewPostClient', () => {
       fireEvent.click(saveButtons()[0]);
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
       expect(JSON.parse(String((fetchMock.mock.calls[2][1] as { body: string }).body))).toMatchObject({ isNsfw: true });
+    });
+  });
+
+  // An edit opened from a place that names itself goes back there once saved,
+  // as the app's does; one opened with no origin stays with its saved panel.
+  describe('where a saved edit goes', () => {
+    const STUDIO_VIEW = '/creations?view=posts&visibility=private';
+    const toastMessages = () => readFeedbackSnapshot().toasts.map((toast) => toast.message);
+
+    function createPrivatePost(): EditablePostDraft {
+      return {
+        id: 'post-studio',
+        generationId: null,
+        title: 'A private post with a real title',
+        description: '',
+        prompt: '',
+        body: 'A private text post with its own caption.',
+        visibility: 'private',
+        category: 'text',
+        postFormat: 'text',
+        sourceKind: 'manual',
+        sourceTool: null,
+        mediaUrl: null,
+        mediaKind: null,
+        archivedAt: null,
+        resourceBundle: { accessMode: 'none' },
+        hasPaidOrders: false,
+      };
+    }
+
+    const answerSave = () => enqueueResponse({
+      ok: true,
+      json: async () => ({ success: true, postId: 'post-studio', visibility: 'private' }),
+    });
+
+    /** Edits the caption, so the leave guard is up, then presses Save changes. */
+    const editAndSave = () => {
+      fireEvent.change(screen.getByRole('textbox', { name: /^post text/i }), {
+        target: { value: 'A private text post with an edited caption.' },
+      });
+      fireEvent.click(screen.getAllByRole('button', { name: /^save changes/i })[0]);
+    };
+
+    // jsdom has no Navigation API: the tab's entries as a browser lists them,
+    // all of this document's.
+    function stubTabHistory(paths: string[]) {
+      const entries = paths.map((path, index) => ({
+        url: new URL(path, window.location.origin).href,
+        index,
+        sameDocument: true,
+      }));
+      Object.defineProperty(window, 'navigation', {
+        configurable: true,
+        value: { currentEntry: entries[entries.length - 1], entries: () => entries },
+      });
+    }
+
+    beforeEach(() => {
+      resetFeedbackState();
+    });
+
+    afterEach(() => {
+      delete (window as { navigation?: unknown }).navigation;
+    });
+
+    it('goes back to the Studio view it was opened from, and names the post for Studio to ring', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      answerSave();
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(STUDIO_VIEW));
+      expect(routerMock.back).not.toHaveBeenCalled();
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(readStudioReturnedPost()).toBe('post-studio');
+      expect(toastMessages()).toEqual(['Changes saved.']);
+      // The page is on its way out: no panel to scroll to.
+      expect(screen.queryByText('Changes saved')).not.toBeInTheDocument();
+    });
+
+    // Back, not a second entry for the same view: Back from Studio then
+    // leaves Studio, as the app's editor leaves its stack.
+    it('steps back onto Studio when that view is the entry before', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      stubTabHistory([STUDIO_VIEW, `/post/post-studio/edit?from=creations&returnTo=${encodeURIComponent(STUDIO_VIEW)}`]);
+      answerSave();
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.back).toHaveBeenCalledTimes(1));
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(readStudioReturnedPost()).toBe('post-studio');
+    });
+
+    // Studio opened as the run an alert named, with its defaults spelled out:
+    // the same view by Studio's reading, so Back, not a second Studio.
+    it('steps back onto a Studio entry that names the same view another way', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      stubTabHistory([
+        '/creations?visibility=private&view=posts&media=all&generation=gen-1',
+        `/post/post-studio/edit?from=creations&returnTo=${encodeURIComponent(STUDIO_VIEW)}`,
+      ]);
+      answerSave();
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.back).toHaveBeenCalledTimes(1));
+      expect(routerMock.replace).not.toHaveBeenCalled();
+    });
+
+    it('goes back to Recipe sales, and leaves Studio nothing to ring', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'seller', returnTo: '/marketplace/sell' });
+      answerSave();
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/marketplace/sell'));
+      expect(readStudioReturnedPost()).toBeNull();
+      expect(toastMessages()).toEqual(['Changes saved.']);
+    });
+
+    // The post page's Edit names no origin: Studio would be a guess.
+    it('stays with its saved panel and a way back when it was opened with no origin', async () => {
+      answerSave();
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      const saved = await screen.findByText('Changes saved');
+      const panel = saved.closest('[tabindex="-1"]') as HTMLElement;
+      expect(within(panel).getByRole('link', { name: 'Back to studio' })).toHaveAttribute('href', '/creations?view=posts');
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(routerMock.back).not.toHaveBeenCalled();
+      expect(readStudioReturnedPost()).toBeNull();
+      expect(toastMessages()).toEqual([]);
+    });
+
+    // A fix typed while the save was on its way was not sent: leaving would
+    // drop it without the leave guard's question (#930's review).
+    it('stays with its saved panel when something was typed while the save was on its way', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      let answer: (() => void) | undefined;
+      enqueueResponse({
+        ok: true,
+        json: () => new Promise((resolve) => {
+          answer = () => resolve({ success: true, postId: 'post-studio', visibility: 'private' });
+        }),
+      });
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+      await waitFor(() => expect(answer).toBeDefined());
+      fireEvent.change(screen.getByRole('textbox', { name: /^title/i }), {
+        target: { value: 'A private post with a fixed title' },
+      });
+      await act(async () => {
+        answer?.();
+      });
+
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(routerMock.back).not.toHaveBeenCalled();
+      expect(readStudioReturnedPost()).toBeNull();
+      expect(screen.getByRole('textbox', { name: /^title/i })).toHaveValue('A private post with a fixed title');
+    });
+
+    // Drawn under the recipe on a page that stays: one that leaves says it on
+    // the way, as a new post's publish does (#930's review).
+    it('says on its way back that inputs could not be copied into the recipe', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      enqueueResponse({
+        ok: true,
+        json: async () => ({ success: true, postId: 'post-studio', visibility: 'private', referencesNotCopied: 2 }),
+      });
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(STUDIO_VIEW));
+      expect(toastMessages()).toEqual(['Changes saved.', describeUncopiedCreationInputs(2)]);
+    });
+
+    it('stays where it is when the save is refused', async () => {
+      searchParamsState.value = new URLSearchParams({ from: 'creations', returnTo: STUDIO_VIEW });
+      enqueueResponse({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: 'The post could not be saved.' }),
+      });
+      render(<NewPostClient initialPost={createPrivatePost()} />);
+
+      editAndSave();
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('The post could not be saved.');
+      expect(routerMock.replace).not.toHaveBeenCalled();
+      expect(routerMock.back).not.toHaveBeenCalled();
+      expect(readStudioReturnedPost()).toBeNull();
     });
   });
 

@@ -855,7 +855,8 @@ describe('listOwnerGenerationsForRoute', () => {
       posts: [post('post-sold', 'sold'), post('post-retired', 'retired'), post('post-plain', 'plain')],
       post_resource_bundles: [
         { post_id: 'post-sold', access_mode: 'paid', status: 'published', price_usd_cents: 900, retired_at: null },
-        // Removed by its creator after a sale: kept for the buyers as a draft.
+        // Removed by its creator after a sale: kept for the buyers as a draft,
+        // and the post has none, as Studio's post list and the editor read it.
         { post_id: 'post-retired', access_mode: 'paid', status: 'draft', price_usd_cents: 500, retired_at: '2026-10-02T00:00:00.000Z' },
         { post_id: 'post-elsewhere', access_mode: 'free', status: 'published', price_usd_cents: 0, retired_at: null },
       ],
@@ -867,16 +868,12 @@ describe('listOwnerGenerationsForRoute', () => {
         linked_post_id: 'post-sold',
         linked_post_bundle: { accessMode: 'paid', status: 'published', priceUsdCents: 900 },
       },
-      {
-        id: 'retired',
-        linked_post_id: 'post-retired',
-        linked_post_bundle: { accessMode: 'paid', status: 'draft', priceUsdCents: 500 },
-      },
+      { id: 'retired', linked_post_id: 'post-retired', linked_post_bundle: null },
       { id: 'plain', linked_post_id: 'post-plain', linked_post_bundle: null },
       { id: 'unposted', linked_post_id: null, linked_post_bundle: null },
     ]);
     expect(reads.filter((read) => read.table === 'post_resource_bundles')).toEqual([
-      { table: 'post_resource_bundles', columns: ['post_id', 'access_mode', 'status', 'price_usd_cents'] },
+      { table: 'post_resource_bundles', columns: ['post_id', 'access_mode', 'status', 'price_usd_cents', 'retired_at'] },
     ]);
   });
 

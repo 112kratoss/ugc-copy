@@ -11,6 +11,7 @@ import {
   type GenerationInputMediaItem,
 } from '@/lib/generation-input-media';
 import { buildGenerationPaywallPrefill } from '@/lib/generation-paywall';
+import { isMissingPostResourceRetirementColumnError } from '@/lib/posts-server';
 import { generationInputOrigin, loadSourceGenerationOwners, needsSourceGenerationOwner } from '@/lib/generation-input-origin';
 import { loadRecipePassOnFolders } from '@/lib/recipe-pass-on';
 import { isRemixRecipeMode } from '../../ugc-mobile/lib/creation-recipe/creation-recipe';
@@ -100,6 +101,7 @@ type LinkedPostBundleRow = {
   access_mode: 'free' | 'paid';
   status: 'draft' | 'published';
   price_usd_cents: number;
+  retired_at?: string | null;
 };
 
 /** The recipe a linked post sells, summarized as the owner's post list summarizes it. */
@@ -402,8 +404,9 @@ async function loadLinkedPostMap(params: {
  * it from the owner's first posts page alone: a post older than that page
  * would read as having no recipe. `post_id` is unique on the table, so a post
  * has one bundle or none. A sold bundle its creator removed stays as a draft
- * row (`retired_at` set) and reads as a draft here, as it does in the owner's
- * post list, so a card says the same whichever list found its post.
+ * row (`retired_at` set) for its buyers, and the post has no recipe: it reads
+ * as none here, as Studio reads the owner's post list and the editor its post,
+ * so a card says the same whichever list found its post.
  */
 async function loadLinkedPostBundleMap(params: {
   supabase: OwnerGenerationsRouteClient;
@@ -414,17 +417,23 @@ async function loadLinkedPostBundleMap(params: {
     return bundleMap;
   }
 
-  const { data, error } = await params.supabase
+  const loadBundles = (columns: string) => params.supabase
     .from('post_resource_bundles')
-    .select('post_id, access_mode, status, price_usd_cents')
+    .select(columns)
     .in('post_id', params.postIds);
+  let { data, error } = await loadBundles('post_id, access_mode, status, price_usd_cents, retired_at');
+  // A database that predates the bundle-revisions migration has no retired_at.
+  if (isMissingPostResourceRetirementColumnError(error)) {
+    ({ data, error } = await loadBundles('post_id, access_mode, status, price_usd_cents'));
+  }
   if (error) {
     // Degrades like the linked posts it describes: the library still loads.
     logBackendError('failed_to_load_linked_post_bundles_for_generations', { error });
     return bundleMap;
   }
 
-  for (const row of (data ?? []) as LinkedPostBundleRow[]) {
+  for (const row of (data ?? []) as unknown as LinkedPostBundleRow[]) {
+    if (row.retired_at) continue;
     bundleMap.set(row.post_id, {
       accessMode: row.access_mode,
       status: row.status,

@@ -7,6 +7,7 @@ import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import CreationsPage from '@/app/creations/page';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
+import { forgetStudioReturnedPost, rememberStudioReturnedPost } from '@/lib/creations-workspace-cache';
 
 const navigationState = vi.hoisted(() => {
   const push = vi.fn();
@@ -142,6 +143,7 @@ describe('CreationsPage', () => {
   beforeEach(() => {
     navigationState.push.mockClear();
     navigationState.searchParams = new URLSearchParams();
+    forgetStudioReturnedPost();
     getSessionMock.mockReset();
     getSessionMock.mockResolvedValue({ data: { session: null } });
     temporaryUploadMock.mockReset();
@@ -2243,10 +2245,11 @@ describe('CreationsPage', () => {
 
     render(<CreationsPage />);
 
+    // Its way back names the view it was opened from, as Publish's does.
     const addRecipeLink = await screen.findByRole('link', { name: /^add recipe$/i });
     expect(addRecipeLink).toHaveAttribute(
       'href',
-      '/post/post-linked/edit?recipe=add&from=creations#recipe',
+      '/post/post-linked/edit?recipe=add&from=creations&returnTo=%2Fcreations#recipe',
     );
     expect(screen.queryByRole('button', { name: /^add recipe$/i })).not.toBeInTheDocument();
     // No detail fetch: the link needs nothing beyond the linked post id.
@@ -2257,7 +2260,7 @@ describe('CreationsPage', () => {
   });
 
   it('links a Post Library Manage recipe action to the post editor for a generation-backed post', async () => {
-    navigationState.searchParams = new URLSearchParams('view=posts');
+    navigationState.searchParams = new URLSearchParams('view=posts&visibility=public');
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
 
@@ -2350,21 +2353,246 @@ describe('CreationsPage', () => {
     render(<CreationsPage />);
 
     // The stored recipe is free; the editor link carries that so it opens on
-    // the saved access mode rather than a Paid default.
+    // the saved access mode rather than a Paid default. Its way back is the
+    // view and the filter it was opened from: a save goes back there.
     const manageRecipeLink = await screen.findByRole('link', { name: /^manage recipe$/i });
     expect(manageRecipeLink).toHaveAttribute(
       'href',
-      '/post/post-bundled/edit?resourceMode=free&focus=price&from=creations#recipe',
+      '/post/post-bundled/edit?resourceMode=free&focus=price&from=creations&returnTo=%2Fcreations%3Fview%3Dposts%26visibility%3Dpublic#recipe',
     );
     expect(screen.queryByRole('button', { name: /^manage recipe$/i })).not.toBeInTheDocument();
 
     // An uploaded post with no recipe gets the same entry point.
     expect(screen.getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
       'href',
-      '/post/post-uploaded/edit?recipe=add&from=creations#recipe',
+      '/post/post-uploaded/edit?recipe=add&from=creations&returnTo=%2Fcreations%3Fview%3Dposts%26visibility%3Dpublic#recipe',
     );
     expect(navigationState.push).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalledWith('/api/showcase/publish', expect.anything());
+  });
+
+  describe('back from a saved edit', () => {
+    const POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0';
+    const ownerPost = (id: string, title: string) => ({
+      id,
+      generationId: null,
+      visibility: 'private',
+      archivedAt: null,
+      mediaUrl: null,
+      mediaKind: null,
+      title,
+      description: '',
+      prompt: '',
+      body: `${title}, as a text post.`,
+      category: 'text',
+      postFormat: 'text',
+      sourceKind: 'manual',
+      sourceTool: null,
+      sourceLabel: null,
+      createdAt: '2026-06-01T10:00:00.000Z',
+      updatedAt: '2026-06-01T10:00:00.000Z',
+      publicPath: null,
+      ownerPath: `/post/${id}/edit`,
+      resourcePath: null,
+      canShare: false,
+      bundle: null,
+    });
+
+    // The editor names the post it has just saved on its way back here: its
+    // card is ringed and brought into view, as an alert's run is, and only on
+    // that return.
+    it('rings and brings into view the post an edit has just saved, once', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      navigationState.searchParams = new URLSearchParams('view=posts&visibility=private');
+      const scrollIntoView = vi.fn();
+      const ownScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
+      Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: scrollIntoView });
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({ generations: [] }))
+          : url === POSTS_PAGE_URL
+            ? Promise.resolve(jsonResponse({
+              posts: [ownerPost('post-other', 'Another post'), ownerPost('post-saved', 'The saved post')],
+            }))
+            : null
+      ));
+      rememberStudioReturnedPost('post-saved');
+
+      try {
+        const { unmount } = render(<CreationsPage />);
+
+        const card = await screen.findByTestId('post-card-post-saved');
+        expect(card).toHaveAttribute('data-highlighted', 'true');
+        expect(screen.getByTestId('post-card-post-other')).not.toHaveAttribute('data-highlighted');
+        await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+        expect(scrollIntoView.mock.contexts[0]).toBe(card);
+
+        await act(async () => {
+          vi.advanceTimersByTime(4000);
+        });
+        expect(card).not.toHaveAttribute('data-highlighted');
+
+        // Studio drawn again later rings nothing.
+        unmount();
+        render(<CreationsPage />);
+        expect(await screen.findByTestId('post-card-post-saved')).not.toHaveAttribute('data-highlighted');
+        expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      } finally {
+        if (ownScrollIntoView) {
+          Object.defineProperty(Element.prototype, 'scrollIntoView', ownScrollIntoView);
+        } else {
+          delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+        }
+      }
+    });
+
+    // Creations, where Manage recipe sits on the creation's own card.
+    it('rings the creation whose post an edit has just saved', async () => {
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({
+            generations: [
+              makeGeneration({ id: 'gen-unlinked', title: 'A creation with no post' }),
+              makeGeneration({
+                id: 'gen-linked',
+                title: 'Linked generated post',
+                linked_post_id: 'post-linked',
+                linked_post_title: 'Linked generated post',
+                linked_post_visibility: 'private',
+                linked_post_archived_at: null,
+              }),
+            ],
+          }))
+          : null
+      ));
+      rememberStudioReturnedPost('post-linked');
+
+      render(<CreationsPage />);
+
+      expect(await screen.findByTestId('creation-card-gen-linked')).toHaveAttribute('data-highlighted', 'true');
+      expect(screen.getByTestId('creation-card-gen-unlinked')).not.toHaveAttribute('data-highlighted');
+    });
+
+    // A private post opens in its editor, which goes back to this view once
+    // saved, as every other editor link here does (#930's review).
+    it('opens a private post’s editor from its creation with the way back to Studio', async () => {
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({
+            generations: [makeGeneration({
+              id: 'gen-linked',
+              title: 'Linked generated post',
+              linked_post_id: 'post-linked',
+              linked_post_title: 'Linked generated post',
+              linked_post_visibility: 'private',
+              linked_post_archived_at: null,
+            })],
+          }))
+          : null
+      ));
+
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-linked');
+      const openPost = within(card).getByRole('link', { name: /open post|linked generated post/i });
+      const href = new URL(openPost.getAttribute('href') ?? '', 'https://magicbooklet.com');
+      expect(href.pathname).toBe('/post/post-linked/edit');
+      expect(href.searchParams.get('from')).toBe('creations');
+      expect(href.searchParams.get('returnTo')).toBe('/creations');
+    });
+  });
+
+  // A recipe taken off while people had it is retired: they keep it, but the
+  // post has none, as the editor and Recipe sales read it. Studio drew it as
+  // a draft with Manage recipe, whose link reopened the editor on its old mode.
+  describe('a recipe taken off while people have it', () => {
+    const POSTS_PAGE_URL = '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0';
+    const postWithRetiredRecipe = {
+      id: 'post-retired',
+      generationId: 'gen-retired',
+      visibility: 'public',
+      archivedAt: null,
+      mediaUrl: null,
+      mediaKind: null,
+      title: 'A post whose recipe was taken off',
+      description: '',
+      prompt: '',
+      body: 'Its recipe was taken off after three people unlocked it.',
+      category: 'text',
+      postFormat: 'text',
+      sourceKind: 'magicbooklet',
+      sourceTool: 'magicbooklet',
+      sourceLabel: 'magicbooklet',
+      createdAt: '2026-06-01T10:00:00.000Z',
+      updatedAt: '2026-06-01T10:00:00.000Z',
+      publicPath: '/showcase/post-retired',
+      ownerPath: '/post/post-retired/edit',
+      resourcePath: '/showcase/post-retired#recipe',
+      canShare: true,
+      bundle: {
+        id: 'bundle-retired',
+        accessMode: 'free',
+        status: 'draft',
+        priceUsdCents: 0,
+        salesCount: 0,
+        freeUnlockCount: 3,
+        earningsUsdCents: 0,
+        resourceKinds: ['prompt', 'notes'],
+        retiredAt: '2026-11-03T00:00:00.000Z',
+      },
+    };
+
+    it('shows the post with no recipe, and Add recipe, in Post Library', async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({ generations: [] }))
+          : url === POSTS_PAGE_URL
+            ? Promise.resolve(jsonResponse({ posts: [postWithRetiredRecipe] }))
+            : null
+      ));
+
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('post-card-post-retired');
+      expect(within(card).getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
+        'href',
+        '/post/post-retired/edit?recipe=add&from=creations&returnTo=%2Fcreations%3Fview%3Dposts#recipe',
+      );
+      expect(within(card).queryByRole('link', { name: /^manage recipe$/i })).not.toBeInTheDocument();
+      expect(within(card).queryByText('Recipe draft')).not.toBeInTheDocument();
+      expect(within(card).getByText('No recipe')).toBeInTheDocument();
+    });
+
+    it('offers Add recipe on the creation the post was made from', async () => {
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL
+          ? Promise.resolve(jsonResponse({
+            generations: [makeGeneration({
+              id: 'gen-retired',
+              title: 'A post whose recipe was taken off',
+              linked_post_id: 'post-retired',
+              linked_post_title: 'A post whose recipe was taken off',
+              linked_post_visibility: 'public',
+              linked_post_archived_at: null,
+              // As a server from before #930's review sent the retired row: a draft.
+              linked_post_bundle: { accessMode: 'free', status: 'draft', priceUsdCents: 0 },
+            })],
+          }))
+          : url === POSTS_PAGE_URL
+            ? Promise.resolve(jsonResponse({ posts: [postWithRetiredRecipe] }))
+            : null
+      ));
+
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-retired');
+      await waitFor(() => expect(within(card).getByRole('link', { name: /^add recipe$/i })).toHaveAttribute(
+        'href',
+        '/post/post-retired/edit?recipe=add&from=creations&returnTo=%2Fcreations#recipe',
+      ));
+      expect(within(card).queryByRole('link', { name: /^manage recipe$/i })).not.toBeInTheDocument();
+    });
   });
 
   // A free unlock stopped counting as a sale on 2026-10-17 (decision 6): the

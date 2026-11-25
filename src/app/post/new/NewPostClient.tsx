@@ -68,7 +68,13 @@ import {
 } from '@/lib/post-video-limits';
 import { buildShowcaseDetailPath, getCurrentInternalPath, getSafeInternalReturnPath } from '@/lib/share';
 import { sharePublicGeneration } from '@/lib/share-client';
-import { forgetCreationsWorkspaceCache } from '@/lib/creations-workspace-cache';
+import {
+  forgetCreationsWorkspaceCache,
+  isSameStudioView,
+  isStudioPath,
+  rememberStudioReturnedPost,
+} from '@/lib/creations-workspace-cache';
+import { isPreviousHistoryEntry } from '@/lib/previous-history-entry';
 import { pushToast } from '@/components/feedback-state';
 import { trackProductEvent } from '@/lib/product-analytics';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
@@ -918,6 +924,10 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const isGeneratedPaywallIntent = publishIntent === 'paid-generation' && Boolean(generationId);
   const isCreationPaywallManagementIntent =
     isEditMode && entrySurface === 'creations' && requestedFocusTarget === 'price';
+  // An edit opened from a place that names itself (Studio, Recipe sales, a
+  // template run) goes back there once saved, as the app's edit does. One
+  // opened with neither, as the post page's Edit is, stays with its saved panel.
+  const returnsAfterEdit = isEditMode && Boolean(entrySurface || searchParams.get('returnTo'));
   // "Add a recipe" (`recipe=add`, A-F17), from Studio, Recipe sales or
   // anywhere else that sends it: the post's recipe section with no mode
   // chosen and nothing focused, not "Manage recipe"'s Paid and price.
@@ -934,11 +944,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     initialPost?.category && initialPost.category !== 'text'
       ? initialPost.category
       : 'image';
-  // A creation's new post starts with a free recipe, its exact prompt in it
-  // (owner, 2026-11-03); a template result's gives way to none once the
-  // creation says so. An upload starts with none, and a link's mode wins.
+  // An edit opens on the recipe the post has. Manage recipe's `resourceMode`
+  // only repeats it, and a link from before the recipe was taken off named
+  // one the post no longer has: chosen again, it looked as if the removal had
+  // not saved, and the next save put a recipe back. A new post starts from the
+  // link's mode; without one, a creation's new post starts with a free recipe,
+  // its exact prompt in it (owner, 2026-11-03), and a template result's gives
+  // way to none once the creation says so. An upload starts with none.
   const initialResourceAccessMode = normalizePostResourceBundleAccessMode(
-    requestedResourceMode ?? (!isEditMode && generationId ? 'free' : initialBundle.accessMode),
+    isEditMode
+      ? initialBundle.accessMode
+      : requestedResourceMode ?? (generationId ? 'free' : initialBundle.accessMode),
   );
 
   const [proofMode, setProofMode] = useState<ProofMode>(() => getInitialProofMode(initialPost));
@@ -1133,6 +1149,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   // leaves a mode the creator chose alone (#677's review).
   const startingModeDecidedForRef = useRef<string | null>(null);
   const [createdPost, setCreatedPost] = useState<CreatedPostState | null>(null);
+  // A saved edit on its way back to where it was opened from draws no saved
+  // panel to scroll to.
+  const [isLeavingAfterSave, setIsLeavingAfterSave] = useState(false);
   const [prefilledGeneration, setPrefilledGeneration] = useState<GenerationDraft | null>(() =>
     initialPost?.generationId
       ? {
@@ -1398,6 +1417,20 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     () => !isSameComposerSnapshot(composerSnapshot, savedSnapshot),
     [composerSnapshot, savedSnapshot]
   );
+  // The form as last drawn, and as it was drawn once a save began, the press's
+  // own changes in it (a visibility button, Post without recipe). An edit that
+  // differs from the second when the answer comes was typed while the save was
+  // on its way: it is unsaved, and a return after the save would drop it.
+  const composerSnapshotRef = useRef(composerSnapshot);
+  const savingSnapshotRef = useRef<ComposerSnapshot | null>(null);
+  useEffect(() => {
+    composerSnapshotRef.current = composerSnapshot;
+    if (!isSubmitting) {
+      savingSnapshotRef.current = null;
+    } else if (!savingSnapshotRef.current) {
+      savingSnapshotRef.current = composerSnapshot;
+    }
+  }, [composerSnapshot, isSubmitting]);
   // One guard for every way out while there is unsaved work: Back and the
   // phone's back swipe, every link on the page (the shell's, and this page's
   // own Back link), the shell's search, and a reload or a closed tab. Never
@@ -2859,15 +2892,17 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     return uploadResourceFile(file, session.access_token, options);
   };
 
-  // An edit stays on this page once saved. Its panel is drawn at the end of the
-  // form, and the phone bar that pressed save hides itself.
+  // An edit with no origin to go back to stays on this page once saved. Its
+  // panel is drawn at the end of the form, and the phone bar that pressed save
+  // hides itself. One that leaves draws no panel: a smooth scroll started here
+  // would go on over the page it leaves for.
   useEffect(() => {
-    if (!createdPost || !isEditMode) {
+    if (!createdPost || !isEditMode || isLeavingAfterSave) {
       return;
     }
     savedPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     savedPanelRef.current?.focus({ preventScroll: true });
-  }, [createdPost, isEditMode]);
+  }, [createdPost, isEditMode, isLeavingAfterSave]);
 
   const completePublish = (
     nextPost: CreatedPostState,
@@ -2920,6 +2955,34 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     // Through the guard, so no guard entry is left under the post for Back
     // to land on.
     leaveComposer(() => router.replace(nextPath));
+  };
+
+  // A saved edit goes back to where it was opened from: by Back when that page
+  // is the entry before, so the editor leaves history as the app's leaves its
+  // stack, and otherwise in the editor's place. Studio is told which post to
+  // ring. Someone who left while the save was on its way is not taken anywhere.
+  const leaveAfterEdit = (postId: string, referencesNotCopied: number) => {
+    if (!isMountedRef.current) return;
+    setIsLeavingAfterSave(true);
+    if (isStudioPath(backHref)) rememberStudioReturnedPost(postId);
+    pushToast({ tone: 'success', message: 'Changes saved.' });
+    // Drawn under the recipe on a page that stays; this one leaves, so it is
+    // said on the way, as a new post's publish says it.
+    if (referencesNotCopied > 0) {
+      pushToast({ tone: 'info', message: describeUncopiedCreationInputs(referencesNotCopied) });
+    }
+    // The guard starts this a task after the popstate that takes the page off
+    // its guard entry, so Next's restore of the editor's entry cannot drop it
+    // (use-leave-guard.ts, #894).
+    leaveComposer(() => {
+      // Studio by its own reading of its address: an entry that names a
+      // default, or the run an alert opened, is still the view to step back to.
+      if (isPreviousHistoryEntry(backHref, isStudioPath(backHref) ? isSameStudioView : undefined)) {
+        router.back();
+      } else {
+        router.replace(backHref);
+      }
+    });
   };
 
   // A template run's "Publish & share", as the app's: the post's own address,
@@ -3327,7 +3390,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           });
         }
 
-        completePublish({
+        const saved: CreatedPostState = {
           postId: data.postId as string,
           showcasePath: (data.showcasePath as string | null) ?? null,
           ownerPath: (data.ownerPath as string | null) ?? `/post/${data.postId as string}/edit`,
@@ -3337,10 +3400,20 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
           resourceBundleStatus: data.resourceBundleStatus === 'draft' || data.resourceBundleStatus === 'published'
             ? data.resourceBundleStatus
             : null,
-        }, {
+        };
+        const savedReferencesNotCopied = typeof data.referencesNotCopied === 'number' ? data.referencesNotCopied : 0;
+        completePublish(saved, {
           itemsAdded: readRecipeItemsAdded(data.recipeItemsAdded),
-          notCopied: typeof data.referencesNotCopied === 'number' ? data.referencesNotCopied : 0,
+          notCopied: savedReferencesNotCopied,
         });
+        // A form with something typed while the save was on its way stays,
+        // with its saved panel: leaving would drop that without asking.
+        const savingSnapshot = savingSnapshotRef.current;
+        const editedWhileSaving = savingSnapshot !== null
+          && !isSameComposerSnapshot(savingSnapshot, composerSnapshotRef.current);
+        if (returnsAfterEdit && !editedWhileSaving) {
+          leaveAfterEdit(saved.postId, savedReferencesNotCopied);
+        }
 
         return;
       }
@@ -4327,7 +4400,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                   </div>
                 ) : isCreationPaywallManagementIntent ? (
                   <div className="mt-5 rounded-2xl border border-emerald-300/18 bg-black/30 p-4 text-sm leading-6 text-zinc-200">
-                    You came from My Studio to manage this post&apos;s recipe. The access mode is ready here, and the price field is focused so you can adjust the paid layer quickly.
+                    You came from My Studio to manage this post&apos;s recipe. Saving takes you back there.
                   </div>
                 ) : null}
 
@@ -4539,7 +4612,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                 ) : null}
               </div>
 
-              {createdPost ? (
+              {createdPost && !isLeavingAfterSave ? (
                 <div
                   ref={savedPanelRef}
                   tabIndex={-1}
@@ -4572,7 +4645,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                             ? 'Your post is live.'
                             : 'Your post is saved with limited visibility.'}
                   </p>
-                  {primaryPostPath || (createdPostHasResources && createdPost.resourceBundlePath) ? (
+                  {primaryPostPath || (createdPostHasResources && createdPost.resourceBundlePath) || isEditMode ? (
                     <div className="mt-4 flex flex-wrap gap-3">
                       {primaryPostPath ? (
                         <SavedPostLink
@@ -4591,6 +4664,15 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
                         >
                           Open recipe section
                         </SavedPostLink>
+                      ) : null}
+                      {/* The page's own way back is at its top, a whole form away. */}
+                      {isEditMode ? (
+                        <Link
+                          href={backHref}
+                          className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.08] hover:text-white"
+                        >
+                          {backLabel}
+                        </Link>
                       ) : null}
                     </div>
                   ) : null}

@@ -12,7 +12,15 @@ import MediaDetailsPreviewModal, {
 } from '@/components/MediaDetailsPreviewModal';
 import PostVisibilityMenu from '@/components/PostVisibilityMenu';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
-import { getCreationsWorkspaceCacheKey } from '@/lib/creations-workspace-cache';
+import {
+    forgetStudioReturnedPost,
+    getCreationsWorkspaceCacheKey,
+    parseCreationMediaFilter,
+    parseStudioPostFilter,
+    parseStudioWorkspaceView,
+    readStudioReturnedPost,
+    type StudioWorkspaceView,
+} from '@/lib/creations-workspace-cache';
 import SkeletonLoader from '@/components/SkeletonLoader';
 import {
     usePostLifecycle,
@@ -131,7 +139,7 @@ interface Generation {
 }
 
 type FilterType = CreationMediaFilter;
-type WorkspaceView = 'creations' | 'posts' | 'unlocks';
+type WorkspaceView = StudioWorkspaceView;
 type OwnerPostVisibilityFilter = StudioPostFilter;
 
 interface OwnerPost {
@@ -172,6 +180,8 @@ interface OwnerPost {
         freeUnlockCount: number;
         earningsUsdCents: number;
         resourceKinds: Array<'prompt' | 'workflow' | 'files' | 'notes' | 'remix'>;
+        /** Set once its creator took it off while people had it: they keep it, the post has none. */
+        retiredAt?: string | null;
     } | null;
 }
 
@@ -220,10 +230,24 @@ function getGenerationCardAnchorId(generationId: string): string {
     return `studio-generation-${generationId}`;
 }
 
+function getPostCardAnchorId(postId: string): string {
+    return `studio-post-${postId}`;
+}
+
 /**
  * Paid sales and earnings, with free unlocks beside them once there are any:
  * a free unlock is not a sale since 2026-10-17 (decision 6).
  */
+/**
+ * A post as Studio draws it. A recipe taken off while people had it stays for
+ * them (retired), but the post has none, as the editor and Recipe sales read
+ * it: drawn as a draft with Manage recipe, its link reopened the editor on the
+ * recipe's old mode and the removal looked undone.
+ */
+function withoutRetiredRecipe(post: OwnerPost): OwnerPost {
+    return post.bundle?.retiredAt ? { ...post, bundle: null } : post;
+}
+
 /** Sets one parameter of an internal path, keeping its other parameters and its fragment. */
 function withSearchParam(path: string, key: string, value: string): string {
     const [pathWithoutHash, hash = ''] = path.split('#');
@@ -268,7 +292,7 @@ function readCreationsWorkspaceCache(userId: string | null): CreationsWorkspaceC
         return {
             fetchedAt: parsed.fetchedAt,
             generations: Array.isArray(parsed.generations) ? parsed.generations as Generation[] : [],
-            posts: Array.isArray(parsed.posts) ? parsed.posts as OwnerPost[] : [],
+            posts: Array.isArray(parsed.posts) ? (parsed.posts as OwnerPost[]).map(withoutRetiredRecipe) : [],
             profile: isRecord(parsed.profile) ? parsed.profile as unknown as ProfileApiResponse : null,
             // A snapshot written before the flag, or by a list with pages still to load, says no.
             generationsComplete: parsed.generationsComplete === true,
@@ -633,20 +657,6 @@ function mergePostAppend(previousPosts: OwnerPost[], incomingPosts: OwnerPost[])
     ];
 }
 
-function parseWorkspaceView(value: string | null): WorkspaceView {
-    return value === 'posts' || value === 'unlocks' ? value : 'creations';
-}
-
-function parsePostVisibilityFilter(value: string | null): OwnerPostVisibilityFilter {
-    return value === 'public' || value === 'unlisted' || value === 'private' || value === 'archived'
-        ? value
-        : 'all';
-}
-
-function parseCreationMediaFilter(value: string | null): FilterType {
-    return value === 'images' || value === 'videos' || value === 'audio' ? value : 'all';
-}
-
 const WORKSPACE_TABS: ReadonlyArray<{ key: WorkspaceView; label: string; lede: string }> = [
     { key: 'creations', label: 'Creations', lede: 'Preview private outputs, then turn the strongest ones into posts.' },
     { key: 'posts', label: 'Post Library', lede: 'Use Post Library for full post edits, archive state, and cleanup after publishing.' },
@@ -665,8 +675,8 @@ export default function CreationsPage() {
     // back button, a refresh, a shared link, and every returnTo land on the
     // view the viewer was actually looking at. The tabs and filter chips are
     // links that change it; nothing else does.
-    const activeView = parseWorkspaceView(searchParams.get('view'));
-    const postVisibilityFilter = parsePostVisibilityFilter(searchParams.get('visibility'));
+    const activeView = parseStudioWorkspaceView(searchParams.get('view'));
+    const postVisibilityFilter = parseStudioPostFilter(searchParams.get('visibility'));
     // The creations' media filter is in the address too (owner's report, 2026-11-15: a
     // filter left by Back or a refresh came back as All).
     const filter = parseCreationMediaFilter(searchParams.get('media'));
@@ -1099,7 +1109,7 @@ export default function CreationsPage() {
             const postsData = await postsRes.json() as OwnerPostsApiResponse;
             let nextPosts: OwnerPost[] | null = null;
             if (postsRes.ok) {
-                const loadedPosts = (postsData.posts || []) as OwnerPost[];
+                const loadedPosts = ((postsData.posts || []) as OwnerPost[]).map(withoutRetiredRecipe);
                 const freshPostsOffset = postsData.pageInfo?.hasMore
                     ? postsData.pageInfo.nextOffset ?? null
                     : null;
@@ -1273,7 +1283,10 @@ export default function CreationsPage() {
 
                 // Onto the posts as they stand now, and with the totals as they stand now: a post
                 // archived while the page was on its way stays archived, and its move stays counted.
-                const nextPosts = mergePostAppend(postsRef.current, Array.isArray(data.posts) ? data.posts : []);
+                const nextPosts = mergePostAppend(
+                    postsRef.current,
+                    Array.isArray(data.posts) ? data.posts.map(withoutRetiredRecipe) : [],
+                );
                 const nextOffset = data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null;
                 postsRef.current = nextPosts;
                 setPosts(nextPosts);
@@ -1433,6 +1446,47 @@ export default function CreationsPage() {
         return () => window.clearTimeout(timeoutId);
     }, [highlightedGenerationId, previewGen?.id]);
 
+    // The post an edit has just saved, named by the editor on its way back
+    // here: its card in Posts, or in Creations the card of the creation it was
+    // made from, is brought into view and ringed for a few seconds once the
+    // workspace is drawn, as an alert's run is. Read once, so Studio drawn
+    // again later rings nothing.
+    const [returnedPostId, setReturnedPostId] = useState<string | null>(readStudioReturnedPost);
+    const scrolledToReturnedPostRef = useRef(false);
+    const returnedGenerationId = returnedPostId
+        ? generations.find((generation) => generation.linked_post_id === returnedPostId)?.id ?? null
+        : null;
+    const isGenerationRinged = (generationId: string) => (
+        highlightedGenerationId === generationId || returnedGenerationId === generationId
+    );
+
+    useEffect(() => {
+        forgetStudioReturnedPost();
+    }, []);
+
+    useEffect(() => {
+        if (!returnedPostId || scrolledToReturnedPostRef.current) {
+            return;
+        }
+        const anchorId = activeView === 'posts'
+            ? getPostCardAnchorId(returnedPostId)
+            : returnedGenerationId ? getGenerationCardAnchorId(returnedGenerationId) : null;
+        const card = anchorId ? document.getElementById(anchorId) : null;
+        if (!card) {
+            return;
+        }
+        scrolledToReturnedPostRef.current = true;
+        card.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    }, [activeView, isLoading, posts, returnedGenerationId, returnedPostId]);
+
+    useEffect(() => {
+        if (!returnedPostId || isLoading) {
+            return;
+        }
+        const timeoutId = window.setTimeout(() => setReturnedPostId(null), GENERATION_HIGHLIGHT_MS);
+        return () => window.clearTimeout(timeoutId);
+    }, [isLoading, returnedPostId]);
+
     useEffect(() => {
         void fetchCreations();
     }, [fetchCreations]);
@@ -1533,9 +1587,10 @@ export default function CreationsPage() {
     }, []);
 
     // Publish opens the full composer for a creation with no post yet, as the
-    // app's does, and its Back returns to the view it was opened from. Recipe
-    // changes on an existing post link to the editor instead, which loads the
-    // stored bundle rather than rebuilding one from the prefill.
+    // app's does. Edits and recipe changes on an existing post link to the
+    // editor instead, which loads the stored bundle rather than rebuilding one
+    // from the prefill. Every one carries the view it was opened from: the
+    // composer's Back returns there, and so does an edit once saved.
     const withStudioReturn = (href: string): string =>
         withSearchParam(href, 'returnTo', buildWorkspacePath(activeView, postVisibilityFilter, filter));
 
@@ -1869,15 +1924,25 @@ export default function CreationsPage() {
 
     const appendCreationsSource = (path: string): string => withSearchParam(path, 'from', 'creations');
 
+    // A private or archived post opens in its editor, which goes back to this
+    // view once saved, as every other editor link here does; a public one opens
+    // its own page.
+    const getLinkedPostOpenHref = (workspaceState: CreationWorkspaceCardState): string | null => {
+        const href = workspaceState.secondaryAction.href ?? null;
+        return href && href === workspaceState.linkedPost?.ownerPath
+            ? withStudioReturn(appendCreationsSource(href))
+            : href;
+    };
+
     const buildCreationCustomizePath = (
         generation: Generation,
         workspaceState: CreationWorkspaceCardState
     ): string => {
         if (workspaceState.linkedPost?.ownerPath) {
-            return appendCreationsSource(workspaceState.linkedPost.ownerPath);
+            return withStudioReturn(appendCreationsSource(workspaceState.linkedPost.ownerPath));
         }
 
-        return buildCreationComposerPath(generation.id);
+        return withStudioReturn(buildCreationComposerPath(generation.id));
     };
 
     const getPreviewMetadata = (generation: Generation): Array<{ label: string; value: string }> => {
@@ -2038,7 +2103,7 @@ export default function CreationsPage() {
 
                 {canManageFromCreation && primaryIsUnlock && workspaceState.primaryAction.href ? (
                     <Link
-                        href={workspaceState.primaryAction.href}
+                        href={withStudioReturn(workspaceState.primaryAction.href)}
                         onClick={() => setPreviewGen(null)}
                         className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-full bg-emerald-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 sm:w-auto sm:min-w-40"
                     >
@@ -2055,7 +2120,7 @@ export default function CreationsPage() {
                 ) : null}
 
                 {workspaceState.secondaryAction.href && workspaceState.linkedPost ? (
-                    <Link href={workspaceState.secondaryAction.href} className={secondaryClass}>
+                    <Link href={getLinkedPostOpenHref(workspaceState) ?? workspaceState.secondaryAction.href} className={secondaryClass}>
                         <ExternalLink className="h-4 w-4" />
                         Open post
                     </Link>
@@ -2584,7 +2649,7 @@ export default function CreationsPage() {
                                     density="compact"
                                     tone="processing"
                                     anchorId={getGenerationCardAnchorId(gen.id)}
-                                    highlighted={highlightedGenerationId === gen.id}
+                                    highlighted={isGenerationRinged(gen.id)}
                                     media={(
                                         <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                             <div className="flex flex-col items-center gap-3">
@@ -2663,7 +2728,7 @@ export default function CreationsPage() {
                                 // The linked post's own page opens from its title in the
                                 // detail block, so the footer stays one row.
                                 const linkedPostHref = hasPrimaryAction && !primaryIsPublish
-                                    ? workspaceState.secondaryAction.href ?? null
+                                    ? getLinkedPostOpenHref(workspaceState)
                                     : null;
                                 const isGenerationDetailLoading = generationDetailLoadingId === gen.id;
                                 const cardTitle = getPreviewTitle(gen);
@@ -2731,7 +2796,7 @@ export default function CreationsPage() {
                                         density="compact"
                                         testId={`creation-card-${gen.id}`}
                                         anchorId={getGenerationCardAnchorId(gen.id)}
-                                        highlighted={highlightedGenerationId === gen.id}
+                                        highlighted={isGenerationRinged(gen.id)}
                                         media={gen.source_unavailable_at ? (
                                             <UnavailableMediaNote testId={`creation-unavailable-${gen.id}`} />
                                         ) : primaryMediaUrl && tileSrc ? (
@@ -2832,7 +2897,7 @@ export default function CreationsPage() {
                                                 </Link>
                                             ) : primaryIsUnlock && workspaceState.primaryAction.href ? (
                                                 <Link
-                                                    href={workspaceState.primaryAction.href}
+                                                    href={withStudioReturn(workspaceState.primaryAction.href)}
                                                     className={studioActionClass('emerald', { size: 'md', full: true })}
                                                 >
                                                     <Wand2 className="h-4 w-4" />
@@ -2892,7 +2957,7 @@ export default function CreationsPage() {
                                         tone="failed"
                                         testId={`failed-card-${gen.id}`}
                                         anchorId={getGenerationCardAnchorId(gen.id)}
-                                        highlighted={highlightedGenerationId === gen.id}
+                                        highlighted={isGenerationRinged(gen.id)}
                                         media={(
                                             <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                                 <span className="text-xs text-red-400/60">Generation failed</span>
@@ -2960,7 +3025,7 @@ export default function CreationsPage() {
                                         tone="archived"
                                         testId={`archived-card-${gen.id}`}
                                         anchorId={getGenerationCardAnchorId(gen.id)}
-                                        highlighted={highlightedGenerationId === gen.id}
+                                        highlighted={isGenerationRinged(gen.id)}
                                         media={(
                                             <div className="flex aspect-[4/5] items-center justify-center bg-black/60">
                                                 <Archive className="h-8 w-8 text-zinc-600" />
@@ -3093,6 +3158,7 @@ export default function CreationsPage() {
                                         : 'neutral';
                                 const pendingAction = postLifecycle.pendingAction(post.id);
                                 const isBusy = Boolean(pendingAction);
+                                const editorHref = withStudioReturn(appendCreationsSource(post.ownerPath));
                                 const overflowItems: StudioOverflowMenuItem[] = [];
                                 if (post.canShare) {
                                     overflowItems.push({
@@ -3136,6 +3202,9 @@ export default function CreationsPage() {
                                 return (
                                     <StudioCard
                                         key={post.id}
+                                        testId={`post-card-${post.id}`}
+                                        anchorId={getPostCardAnchorId(post.id)}
+                                        highlighted={returnedPostId === post.id}
                                         density="expanded"
                                         tone={post.archivedAt ? 'archived' : 'default'}
                                         media={post.mediaItems?.[0]?.sourceUnavailableAt ? (
@@ -3171,7 +3240,7 @@ export default function CreationsPage() {
                                             </>
                                         ) : null}
                                         title={(
-                                            <Link href={post.ownerPath} className="transition hover:text-[var(--ui-primary)]">
+                                            <Link href={editorHref} className="transition hover:text-[var(--ui-primary)]">
                                                 {post.title}
                                             </Link>
                                         )}
@@ -3211,7 +3280,7 @@ export default function CreationsPage() {
                                         actions={(
                                             <>
                                                 <Link
-                                                    href={post.ownerPath}
+                                                    href={editorHref}
                                                     className={studioActionClass('primary', { size: 'md' })}
                                                 >
                                                     <PencilLine className="h-4 w-4" />
@@ -3237,7 +3306,7 @@ export default function CreationsPage() {
                                                 ) : null}
                                                 {!post.archivedAt ? (
                                                     <Link
-                                                        href={buildPostRecipeManagementPath(post)}
+                                                        href={withStudioReturn(buildPostRecipeManagementPath(post))}
                                                         className={studioActionClass('emerald', { size: 'md' })}
                                                     >
                                                         <Wand2 className="h-4 w-4" />
