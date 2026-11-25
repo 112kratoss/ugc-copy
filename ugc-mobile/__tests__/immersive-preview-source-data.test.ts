@@ -5,6 +5,7 @@ import { ApiError } from '../lib/api-client';
 import {
   buildViewerItems,
   isLinkedPostAlone,
+  keepReelPagePosts,
   linkReelEndSlideState,
   loadImmersiveSourceData,
   loadShowcaseReelNeighbours,
@@ -583,6 +584,60 @@ describe('immersive preview source data', () => {
     expect(api.getShowcaseFeed).toHaveBeenLastCalledWith({ limit: SHOWCASE_FEED_PAGE_SIZE, sort: 'for-you', category: 'media' });
     expect(again.showcaseItems).toEqual([served, showcaseItem('post-1')]);
     expect(again.feedSessionId).toBe('session-2');
+  });
+
+  // Pixel_9a, 2026-11-25: a link opened Saree on Home's cached page (row 9 of
+  // 11); the reel's refetch read a new ranked page without Fox, His Majesty
+  // and Peeling. Dropped, they moved Saree to row 6, and Android drew row 9
+  // (NEELAKURINJI) at the old offset until the alignment scroll put it back.
+  it("keeps a For you reel's posts through a refetch whose new page left them out", () => {
+    const delivered = (id: string, deliveryId: string) => (
+      { ...showcaseItem(id), recommendation: { deliveryId, position: 0, algorithmVersion: 'v4' } } as ShowcaseFeedItem
+    );
+    const homeIds = ['fox', 'female', 'minnal', 'venom', 'mahabali', 'majesty', 'peeling', 'founder', 'intense', 'saree', 'robot'];
+    const previous = { showcaseItems: homeIds.map((id) => delivered(id, `home-${id}`)), feedSessionId: 'home-session', algorithmVersion: 'v4' };
+    const pageIds = ['saree', 'chai', 'female', 'minnal', 'venom', 'mahabali', 'neelakurinji', 'founder', 'munnar', 'intense'];
+    const next = { showcaseItems: pageIds.map((id) => delivered(id, `reel-${id}`)), feedSessionId: 'reel-session', algorithmVersion: 'v5' };
+
+    const kept = keepReelPagePosts(previous, next, 'saree');
+    const ids = kept.showcaseItems?.map((item) => item.id);
+    // Every post stays on its row, the opened one included; the page's new posts follow.
+    expect(ids).toEqual([...homeIds, 'chai', 'neelakurinji', 'munnar']);
+    expect(ids?.indexOf('saree')).toBe(9);
+    // A post the new page holds is the new page's copy, with its delivery.
+    expect(kept.showcaseItems?.[9].recommendation?.deliveryId).toBe('reel-saree');
+    // A post it left out keeps no delivery: the reel files its events under the
+    // new page's session, which never served that delivery.
+    expect(kept.showcaseItems?.[0].id).toBe('fox');
+    expect(kept.showcaseItems?.[0] && 'recommendation' in kept.showcaseItems[0]).toBe(false);
+    expect(kept.showcaseItems?.[10].id).toBe('robot');
+    expect(kept.showcaseItems?.[10] && 'recommendation' in kept.showcaseItems[10]).toBe(false);
+    // The session is the new page's.
+    expect(kept.feedSessionId).toBe('reel-session');
+    expect(kept.algorithmVersion).toBe('v5');
+  });
+
+  it("lets the opened post go when the refetch could not read it, and leaves the post alone's reads as they come", () => {
+    const previous = { showcaseItems: [showcaseItem('a'), showcaseItem('gone'), showcaseItem('b')], feedSessionId: 'home-session' };
+    const next = { showcaseItems: [showcaseItem('b'), showcaseItem('c')], feedSessionId: 'reel-session' };
+    // Deleted, made private or behind a block: the reel says so (`selectionMissing`).
+    expect(keepReelPagePosts(previous, next, 'gone').showcaseItems?.map((item) => item.id)).toEqual(['a', 'b', 'c']);
+    // A read of the post alone, or a reel that held the post alone, takes the answer as it is.
+    const alone = { showcaseItems: [showcaseItem('gone')] };
+    expect(keepReelPagePosts(previous, alone, 'gone')).toBe(alone);
+    expect(keepReelPagePosts(alone, next, 'gone')).toBe(next);
+    expect(keepReelPagePosts(undefined, next, 'gone')).toBe(next);
+  });
+
+  // A link to a post in no lane but in the reader's Saved pages opens on those
+  // pages (`readCachedImmersiveSourceSnapshot`), which carry no feed session:
+  // the first For you page puts the post first, and its row moved the same way.
+  it('keeps the Saved pages a For you reel opened on through its first page read', () => {
+    const saved = { showcaseItems: [showcaseItem('s1'), showcaseItem('s2'), showcaseItem('opened'), showcaseItem('s3')] };
+    const page = { showcaseItems: [showcaseItem('opened'), showcaseItem('p1'), showcaseItem('s2')], feedSessionId: 'reel-session' };
+    const kept = keepReelPagePosts(saved, page, 'opened');
+    expect(kept.showcaseItems?.map((item) => item.id)).toEqual(['s1', 's2', 'opened', 's3', 'p1']);
+    expect(kept.feedSessionId).toBe('reel-session');
   });
 
   it("draws a loading page under a linked post until its neighbours come, and the page's end when none did", () => {

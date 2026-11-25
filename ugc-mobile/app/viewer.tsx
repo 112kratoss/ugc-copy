@@ -93,6 +93,7 @@ import {
   type ImmersiveSourceData,
   isGenerationSource,
   isLinkedPostAlone,
+  keepReelPagePosts,
   linkReelEndSlideState,
   loadImmersiveSourceData,
   loadShowcaseReelNeighbours,
@@ -497,13 +498,20 @@ function ImmersivePreviewViewer() {
     initialDataUpdatedAt: () => (gridBacked
       ? undefined
       : readCachedImmersiveSourceSnapshot(queryClient, source, user?.id, initialId, routeFeedSessionId, identityUserId)?.updatedAt),
-    queryFn: () => loadImmersiveSourceData({
-      api,
-      source,
-      initialId,
-      mediaOnly,
-      withNeighbours: !linkRoute || neighboursStatus === 'success' || !isLinkedPostAlone(queryClient.getQueryData(sourceQueryKey)),
-    }),
+    queryFn: async () => {
+      const data = await loadImmersiveSourceData({
+        api,
+        source,
+        initialId,
+        mediaOnly,
+        withNeighbours: !linkRoute || neighboursStatus === 'success' || !isLinkedPostAlone(queryClient.getQueryData(sourceQueryKey)),
+      });
+      // A For you refetch is a new ranked page: the posts the reel holds stay
+      // where they are (`keepReelPagePosts`), read as the answer lands.
+      return source === 'showcase-feed'
+        ? keepReelPagePosts(queryClient.getQueryData<ImmersiveSourceData>(sourceQueryKey), data, initialId)
+        : data;
+    },
     staleTime: 1000 * 45,
   });
   // The post a link opened, once it is in hand and alone, or with the page
