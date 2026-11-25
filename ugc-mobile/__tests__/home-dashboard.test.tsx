@@ -79,6 +79,8 @@ const authState = vi.hoisted(() => ({
   credits: 0,
   identityUserId: 'viewer-1' as string | null,
   isLoading: false,
+  // The session the cards' pictures read `/api/media` with.
+  session: null as { access_token: string } | null,
   signOut: vi.fn(),
   user: { id: 'viewer-1' } as { id: string } | null,
 }));
@@ -262,6 +264,7 @@ vi.mock('@/components/unlock-remix-prompt', () => ({
 
 vi.mock('@/lib/auth', () => ({
   useAuth: () => authState,
+  useAuthSession: () => authState.session,
 }));
 
 // Every event goes straight to the API double, batched type or not.
@@ -395,6 +398,7 @@ import { endWelcomePromise, resetWelcomePromiseForTests } from '../lib/welcome-p
 // The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
 afterEach(() => resetWelcomePromiseForTests());
 import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
+import { resetGoneFeedMediaForTests } from '../lib/gone-feed-media';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
@@ -1164,6 +1168,149 @@ describe('Home screen', () => {
     expect(sentEvents()).toHaveLength(1);
 
     renderer.act(() => tree.unmount());
+  });
+
+  // A post archived, made private or hidden since its page was read (or since
+  // the launch whose first page was kept) has its media refused from then on.
+  describe('a card whose picture would not load', () => {
+    type FeedPages = { pages: Array<{ items: Array<{ id: string }> }>; pageParams: unknown[] };
+
+    function answerMedia(status: number, body: unknown = {}) {
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(body), { status })));
+    }
+
+    // The lanes the screen's cache holds: For You, read at 111, and Notes, at 222.
+    const forYouKey = [...createShowcaseFeedViewerQueryKey('viewer-1'), 'for-you'];
+    const notesKey = [...createShowcaseFeedViewerQueryKey('viewer-1'), 'notes'];
+    function holdLanes(items: unknown[]) {
+      queryState.client.getQueriesData.mockReturnValue([
+        [forYouKey, { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+        [notesKey, { pages: [page(items)], pageParams: [{ offset: 0 }] }],
+      ]);
+      queryState.client.getQueryState.mockImplementation((key: readonly unknown[]) => (
+        (key === forYouKey ? { dataUpdatedAt: 111 } : key === notesKey ? { dataUpdatedAt: 222 } : undefined) as never
+      ));
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      resetGoneFeedMediaForTests();
+      queryState.client.getQueryState.mockReset();
+      queryState.client.getQueryState.mockImplementation(() => undefined);
+    });
+
+    function cardMediaFailed(tree: renderer.ReactTestRenderer, index: number, media: unknown) {
+      return renderer.act(async () => {
+        (cardAt(tree, index) as unknown as { onMediaUnavailable: (media: unknown) => void }).onMediaUnavailable(media);
+        await settlePromises();
+      });
+    }
+
+    it('takes the card out of every lane and the shelf, quietly, when its media is gone', async () => {
+      const items = [mediaItem('a', 'delivery-gone-a'), mediaItem('b', 'delivery-gone-b')];
+      queryState.pages = [page(items)];
+      answerMedia(404, { error: 'Media not found' });
+      holdLanes(items);
+      const { tree } = renderHome();
+
+      await cardMediaFailed(tree, 1, items[1].mediaItems[0]);
+
+      // The failed address itself was asked, for one byte.
+      expect(fetch).toHaveBeenCalledWith('https://cdn.example.com/b.jpg', expect.objectContaining({
+        headers: expect.objectContaining({ Range: 'bytes=0-0' }),
+      }));
+      expect(queryState.client.getQueriesData).toHaveBeenCalledWith({ queryKey: createShowcaseFeedViewerQueryKey('viewer-1') });
+      // Every lane loses the post and keeps the time it was read: a removal is
+      // no fetch, so a restored or aging lane still gets the refetch it is owed.
+      const laneCalls = queryState.client.setQueryData.mock.calls as unknown as Array<[unknown, (current: FeedPages) => FeedPages, { updatedAt?: number }]>;
+      expect(laneCalls.map(([key, , options]) => [key, options])).toEqual([
+        [forYouKey, { updatedAt: 111 }],
+        [notesKey, { updatedAt: 222 }],
+      ]);
+      const lane = { pages: [page(items)], pageParams: [{ offset: 0 }] } as unknown as FeedPages;
+      expect(laneCalls[0][1](lane).pages[0].items.map((item) => item.id)).toEqual(['a']);
+      // The shelf, through its own removal.
+      expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(1);
+      expect(queryState.client.setQueriesData.mock.calls[0][0]).toEqual({ queryKey: ['home-shelf'] });
+      // The reader chose nothing: no feed event, no Undo.
+      expect(sentEvents()).toEqual([]);
+      expect(hostProps(tree, 'feed-undo-notice').notice).toBeNull();
+
+      // A page read afterwards that still names the post keeps it out.
+      queryState.pages = [page(items)];
+      renderer.act(() => tree.update(<HomeDashboard />));
+      expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a']);
+
+      // Another viewer starts from nothing: whether a file is gone depends on who reads it.
+      authState.identityUserId = 'viewer-2';
+      authState.user = { id: 'viewer-2' };
+      renderer.act(() => tree.update(<HomeDashboard />));
+      expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a', 'b']);
+
+      renderer.act(() => tree.unmount());
+    });
+
+    it('lets the post back when a later page brings it with other media', async () => {
+      const items = [mediaItem('a', 'delivery-edit-a'), mediaItem('b', 'delivery-edit-b')];
+      queryState.pages = [page(items)];
+      answerMedia(404);
+      holdLanes(items);
+      const { tree } = renderHome();
+      await cardMediaFailed(tree, 1, items[1].mediaItems[0]);
+
+      const edited = mediaItem('b', 'delivery-edit-b2');
+      edited.mediaItems[0].url = 'https://cdn.example.com/b-new.jpg';
+      queryState.pages = [page([items[0], edited])];
+      renderer.act(() => tree.update(<HomeDashboard />));
+
+      expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a', 'b']);
+      renderer.act(() => tree.unmount());
+    });
+
+    it.each([
+      ['a busy server', 503, {}],
+      ['a refused session', 401, {}],
+      ['Storage timing out', 400, { statusCode: '544', error: 'DatabaseTimeout' }],
+    ])('keeps the card, and the frame’s Retry, on %s', async (_case, status, body) => {
+      const items = [mediaItem('a', 'delivery-keep-a'), mediaItem('b', 'delivery-keep-b')];
+      queryState.pages = [page(items)];
+      answerMedia(status, body);
+      const { tree } = renderHome();
+
+      await cardMediaFailed(tree, 1, items[1].mediaItems[0]);
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(queryState.client.setQueriesData).not.toHaveBeenCalled();
+      expect(queryState.client.setQueryData).not.toHaveBeenCalled();
+      queryState.pages = [page(items)];
+      renderer.act(() => tree.update(<HomeDashboard />));
+      expect(listProps(tree).data.map((card: { id: string }) => card.id)).toEqual(['a', 'b']);
+      renderer.act(() => tree.unmount());
+    });
+
+    it('asks the media route with the session the picture loaded it with', async () => {
+      authState.session = { access_token: 'viewer-token' };
+      const routed = mediaItem('b', 'delivery-routed-b');
+      routed.mediaItems[0].url = '/api/media?bucket=post_media&path=private-posts%2Fb%2Fphoto.jpg';
+      queryState.pages = [page([routed])];
+      answerMedia(404);
+      holdLanes([routed]);
+      const { tree } = renderHome();
+
+      try {
+        await cardMediaFailed(tree, 0, routed.mediaItems[0]);
+      } finally {
+        authState.session = null;
+      }
+
+      const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit];
+      expect(new URL(url).pathname).toBe('/api/media');
+      expect(new URL(url).searchParams.get('path')).toBe('private-posts/b/photo.jpg');
+      expect(init.headers).toEqual({ Authorization: 'Bearer viewer-token', Range: 'bytes=0-0' });
+      expect(queryState.client.setQueryData).toHaveBeenCalledTimes(2);
+      expect(queryState.client.setQueriesData).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree.unmount());
+    });
   });
 
   it('keeps the creator hidden, and says so, when the Undo does not go through', async () => {
