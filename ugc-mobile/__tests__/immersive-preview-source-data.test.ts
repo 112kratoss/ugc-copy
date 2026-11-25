@@ -622,11 +622,22 @@ describe('immersive preview source data', () => {
     const next = { showcaseItems: [showcaseItem('b'), showcaseItem('c')], feedSessionId: 'reel-session' };
     // Deleted, made private or behind a block: the reel says so (`selectionMissing`).
     expect(keepReelPagePosts(previous, next, 'gone').showcaseItems?.map((item) => item.id)).toEqual(['a', 'b', 'c']);
-    // A read of the post alone, or a reel that held no page, takes the answer as it is.
+    // A read of the post alone, or a reel that held the post alone, takes the answer as it is.
     const alone = { showcaseItems: [showcaseItem('gone')] };
     expect(keepReelPagePosts(previous, alone, 'gone')).toBe(alone);
     expect(keepReelPagePosts(alone, next, 'gone')).toBe(next);
     expect(keepReelPagePosts(undefined, next, 'gone')).toBe(next);
+  });
+
+  // A link to a post in no lane but in the reader's Saved pages opens on those
+  // pages (`readCachedImmersiveSourceSnapshot`), which carry no feed session:
+  // the first For you page puts the post first, and its row moved the same way.
+  it('keeps the Saved pages a For you reel opened on through its first page read', () => {
+    const saved = { showcaseItems: [showcaseItem('s1'), showcaseItem('s2'), showcaseItem('opened'), showcaseItem('s3')] };
+    const page = { showcaseItems: [showcaseItem('opened'), showcaseItem('p1'), showcaseItem('s2')], feedSessionId: 'reel-session' };
+    const kept = keepReelPagePosts(saved, page, 'opened');
+    expect(kept.showcaseItems?.map((item) => item.id)).toEqual(['s1', 's2', 'opened', 's3', 'p1']);
+    expect(kept.feedSessionId).toBe('reel-session');
   });
 
   it("draws a loading page under a linked post until its neighbours come, and the page's end when none did", () => {
