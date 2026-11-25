@@ -137,6 +137,7 @@ describe('guest merge failure modes', () => {
         { reason: 'guest_gone', ticket: unexpired, nextState: 'idle' },
         { reason: 'guest_registered', ticket: unexpired, nextState: 'failed' },
         { reason: 'guest_linked', ticket: unexpired, nextState: 'failed' },
+        { reason: 'account_linked', ticket: unexpired, nextState: 'failed' },
         { reason: 'invalid_request', ticket: unexpired, nextState: 'failed' },
         { reason: 'a_reason_from_a_newer_server', ticket: unexpired, nextState: 'failed' },
       ] as const;
@@ -279,6 +280,26 @@ describe('guest merge failure modes', () => {
 
       await clearGuestMergeOutcome();
       await expect(readGuestMergeOutcome()).resolves.toBeNull();
+    });
+
+    it('keeps a refusal under a status a bundle from before it still shows (an OTA rollback)', async () => {
+      const outcome = { accountUserId: 'account-a', status: 'refused' as const, creditsMoved: 0, at: 1_700_000_000_000 };
+      await storeGuestMergeOutcome(outcome);
+
+      // An older bundle reads the same key and keeps only the statuses it
+      // knows; `not_eligible` is one, and it points at support.
+      const onDisk = JSON.parse(store.get('magicbooklet.guestMerge.outcome.v1') ?? 'null');
+      expect(onDisk).toMatchObject({ accountUserId: 'account-a', status: 'not_eligible', refused: true });
+      expect(['merged', 'already_merged', 'conflict', 'expired', 'not_eligible']).toContain(onDisk.status);
+
+      await expect(readGuestMergeOutcome()).resolves.toEqual(outcome);
+    });
+
+    it('reads a kept "not added yet" as itself', async () => {
+      const outcome = { accountUserId: 'account-a', status: 'not_eligible' as const, creditsMoved: 0, at: 1 };
+      await storeGuestMergeOutcome(outcome);
+
+      await expect(readGuestMergeOutcome()).resolves.toEqual(outcome);
     });
 
     it('never rejects, whatever the keychain does', async () => {

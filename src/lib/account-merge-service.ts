@@ -47,6 +47,7 @@ export const ACCOUNT_MERGE_REFUSAL_REASONS = [
   'guest_gone',
   'guest_registered',
   'guest_linked',
+  'account_linked',
   'account_not_ready',
 ] as const;
 

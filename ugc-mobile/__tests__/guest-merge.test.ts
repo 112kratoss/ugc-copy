@@ -224,6 +224,7 @@ describe('a refusal the server calls final', () => {
 
   it('points at support for a final refusal it has no words of its own for', () => {
     for (const answer of [
+      variants.accountLinked as GuestAccountMergeResponse,
       variants.invalidRequest as GuestAccountMergeResponse,
       { ...variants.invalidRequest, reason: 'a_reason_from_a_newer_server' } as GuestAccountMergeResponse,
       { ...variants.invalidRequest, reason: undefined } as GuestAccountMergeResponse,

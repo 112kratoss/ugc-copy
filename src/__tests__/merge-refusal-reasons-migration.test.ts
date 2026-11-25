@@ -51,6 +51,7 @@ describe('merge refusals say why (2026-11-25)', () => {
       ['account_not_ready', 'true'],
       ['guest_registered', 'false'],
       ['guest_linked', 'false'],
+      ['account_linked', 'false'],
       ['account_not_ready', 'true'],
     ]);
   });
@@ -67,6 +68,9 @@ describe('merge refusals say why (2026-11-25)', () => {
     expect(body.indexOf("'guest_gone'")).toBeLessThan(body.indexOf("'account_not_ready'"));
     expect(body.indexOf("'guest_registered'")).toBeLessThan(body.lastIndexOf("'account_not_ready'"));
     expect(body.indexOf("'guest_linked'")).toBeLessThan(body.lastIndexOf("'account_not_ready'"));
+    // A link is never undone, so the account's own link is final, and is
+    // read before the account state a retry can cure.
+    expect(body.indexOf("'account_linked'")).toBeLessThan(body.lastIndexOf("'account_not_ready'"));
   });
 
   it('changes nothing else in the merge: the same checks, balances, ledger row and replay answer', () => {
@@ -82,7 +86,7 @@ describe('merge refusals say why (2026-11-25)', () => {
         "OR p_guest_user_id = p_target_user_id OR p_source_surface NOT IN ('mobile', 'web') THEN RETURN jsonb_build_object('status', 'not_eligible'); END IF;",
       )
       .replace(
-        "IF NOT v_guest_is_anonymous THEN RETURN jsonb_build_object('status', 'not_eligible'); END IF; IF v_guest.merged_into_user_id IS NOT NULL THEN RETURN jsonb_build_object('status', 'not_eligible'); END IF; IF v_target_is_anonymous OR v_target.merged_into_user_id IS NOT NULL THEN",
+        "IF NOT v_guest_is_anonymous THEN RETURN jsonb_build_object('status', 'not_eligible'); END IF; IF v_guest.merged_into_user_id IS NOT NULL THEN RETURN jsonb_build_object('status', 'not_eligible'); END IF; IF v_target.merged_into_user_id IS NOT NULL THEN RETURN jsonb_build_object('status', 'not_eligible'); END IF; IF v_target_is_anonymous THEN",
         'IF NOT v_guest_is_anonymous OR v_target_is_anonymous OR v_guest.merged_into_user_id IS NOT NULL OR v_target.merged_into_user_id IS NOT NULL THEN',
       );
     expect(merged).toBe(previous);

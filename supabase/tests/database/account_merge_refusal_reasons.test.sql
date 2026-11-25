@@ -137,6 +137,8 @@ select is(
   'an account whose profile is not there yet is retryable'
 );
 
+-- The account itself linked into another: not this case, since a link is never
+-- undone (the route turns such a caller away before the database is asked).
 update public.profiles
 set merged_into_user_id = 'd2d2d2d2-0000-4000-8000-000000000002', merged_at = now()
 where id = 'c5c5c5c5-0000-4000-8000-000000000005';
@@ -144,9 +146,9 @@ where id = 'c5c5c5c5-0000-4000-8000-000000000005';
 select is(
   public.merge_guest_account(
     'c2c2c2c2-0000-4000-8000-000000000002', 'c5c5c5c5-0000-4000-8000-000000000005', 'mobile'
-  ) ->> 'reason',
-  'account_not_ready',
-  'a linked identity named as the account is retryable'
+  ),
+  '{"status": "not_eligible", "reason": "account_linked", "retryable": false}'::jsonb,
+  'an account linked into another is refused for good: a link is never undone'
 );
 
 select is(

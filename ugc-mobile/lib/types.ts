@@ -292,6 +292,7 @@ export type GuestAccountMergeRefusalReason =
   | 'guest_gone'
   | 'guest_registered'
   | 'guest_linked'
+  | 'account_linked'
   | 'account_not_ready';
 
 export interface GuestAccountMergeResponse {

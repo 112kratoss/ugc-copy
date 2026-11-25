@@ -6178,6 +6178,14 @@
           "reason": "guest_linked",
           "retryable": false
         },
+        "accountLinked": {
+          "status": "not_eligible",
+          "creditsMoved": 0,
+          "promotionalCreditsMoved": 0,
+          "credits": null,
+          "reason": "account_linked",
+          "retryable": false
+        },
         "invalidRequest": {
           "status": "not_eligible",
           "creditsMoved": 0,

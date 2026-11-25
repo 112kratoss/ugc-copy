@@ -27,6 +27,9 @@
 --   guest_registered   false      the guest has since become an account of its
 --                                 own, which holds its credits
 --   guest_linked       false      the guest is already linked to an account
+--   account_linked     false      the signed-in account is itself linked into
+--                                 another account; the route turns such a
+--                                 caller away first
 --   account_not_ready  true       the signed-in account's profile is missing, or
 --                                 not yet a registered account's
 --
@@ -36,7 +39,8 @@
 -- answer and grants are 20261015054611's for merge_guest_account and
 -- 20260811110000's for redeem_account_merge_ticket. The combined checks are
 -- split one condition per answer, and where both sides refuse the guest's
--- permanent reason is checked first. The one exception keeps the old order:
+-- permanent reason is checked first, and the account's own link before its
+-- retryable state. The one exception keeps the old order:
 -- the account's missing profile is read before the replay check that needs it,
 -- so it can be reported over a guest that can never link; the retry it asks for
 -- gets the guest's reason once that profile exists, and the route admits no
@@ -130,9 +134,15 @@ BEGIN
     RETURN jsonb_build_object('status', 'not_eligible', 'reason', 'guest_linked', 'retryable', false);
   END IF;
 
+  -- The account linked into another one: a link is never undone, so no retry
+  -- cures it. The route turns a linked caller away before this runs.
+  IF v_target.merged_into_user_id IS NOT NULL THEN
+    RETURN jsonb_build_object('status', 'not_eligible', 'reason', 'account_linked', 'retryable', false);
+  END IF;
+
   -- The route admits only a registered caller, so this is a profile or token
   -- out of step with auth.users; the ticket is kept for the attempt after.
-  IF v_target_is_anonymous OR v_target.merged_into_user_id IS NOT NULL THEN
+  IF v_target_is_anonymous THEN
     RETURN jsonb_build_object('status', 'not_eligible', 'reason', 'account_not_ready', 'retryable', true);
   END IF;
 

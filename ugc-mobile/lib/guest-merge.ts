@@ -152,8 +152,10 @@ function ticketHadExpired(ticket: GuestMergeTicketContext | undefined) {
  *   deleted.
  * - `guest_registered`, `guest_linked`: the guest's credits are on another
  *   account, which is what `conflict` says.
- * - anything else, a reason a newer server added included: `refused`, which
- *   points at support. Credits that may be waiting are never passed over in
+ * - anything else: `refused`, which points at support. That covers
+ *   `account_linked` (this account is itself linked into another, so the
+ *   guest's credits wait for support), `invalid_request` and any reason a
+ *   newer server adds. Credits that may be waiting are never passed over in
  *   silence.
  */
 export function finalMergeRefusalOutcome(
