@@ -20,12 +20,12 @@ insert into public.workflow_canvases (id, user_id, title, graph) values
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"a3000001-0000-4000-8000-000000000001","role":"authenticated","is_anonymous":true,"session_id":"f3000000-0000-4000-8000-000000000001"}', true);
 select is((select count(*) from public.profiles), 1::bigint, 'a live guest can read its own profile');
-with changed as (update public.profiles set username='guest-squatting' returning id) select is((select count(*) from changed), 0::bigint, 'a guest cannot reserve a username through the Data API');
-with changed as (update public.profiles set bio='guest profile mutation' returning id) select is((select count(*) from changed), 0::bigint, 'a guest cannot mutate other creator fields either');
+select throws_ok($$update public.profiles set username='guest-squatting'$$, '42501', null, 'a guest cannot reserve a username through the Data API');
+select throws_ok($$update public.profiles set bio='guest profile mutation'$$, '42501', null, 'a guest cannot mutate other creator fields either');
 
 select set_config('request.jwt.claims', '{"sub":"a3000002-0000-4000-8000-000000000002","role":"authenticated","session_id":"f3000000-0000-4000-8000-000000000002"}', true);
-with changed as (update public.profiles set username='boundary-owner' where id='a3000002-0000-4000-8000-000000000002' returning id) select is((select count(*) from changed), 1::bigint, 'a registered owner can update their creator profile');
-with changed as (update public.profiles set bio='foreign' where id='a3000003-0000-4000-8000-000000000003' returning id) select is((select count(*) from changed), 0::bigint, 'a registered owner cannot update another profile');
+select throws_ok($$update public.profiles set username='boundary-owner' where id='a3000002-0000-4000-8000-000000000002'$$, '42501', null, 'a registered owner cannot write its own profile through the Data API either: the API saves it (20261126101246)');
+select throws_ok($$update public.profiles set bio='foreign' where id='a3000003-0000-4000-8000-000000000003'$$, '42501', null, 'a registered owner cannot update another profile');
 select throws_ok($$update public.profiles set credits=999 where id='a3000002-0000-4000-8000-000000000002'$$, '42501', null, 'profile balance columns remain inaccessible');
 select is((select count(*) from storage.objects where name='a3000002-0000-4000-8000-000000000002/identity-boundary.png'), 1::bigint, 'a live owner retains Storage access');
 
@@ -35,7 +35,7 @@ delete from auth.sessions where id='f3000000-0000-4000-8000-000000000002';
 set local role authenticated;
 select is(public.current_identity_is_active(), false, 'revoked sessions fail the shared predicate');
 select is((select count(*) from public.profiles), 0::bigint, 'revoked sessions cannot read their profile');
-with changed as (update public.profiles set bio='revoked' returning id) select is((select count(*) from changed), 0::bigint, 'revoked sessions cannot update their profile');
+select throws_ok($$update public.profiles set bio='revoked'$$, '42501', null, 'revoked sessions cannot update their profile');
 select is((select count(*) from storage.objects where name='a3000002-0000-4000-8000-000000000002/identity-boundary.png'), 0::bigint, 'revoked sessions lose Storage access');
 select throws_ok($$select * from public.initialize_workflow_canvas_run('b3000000-0000-4000-8000-000000000002','a3000002-0000-4000-8000-000000000002','start','node',null,'{}','revoked-initializer','[{"nodeId":"start"}]')$$, '42501', 'Active identity required', 'revoked sessions cannot bypass RLS through the initializer');
 select throws_ok($$select * from public.start_workflow_canvas_run('b3000000-0000-4000-8000-000000000002','a3000002-0000-4000-8000-000000000002','start','node',null,'{}','revoked-legacy')$$, '42501', 'Active identity required', 'revoked sessions cannot bypass RLS through the legacy starter');

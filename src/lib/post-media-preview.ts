@@ -1,6 +1,6 @@
 import { PRIVATE_POST_MEDIA_BUCKET, postMediaStorageBucket } from '@/lib/post-media-storage';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import sharp from 'sharp';
+import sharp from '@/lib/image-decoder';
 
 import { logBackendWarning } from '@/lib/backend-logger';
 import { assertStoredPreviewIsIntact } from '@/lib/media-preview-integrity';

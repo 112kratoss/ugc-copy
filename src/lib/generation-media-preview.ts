@@ -1,7 +1,7 @@
 import { stat } from 'node:fs/promises';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import sharp, { type Sharp } from 'sharp';
+import sharp, { type Sharp } from '@/lib/image-decoder';
 
 import { assertStoredPreviewIsIntact } from '@/lib/media-preview-integrity';
 export { isDecodableWebp } from '@/lib/media-preview-integrity';

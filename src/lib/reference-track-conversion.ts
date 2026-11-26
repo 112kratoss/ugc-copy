@@ -8,6 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError, logBackendWarning } from '@/lib/backend-logger';
 import { providerTrackFolder, SEEDANCE_ASSET_TRACKS_FOLDER } from '@/lib/generation-provider-tracks';
+import { TRACK_DEMUXERS } from '@/lib/media-demuxers';
 import { mediaEncoderCommand, MediaOutputLimitError } from '@/lib/media-encoder-limit';
 import { referenceTrackLinkExtension } from '@/lib/provider-input-limits';
 import {
@@ -44,9 +45,9 @@ const STDERR_TAIL_CHARACTERS = 2000;
  * Ogg, WebM), and the FLAC, CAF and AIFF a picker can hand over under one of those names, by
  * ffmpeg's demuxer names. ffmpeg reads any of its formats by content alone, and a playlist named
  * .m4a would open whatever its entries name: no other demuxer reads a track, and the track is
- * read as a file, nothing else.
+ * read as a file, nothing else. The list is `TRACK_DEMUXERS` in media-demuxers.ts, beside the
+ * clips' own.
  */
-const TRACK_DEMUXERS = 'mp3,mov,mp4,m4a,3gp,3g2,mj2,wav,aac,ogg,matroska,webm,flac,caf,aiff';
 
 /** Exit codes of the encoder's limit wrapper (media-encoder-limit): it could not set the limit, or start ffmpeg. */
 const ENCODER_START_EXIT_CODES = new Set([125, 126, 127]);

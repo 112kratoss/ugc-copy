@@ -3,6 +3,17 @@ export type MediaLibraryBoundary = { createdAt: string; id: string };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
 
+/**
+ * Whether a cursor's two values are an id and a timestamp as the database
+ * writes them. A cursor is the caller's text, and its values go into a
+ * PostgREST `.or()` expression, which is not escaped: anything looser lets a
+ * caller add a filter of their own (`,name.like.*x*`).
+ */
+export function isMediaCursorBoundary(createdAt: unknown, id: unknown): boolean {
+  return typeof createdAt === 'string' && TIMESTAMP.test(createdAt)
+    && typeof id === 'string' && UUID.test(id);
+}
+
 export function encodeMediaLibraryCursor(scope: string, boundary: MediaLibraryBoundary): string {
   return Buffer.from(JSON.stringify({ v: 1, scope, ...boundary })).toString('base64url');
 }

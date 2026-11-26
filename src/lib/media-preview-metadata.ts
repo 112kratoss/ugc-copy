@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-import sharp from 'sharp';
+import sharp from '@/lib/image-decoder';
 import { rgbaToThumbHash } from 'thumbhash';
 
 export function getMediaContentHash(body: Buffer): string {

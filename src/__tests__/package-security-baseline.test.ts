@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -96,10 +96,32 @@ describe('package security baseline', () => {
   });
 
   it('keeps 2026 transitive dependency remediations in the lockfile', () => {
+    // brace-expansion (security audit, 2026-11-26). One global pin at 5.0.9
+    // was the last 5.x that minimatch 3 (ESLint's) can call: 5.0.10 and later
+    // export `expand` by name only, and ESLint then dies with "expand is not a
+    // function". But 4.0.0 to 5.0.11 carry two denial-of-service advisories.
+    // So minimatch 3 gets the 1.x line it was written for, and every other
+    // copy resolves to a fixed 5.x. The patch that made 5.0.9 callable went
+    // with the pin: patch-package fails the install on a patch whose version
+    // is not the one installed.
+    expect(existsSync(join(projectRoot, 'patches', 'brace-expansion+5.0.9.patch'))).toBe(false);
+    expect(packageJson.overrides).not.toHaveProperty('brace-expansion');
     expect(packageJson.overrides).toMatchObject({
-      'brace-expansion': '5.0.9',
+      'minimatch@3.1.5': { 'brace-expansion': '1.1.22' },
     });
-    expect(versionAtLeast(packageLockVersion('brace-expansion'), '5.0.9')).toBe(true);
+    expect(packageLockVersion('minimatch')).toBe('3.1.5');
+    const braceExpansions = Object.entries(packageLock.packages ?? {})
+      .filter(([path]) => path.endsWith('node_modules/brace-expansion'))
+      .map(([path, entry]) => ({ path, version: entry.version ?? '' }));
+    expect(braceExpansions.length).toBeGreaterThan(0);
+    for (const { path, version } of braceExpansions) {
+      const [major] = numericVersion(version);
+      const fixed = major === 1 ? versionAtLeast(version, '1.1.12')
+        : major === 2 ? versionAtLeast(version, '2.0.2')
+          : versionAtLeast(version, '5.0.12');
+      expect(fixed, `${path}@${version}`).toBe(true);
+    }
+    expect(numericVersion(packageLockVersion('brace-expansion') ?? '')[0]).toBe(1);
     expect(versionAtLeast(packageLockVersion('nanoid'), '3.3.18')).toBe(true);
     expect(versionAtLeast(packageLockVersion('undici'), '7.29.0')).toBe(true);
     expect(versionAtLeast(packageLockVersion('ip-address'), '10.5.0')).toBe(true);

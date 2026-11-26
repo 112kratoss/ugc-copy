@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import sharp from 'sharp';
+import sharp from '@/lib/image-decoder';
 
 import { logBackendWarning } from '@/lib/backend-logger';
 import { assertStoredPreviewIsIntact } from '@/lib/media-preview-integrity';
