@@ -6,7 +6,9 @@
     "node": ">=22 <25"
   },
   "overrides": {
-    "brace-expansion": "5.1.0",
+    "minimatch@3.1.5": {
+      "brace-expansion": "1.1.22"
+    },
     "next": {
       "postcss": "^8.5.23"
     },

@@ -17,7 +17,7 @@ import {
 } from '@/lib/reference-track-conversion';
 import { RemoteMediaSecurityError } from '@/lib/remote-media-security';
 import { getFfmpegPath } from '@/lib/video-poster';
-import { probeVideoFile } from '@/lib/video-rendition';
+import { parseVideoProbeOutput } from '@/lib/video-rendition';
 
 // The remote half is staged-remote-media's own (its tests fetch through it); here it stages fixtures.
 const stagedRemoteMedia = vi.hoisted(() => ({ stageAllowlistedRemoteMedia: vi.fn() }));
@@ -107,10 +107,10 @@ describe('convertReferenceTrackIfRefused', () => {
   async function probe(wav: Buffer) {
     const file = path.join(directory, `${randomUUID()}.wav`);
     await writeFile(file, wav);
-    return {
-      stderr: spawnSync(getFfmpegPath(), ['-hide_banner', '-i', file], { encoding: 'utf8' }).stderr,
-      durationSeconds: (await probeVideoFile(file)).durationSeconds,
-    };
+    // Read with ffmpeg itself: probeVideoFile reads only a clip's containers
+    // (media-demuxers.ts), and this is a WAV.
+    const stderr = spawnSync(getFfmpegPath(), ['-hide_banner', '-i', file], { encoding: 'utf8' }).stderr;
+    return { stderr, durationSeconds: parseVideoProbeOutput(stderr).durationSeconds };
   }
 
   /** What stageAllowlistedRemoteMedia answers: the bytes in a file, with a lease the encoder can inherit. */
