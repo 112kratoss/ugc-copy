@@ -155,8 +155,11 @@ the form shows. If it is per account, another person's plugin would be refused a
 `MCP_CLIENT_IDS.chatgpt` stays `CLIENT_ID_PENDING_CHATGPT` and the setup page shows ChatGPT as
 coming soon until one of two things happens. Either a second ChatGPT account shows the same id
 for `https://magicbooklet.com/api/mcp` (then the id goes into `MCP_CLIENT_IDS`), or the app is
-listed in ChatGPT's directory. A different id is added to the client with
-`auth.admin.oauth.updateClient`, as Codex's second URI was.
+listed in ChatGPT's directory. Switching ChatGPT on is then only that id, because the setup page
+already carries ChatGPT's full steps (Advanced OAuth settings, no secret, `offline_access`
+unticked). A different callback id is added by passing the client's whole list, the existing URI
+included, to `auth.admin.oauth.updateClient`, which replaces `redirect_uris` (`ops:oauth-clients`
+has no update command); Codex's second URI was added that way.
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
@@ -1243,8 +1246,9 @@ the owner can send to mcp-review@anthropic.com:
 
 ### ChatGPT directory submission
 
-A developer-mode connector works for anyone whose workspace allows custom servers; a listing in
-ChatGPT's directory is a separate submission that OpenAI reviews. Before submitting:
+Anyone whose workspace allows custom servers can add the server as a plugin, but sign-in works
+only for an account whose callback id is registered on the client ("Registered clients"). A
+listing in ChatGPT's directory is a separate submission that OpenAI reviews. Before submitting:
 
 - No selling or upselling credits inside tool output. A short balance answers
   `INSUFFICIENT_CREDITS` with the balance and the shortfall only, never a pack, a price or a
@@ -1252,7 +1256,7 @@ ChatGPT's directory is a separate submission that OpenAI reviews. Before submitt
   tool, its text and its structured content.
 - Tool annotations must match what each tool does (`readOnlyHint` on the reads,
   `destructiveHint` on `create_media`), and a reviewer needs an account with credits.
-- Register on the ChatGPT client the exact redirect URI ChatGPT's management page shows for the
-  server (the callback-ID form, since GoTrue sends no `iss`) before the review starts. It may
-  differ from the owner's own plugin's (`R0qoU77QhExz`, "Registered clients"); add it beside that
-  one.
+- Register on the ChatGPT client the exact redirect URI ChatGPT shows for the app (the
+  callback-ID form, since GoTrue sends no `iss`) before the review starts. It may differ from the
+  owner's own plugin's (`R0qoU77QhExz`, "Registered clients"). Keep both: pass the whole list to
+  `auth.admin.oauth.updateClient`, which replaces it.

@@ -123,6 +123,19 @@ describe('/developers/mcp', () => {
     expect(document.body.textContent).not.toMatch(/sets? (?:a|the) price|prices it for you/u);
   });
 
+  it('gives ChatGPT the steps its sign-in needs once its client id is registered', () => {
+    render(<McpDeveloperGuide clientIds={ALL_REGISTERED} />);
+
+    const chatgpt = block('ChatGPT');
+    expect(chatgpt).toHaveAttribute('data-client-state', 'available');
+    const words = chatgpt.textContent ?? '';
+    expect(words).toContain('chatgpt-client-id');
+    // The client id goes under Advanced OAuth settings, with no secret and token method none.
+    expect(words).toMatch(/open Advanced OAuth settings and enter this\s+client ID\. Leave the client secret empty and the token endpoint auth method on none\./);
+    // ChatGPT ticks offline_access by default and Supabase's OAuth server refuses it (runbook, "Registered clients").
+    expect(words).toContain('untick offline_access');
+  });
+
   it('names a waiting app as coming in the header and the search snippet, never as connectable', () => {
     expect(connectSentence(MIXED_IDS)).toBe('Connect Claude today, and ChatGPT, Codex and Cursor soon.');
     expect(connectSentence(ALL_REGISTERED)).toBe('Connect Claude, ChatGPT, Codex or Cursor.');

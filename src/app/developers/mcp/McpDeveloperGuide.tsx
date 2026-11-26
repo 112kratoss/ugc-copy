@@ -215,15 +215,28 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
         {
           text: (
             <>
-              In ChatGPT, open <strong>Plugins</strong>, press <strong>+</strong> and choose{' '}
+              In ChatGPT, open <strong>Plugins</strong>, press <strong>Add</strong> and choose{' '}
               <strong>Add custom MCP server</strong>. Your workspace’s settings decide whether custom servers are allowed.
             </>
           ),
         },
         serverUrlStep(<>Name it Magic Booklet and, under <strong>Connection</strong>, enter the server URL.</>, 'ChatGPT'),
         {
-          text: <>For authentication choose <strong>OAuth</strong> and enter this client ID.</>,
+          text: (
+            <>
+              For authentication choose <strong>OAuth</strong>, open <strong>Advanced OAuth settings</strong> and enter this
+              client ID. Leave the client secret empty and the token endpoint auth method on <strong>none</strong>.
+            </>
+          ),
           code: { value: clientIds.chatgpt, label: 'the ChatGPT client ID' },
+        },
+        {
+          text: (
+            <>
+              In the same settings, under <strong>Default scopes</strong>, untick <strong>offline_access</strong>: Magic Booklet
+              refuses it, and signing in would fail.
+            </>
+          ),
         },
         { text: <>Confirm the warning and choose <strong>Create as a plugin</strong>, then sign in to Magic Booklet and allow ChatGPT.</> },
       ],

@@ -100,7 +100,7 @@ describe('the MCP client directory', () => {
       'http://localhost:8787/callback',
       'https://www.cursor.com/agents/mcp/oauth/callback',
     ]);
-    // Per connector, read off ChatGPT's connector page once it exists.
+    // ChatGPT's callback id may differ per account: register what its form shows (runbook, "Registered clients").
     expect(MCP_CLIENT_REDIRECT_URIS.chatgpt).toEqual([]);
   });
 

@@ -17,7 +17,9 @@ import { MCP_POSTS_ROUTE_PATH, MCP_ROUTE_PATH } from '@/lib/agent-token';
  * A client id is public (every authorize URL carries it), so it lives in code. Until the operator
  * registers a surface's client (`npm run ops:oauth-clients -- create ... --apply`, with the
  * redirect URIs below), its id is a `CLIENT_ID_PENDING_<SURFACE>` placeholder and the page shows
- * that surface as coming soon rather than a command that cannot sign in.
+ * that surface as coming soon rather than a command that cannot sign in. ChatGPT's stays a
+ * placeholder after its client was registered, until its callback id is known to be the same for
+ * every account (`MCP_CLIENT_IDS`).
  */
 
 export const MCP_SERVER_ORIGIN = 'https://magicbooklet.com';
