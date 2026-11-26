@@ -101,7 +101,12 @@ describe('a playlist stored as a video is not followed', () => {
     args[args.indexOf('-protocol_whitelist') + 1] = 'file,https,tls,tcp';
     const run = spawnSync(getFfmpegPath(), args, { encoding: 'utf8', timeout: 20_000 });
     expect(run.stderr).not.toMatch(/Opening 'https:\/\/127\.0\.0\.1/);
-    expect(run.stderr).toMatch(/not on whitelist/i);
+    expect(run.stderr).not.toMatch(/Duration:/);
+    // The build decides which refusal is printed. The macOS binary (ffmpeg 6.0)
+    // takes the file for HLS and is stopped by the format list; the Linux one
+    // CI and production run no longer takes a playlist without an .m3u8 name or
+    // type for HLS at all, and finds no listed container in it.
+    expect(run.stderr).toMatch(/not on whitelist|Not detecting m3u8\/hls|Invalid data found/i);
   });
 
   it('still reads the containers a reference may be', () => {
