@@ -1062,7 +1062,7 @@ later one checks whatever its new description claims.
    ```bash
    git fetch -q origin
    SHA="$(curl -s https://magicbooklet.com/api/app-version | python3 -c 'import json,sys; print(json.load(sys.stdin)["buildId"])')"
-   mkdir -p /tmp/registry-entry && git show "$SHA:server.json" > /tmp/registry-entry/server.json
+   mkdir -p /tmp/registry-entry && git show "${SHA}:server.json" > /tmp/registry-entry/server.json
    mcp-publisher publish /tmp/registry-entry/server.json
    ```
 
