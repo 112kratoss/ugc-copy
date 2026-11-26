@@ -9,6 +9,7 @@ import {
   CONSENT_UNAVAILABLE_MESSAGE,
   decideConsent,
   loadConsentView,
+  sendAgentConsentAnswer,
   type ConsentDecision,
   type ConsentDetails,
 } from '@/lib/oauth-consent-service';
@@ -26,14 +27,35 @@ function leaveFor(redirectUrl: string) {
 }
 
 /**
- * The account's half of the consent screen: reads the request with the signed-in session, follows
- * GoTrue's redirect when this client was already approved, and otherwise shows who is asking, what
- * an agent may do, where the browser goes back to, and the two answers.
+ * A request of the app's own authorization server, as the page read it on the server for this
+ * account: what to show, and the one-time token the answer carries (`loadAgentConsent`).
  */
-export default function ConsentClient({ authorizationId, email }: { authorizationId: string; email: string | null }) {
-  const [state, setState] = useState<State>({ kind: 'loading' });
+export type AppConsentRequest = { details: ConsentDetails; consentToken: string };
+
+/**
+ * The account's half of the consent screen: who is asking, what an agent may do, where the
+ * browser goes back to, and the two answers.
+ *
+ * For a request of the app's own authorization server (`appRequest`) the page arrives with the
+ * request already read, and the answer goes to `/api/oauth/consent` with the web session's token.
+ * For one of Supabase Auth's, until its server is off, the browser's session reads the request
+ * and answers GoTrue, following its redirect when this client was already approved.
+ */
+export default function ConsentClient({
+  authorizationId,
+  email,
+  appRequest,
+}: {
+  authorizationId: string;
+  email: string | null;
+  appRequest?: AppConsentRequest;
+}) {
+  const [state, setState] = useState<State>(() => (
+    appRequest ? { kind: 'consent', details: appRequest.details, deciding: null } : { kind: 'loading' }
+  ));
 
   useEffect(() => {
+    if (appRequest) return undefined;
     let cancelled = false;
     loadConsentView(supabase.auth.oauth, authorizationId)
       .then((result) => {
@@ -55,6 +77,8 @@ export default function ConsentClient({ authorizationId, email }: { authorizatio
     return () => {
       cancelled = true;
     };
+    // The request is the page's for its whole life: it is read once, or arrives read.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authorizationId]);
 
   async function decide(decision: ConsentDecision) {
@@ -62,7 +86,15 @@ export default function ConsentClient({ authorizationId, email }: { authorizatio
     setState({ ...state, deciding: decision });
     let result: Awaited<ReturnType<typeof decideConsent>>;
     try {
-      result = await decideConsent(supabase.auth.oauth, authorizationId, decision);
+      if (appRequest) {
+        const { data } = await supabase.auth.getSession();
+        result = await sendAgentConsentAnswer(
+          { authorizationId, decision, consentToken: appRequest.consentToken },
+          { accessToken: data.session?.access_token },
+        );
+      } else {
+        result = await decideConsent(supabase.auth.oauth, authorizationId, decision);
+      }
     } catch {
       result = { ok: false, message: CONSENT_DECISION_FAILED_MESSAGE };
     }

@@ -116,6 +116,9 @@ describe('E2E smoke job', () => {
     expect(fromTheShell).toEqual([]);
     expect(serverEnv.NEXT_PUBLIC_SUPABASE_URL).toBe(PLACEHOLDER_PROJECT);
     for (const entry of setByTheConfig) {
+      // A placeholder, a switch, the run's own address or the placeholder project; and the one
+      // setting that is a word: both authorization servers, for /oauth/consent's specs.
+      if (entry === 'MCP_AUTHORIZATION_SERVER=both') continue;
       expect(entry).toMatch(/^[A-Z0-9_]+=(ci-placeholder-[a-z-]+|1|http:\/\/127\.0\.0\.1:3100|https:\/\/example\.supabase\.co)$/);
     }
   });

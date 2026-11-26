@@ -84,7 +84,8 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
       const response = handler();
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('application/json');
-      expect(response.headers.get('cache-control')).toBe('public, max-age=3600, s-maxage=86400');
+      // Five minutes: the authorization server it names changes with the cutover flag.
+      expect(response.headers.get('cache-control')).toBe('public, max-age=300, s-maxage=300');
       expect(response.headers.get('access-control-allow-origin')).toBe('*');
       expect(response.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
       await expect(response.json()).resolves.toEqual(buildOAuthProtectedResourceMetadata());

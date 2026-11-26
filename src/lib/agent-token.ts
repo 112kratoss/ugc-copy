@@ -21,6 +21,12 @@
  * remedy for a leaked token is revocation of the grant, which deletes its sessions, and the
  * one-hour expiry. The phase 0 spike read the claims a real agent token carries
  * (`docs/research/mcp-oauth-spike-2026-11-09.md`); if the rule changes, it changes here.
+ *
+ * That is the token Supabase issues, and the reason the app has an authorization server of its
+ * own (`docs/plans/agent-token-broker-plan-2026-11-26.md`): its access token is an opaque string
+ * with the prefix below, a row in this app's database and nothing at Supabase. Which of the two
+ * the MCP routes take is `MCP_AUTHORIZATION_SERVER` (`agent-oauth-mode.ts`); once it is `app`,
+ * no JWT of any kind is taken there.
  */
 
 export const AGENT_TOKEN_CLAIM = 'client_id';
@@ -56,4 +62,18 @@ export function isAgentToken(claims: Claims): boolean {
 /** Whether a request path takes an agent token at all: only the MCP routes do. */
 export function routeAcceptsAgentToken(pathname: string): boolean {
   return MCP_ROUTE_PATHS.includes(pathname);
+}
+
+/** The prefix of an access token the app's own authorization server issued (`agent-oauth-tokens.ts`). */
+export const APP_AGENT_ACCESS_TOKEN_PREFIX = 'mbat_';
+
+const APP_AGENT_ACCESS_TOKEN_PATTERN = /^mbat_[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Whether a bearer token has the shape of the app's own agent access token: the prefix and 256
+ * random bits in base64url. Shape only: whether it is live is the database's answer
+ * (`agent-oauth-admission.ts`). A JWT never has this shape, so the test also tells the two apart.
+ */
+export function isAppAgentAccessToken(token: string | null | undefined): boolean {
+  return typeof token === 'string' && APP_AGENT_ACCESS_TOKEN_PATTERN.test(token);
 }

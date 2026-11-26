@@ -72,7 +72,20 @@ export function agentAccessFor(clientId: string | null | undefined): ReadonlyArr
   return isPostingOnlyClientId(clientId) ? POSTING_AGENT_ACCESS : AGENT_ACCESS;
 }
 
-/** The id GoTrue issues: URL-safe characters, 32 on the stacks seen; bounded either way. */
+/**
+ * The access list for a grant of the app's own authorization server, which is for one server
+ * (`agent-oauth-request.ts`): the posting list when the grant is for the posting server, whoever
+ * the client is, so the page lists what that grant can reach and nothing wider.
+ */
+export function agentAccessForSurface(surface: 'full' | 'posts'): ReadonlyArray<AgentAccessItem> {
+  return surface === 'posts' ? POSTING_AGENT_ACCESS : AGENT_ACCESS;
+}
+
+/**
+ * The id of an authorization request: the app's own (`mbar_` and 43 characters,
+ * `agent-oauth-tokens.ts`) or, until Supabase's OAuth server is off, GoTrue's (URL-safe
+ * characters, 32 on the stacks seen); bounded either way.
+ */
 const AUTHORIZATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 export function normalizeAuthorizationId(value: unknown): string | null {
@@ -169,7 +182,7 @@ export const CONSENT_UNAVAILABLE_MESSAGE =
 export const CONSENT_DECISION_FAILED_MESSAGE =
   'Your answer did not reach Magicbooklet. Try again, or go back to the app that asked and connect again.';
 
-function httpUrlOrNull(value: unknown): string | null {
+export function httpUrlOrNull(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   try {
     const url = new URL(value);
@@ -230,6 +243,48 @@ export async function loadConsentView(
 }
 
 export type ConsentDecision = 'approve' | 'deny';
+
+/** Where the consent page sends the account's answer to a request of the app's own server. */
+export const AGENT_CONSENT_API_PATH = '/api/oauth/consent';
+
+/** The body of that answer: the request, the answer, and the token the page was rendered with. */
+export type AgentConsentAnswer = {
+  authorizationId: string;
+  decision: ConsentDecision;
+  consentToken: string;
+};
+
+type AnswerFetch = (input: string, init: RequestInit) => Promise<Pick<Response, 'ok' | 'json'>>;
+
+/**
+ * Sends the answer to the app's own authorization server with the web session's token, and
+ * returns where the browser goes next: the client's redirect URI with a code, or with
+ * `access_denied`. Same-origin by its relative path; the session token in the header is what
+ * makes it this account's answer, and no cookie is involved.
+ */
+export async function sendAgentConsentAnswer(
+  answer: AgentConsentAnswer,
+  options: { accessToken: string | null | undefined; fetch?: AnswerFetch },
+): Promise<{ ok: true; redirectUrl: string } | { ok: false; message: string }> {
+  if (!options.accessToken) return { ok: false, message: CONSENT_DECISION_FAILED_MESSAGE };
+  const send: AnswerFetch = options.fetch ?? ((input, init) => fetch(input, init));
+  try {
+    const response = await send(AGENT_CONSENT_API_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${options.accessToken}` },
+      body: JSON.stringify(answer),
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+    const body: unknown = await response.json().catch(() => null);
+    const redirectUrl = response.ok ? redirectUrlOf(body) : null;
+    if (redirectUrl) return { ok: true, redirectUrl };
+    const code = body && typeof body === 'object' ? (body as { code?: unknown }).code : null;
+    return { ok: false, message: code === 'CONSENT_UNAVAILABLE' ? CONSENT_UNAVAILABLE_MESSAGE : CONSENT_DECISION_FAILED_MESSAGE };
+  } catch {
+    return { ok: false, message: CONSENT_DECISION_FAILED_MESSAGE };
+  }
+}
 
 /**
  * The account's answer, sent to GoTrue without its own browser redirect so the page can follow

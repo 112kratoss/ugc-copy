@@ -224,6 +224,13 @@ const startPostGenerationIds = `in.(${startPosts.generations.map(({ id }) => id)
 // The creator page's posts, newest first, as its read answers them and the hydration names them.
 const recipePagePostIds = `in.(${recipePage.posts.map(({ id }) => id).join(',')})`;
 
+// Two requests of the app's own authorization server, as its consent page reads them for the E2E
+// user (loadAgentConsent, src/lib/agent-oauth-server-service.ts): one for the full MCP server from
+// a client that returns to a program on the person's computer, one for the posting server from a
+// hosted client. oauth-consent.spec.ts draws both.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const consentRequests = require('../fixtures/oauth-consent-requests.json');
+
 const HOST = 'example.supabase.co';
 
 // A visitor is counted by its hashed network address (hashFeedIdentity, src/lib/showcase-feed-identity.ts,
@@ -243,6 +250,22 @@ function json(body, headers = {}) {
 }
 
 const READS = [
+  // /oauth/consent for a request of the app's own authorization server: the page binds the pending
+  // request to the signed-in account (an update that answers the row), then reads its client.
+  ...[consentRequests.full, consentRequests.posts].flatMap(({ authorization, client }) => [
+    {
+      methods: ['PATCH'],
+      path: '/rest/v1/agent_oauth_authorizations',
+      filters: { id: `eq.${authorization.id}`, status: 'eq.pending', or: `(user_id.is.null,user_id.eq.${consentRequests.userId})` },
+      answer: () => json([authorization]),
+    },
+    {
+      methods: ['GET'],
+      path: '/rest/v1/agent_oauth_clients',
+      filters: { client_id: `eq.${client.client_id}` },
+      answer: ({ wantsObject }) => json(wantsObject ? client : [client]),
+    },
+  ]),
   {
     // GET /api/search/suggest: its own rate limit (enforceBackendRateLimit), allowed. Matched by the
     // scope, so every other route's limit still fails offline as it did.
