@@ -3,7 +3,7 @@
 --
 -- RevenueCat moves a receipt to another app user on a restore (its default "transfer" behaviour),
 -- and a guest's receipt follows the guest into the account it links to. The refund then arrives
--- under the new app user. Before 20261127* such an event answered `identity_mismatch`, which the
+-- under the new app user. Before 20261126210256 such an event answered `identity_mismatch`, which the
 -- webhook acknowledges: the store returned the money and the credits stayed where they were.
 begin;
 

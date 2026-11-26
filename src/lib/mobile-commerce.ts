@@ -943,6 +943,17 @@ export async function reconcileMobilePurchaseAdjustment(
       `Backfilled mobile transaction ${input.externalOrderId} requires catalog binding to ${input.productId}`,
     );
   }
+  if (data.event_user_is_owner === false) {
+    // The event named another app user than the one the purchase was credited to (RevenueCat moved
+    // the receipt); it settled on the purchase's owner (20261126210256). Kept as a trace so a
+    // buy, restore elsewhere, refund pattern can be found; the users themselves are not logged.
+    logBackendWarning('mobile_purchase_adjustment_other_app_user', {
+      externalOrderId: input.externalOrderId,
+      providerEventId: input.providerEventId,
+      action: input.action,
+      status: data.status,
+    });
+  }
 
   const settlement: ReferralRewardSettlement = {
     status: data.status,
