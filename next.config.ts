@@ -161,6 +161,9 @@ const SHARP_ROUTES = [
 ];
 
 const nextConfig: NextConfig = {
+  // No `X-Powered-By: Next.js` on responses: it tells a scanner which
+  // framework's advisories to try (security audit, 2026-11-26).
+  poweredByHeader: false,
   // How old a cached ISR page may be and still be served while it is drawn
   // again: past an hour it never is, and the next request waits for a fresh
   // render. Next's default is a year, which let a page whose invalidation was

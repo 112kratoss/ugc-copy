@@ -6,11 +6,12 @@
     "node": ">=22 <25"
   },
   "overrides": {
-    "brace-expansion": "5.0.9",
+    "brace-expansion": "5.1.0",
     "next": {
       "postcss": "^8.5.23"
     },
     "sharp": "$sharp",
+    "source-map-js": "1.2.4",
     "tmp": "0.2.7",
     "uuid": "11.1.1"
   },
@@ -72,7 +73,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.4.0",
-    "@sentry/nextjs": "^10.69.0",
+    "@sentry/nextjs": "^10.78.0",
     "@supabase/ssr": "0.12.0",
     "@supabase/supabase-js": "2.108.2",
     "@vercel/speed-insights": "2.0.0",
@@ -84,7 +85,7 @@
     "jose": "6.2.10",
     "localforage": "^1.10.0",
     "lucide-react": "^0.563.0",
-    "next": "16.3.3",
+    "next": "16.4.6",
     "qrcode-generator": "^1.4.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -92,7 +93,7 @@
     "remark-html": "^16.0.1",
     "sharp": "0.35.5",
     "thumbhash": "^0.1.1",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@lhci/cli": "0.15.1",
@@ -106,7 +107,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.3",
+    "eslint-config-next": "16.4.6",
     "jsdom": "^28.1.0",
     "patch-package": "^8.0.1",
     "pg": "^8.22.0",
