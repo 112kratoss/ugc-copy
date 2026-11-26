@@ -1,4 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 
 import rawSharp from 'sharp';
@@ -7,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import { createGenerationImagePreview } from '@/lib/generation-media-preview';
-import sharp, { IMAGE_DECODER_FORMATS } from '@/lib/image-decoder';
+import sharp, { IMAGE_DECODER_FORMATS, sniffRasterFormat } from '@/lib/image-decoder';
 import { createPostMediaPreview } from '@/lib/post-media-preview';
 import { encodeSupportPhoto } from '@/lib/support-photos';
 
@@ -19,8 +21,9 @@ import { encodeSupportPhoto } from '@/lib/support-photos';
  * went to librsvg (GHSA-wq5f-xc86-pv6w: memory corruption, possible remote
  * code execution) from the publish, profile, support and template paths.
  *
- * The rule: the server decodes only the raster formats it stores, whatever a
- * file calls itself, and only through `src/lib/image-decoder.ts`.
+ * The rule: the server decodes only what begins as one of the raster formats
+ * it stores, whatever a file calls itself, and only through
+ * `src/lib/image-decoder.ts`, which reads the first bytes before sharp does.
  */
 
 const SVG = Buffer.from(
@@ -55,16 +58,58 @@ describe('the server decodes only the raster formats it stores', () => {
       const metadata = await sharp(bytes).metadata();
       expect(metadata.format).toBe(format);
       expect(IMAGE_DECODER_FORMATS).toContain(format);
+      expect(sniffRasterFormat(bytes)).toBe(format);
       // A decode to pixels, not only a header read.
       await expect(sharp(bytes).resize(8).webp().toBuffer()).resolves.toBeInstanceOf(Buffer);
     }
   });
 
   it('refuses SVG and TIFF bytes before any decoder sees them', async () => {
-    await expect(sharp(SVG).metadata()).rejects.toThrow(/unsupported image format/i);
-    await expect(sharp(SVG).webp().toBuffer()).rejects.toThrow(/unsupported image format/i);
     const tiff = await sample().tiff().toBuffer();
-    await expect(sharp(tiff).metadata()).rejects.toThrow(/unsupported image format/i);
+    expect(() => sharp(SVG)).toThrow(/unsupported image format/i);
+    expect(() => sharp(new Uint8Array(SVG))).toThrow(/unsupported image format/i);
+    expect(() => sharp(SVG.buffer.slice(SVG.byteOffset, SVG.byteOffset + SVG.byteLength) as ArrayBuffer))
+      .toThrow(/unsupported image format/i);
+    expect(() => sharp(tiff)).toThrow(/unsupported image format/i);
+  });
+
+  it('refuses markup hidden behind a picture\'s first bytes, and compressed SVG', () => {
+    // GIF's and WebP's signatures are printable text; libvips looks for `<svg`
+    // near the start of a file.
+    for (const disguise of [
+      Buffer.concat([Buffer.from('GIF89a'), SVG]),
+      Buffer.concat([Buffer.from('RIFF\x10\x00\x00\x00WEBP'), SVG]),
+      Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('<SVG xmlns="http://www.w3.org/2000/svg"/>')]),
+      Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+    ]) {
+      expect(sniffRasterFormat(disguise)).toBeNull();
+      expect(() => sharp(disguise)).toThrow(/unsupported image format/i);
+    }
+  });
+
+  it('reads a file\'s first bytes too, and takes no stream', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'magicbooklet-image-decoder-'));
+    try {
+      const svgFile = path.join(directory, 'picture.png');
+      const pngFile = path.join(directory, 'real.png');
+      await writeFile(svgFile, SVG);
+      await writeFile(pngFile, await sample().png().toBuffer());
+      expect(() => sharp(svgFile)).toThrow(/unsupported image format/i);
+      await expect(sharp(pngFile).metadata()).resolves.toMatchObject({ format: 'png' });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+    // A stream's bytes cannot be read ahead of the decoder.
+    expect(() => (sharp as unknown as () => unknown)()).toThrow(/unsupported image format/i);
+    expect(() => sharp({ failOn: 'error' })).toThrow(/unsupported image format/i);
+  });
+
+  it('leaves the library whole for code that draws its own SVG', async () => {
+    // Next's ImageResponse rasterises the SVG it draws with the same sharp in
+    // the same process. Switching the SVG loader off process-wide (the first
+    // form of this rule) broke the blog's social cards at build.
+    const drawn = await rawSharp(SVG).png().toBuffer();
+    expect((await rawSharp(drawn).metadata()).format).toBe('png');
   });
 
   it('still builds pictures from raw pixels and from nothing', async () => {
@@ -116,9 +161,9 @@ describe('every decode goes through the allowlist', () => {
   }
 
   it('imports sharp in one module only', () => {
-    // A type-only import decodes nothing. Anything else loads the library with
-    // every decoder it was built with, unless image-decoder.ts ran first.
-    const direct = /(?:import\s+(?!type\b)[^;]*?from\s+['"]sharp['"]|import\(\s*['"]sharp['"]\s*\)|require\(\s*['"]sharp['"]\s*\))/;
+    // A type-only import decodes nothing. Anything else reaches the library
+    // without the check image-decoder.ts makes first.
+    const direct = /(?:(?:import|export)\s+(?!type\b)[^;]*?from\s+['"]sharp['"]|import\(\s*['"]sharp['"]\s*\)|require\(\s*['"]sharp['"]\s*\))/;
     const offenders = sourceFiles(root)
       .filter((file) => file !== DECODER && direct.test(readFileSync(file, 'utf8')))
       .map((file) => path.relative(root, file));
@@ -130,8 +175,8 @@ describe('every decode goes through the allowlist', () => {
       dependencies: Record<string, string>;
     };
     const [major, minor, patch] = manifest.dependencies.sharp.replace(/^[^0-9]*/, '').split('.').map(Number);
-    // 0.35.5 ships librsvg 2.63.2. The allowlist keeps SVG from the decoder
-    // either way; the version keeps the next unlisted format from mattering.
+    // 0.35.5 ships librsvg 2.63.2. The check keeps an upload's SVG from the
+    // decoder either way; the version covers the SVG the app draws itself.
     expect(major > 0 || minor > 35 || (minor === 35 && patch >= 5)).toBe(true);
   });
 });
