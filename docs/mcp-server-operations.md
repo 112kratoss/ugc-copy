@@ -1055,6 +1055,9 @@ later one checks whatever its new description claims.
    The login prints an "Expected proof record"; it must match what step 2 fetched.
 4. Publish: `mcp-publisher publish` ("Successfully published", with the version), then check
    `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=com.magicbooklet/mcp"`.
+   It reads `./server.json` unless given a path, so when the checkout is not on `main`'s tip,
+   publish `main`'s own entry instead: `git show origin/main:server.json > <dir>/server.json`,
+   then `mcp-publisher publish <dir>/server.json`.
 
 Published first on 2026-11-09 at 20:28 UTC: `com.magicbooklet/mcp` 1.1.0, `status: active` and
 `isLatest` in the registry's answer, by the HTTP method above; `mcp-publisher logout` clears the
@@ -1068,15 +1071,18 @@ Phase 4 moved both to 1.2.0 (twelve tools: `request_upload` added, `publish_post
 `uploads`, text posts, `resources` and `resource_price_tokens`); the description is unchanged,
 and still true. 1.2.0 was published on 2026-11-10 at 16:57 UTC by the steps above, once the
 release that carries it was live and the production checks under "Media made elsewhere" and
-"Text posts, resources and prices" had passed: the registry answers 1.2.0 `status: active` and
+"Text posts, resources and prices" had passed: the registry answered 1.2.0 `status: active` and
 `isLatest`, and 1.1.0 no longer latest.
 
 1.2.1 (2026-11-19) changes one thing, `repository`: from this repository to
 `112kratoss/magicbooklet-claude-plugin` (GitHub id 1463305349), so the entry's link still opens
 once this repository is private. A published version cannot be edited, which is why the change
-is a version. Nothing installs from that link, so the publish is not urgent, and 1.2.0 stays the
-registry's latest until 1.2.1 is published by the steps above, after the release that carries it
-is live. Record the publish here when it is done.
+is a version. 1.2.1 was published on 2026-11-24 at 06:06 UTC by the steps above, with production
+serving a build that carries it (`bfec35fd9`; the version itself shipped in PR #876) and the
+plugin repository public under that id: the registry answers 1.2.1 `status: active` and
+`isLatest` with the new `repository`, and 1.1.0 and 1.2.0 stay `active`, no longer latest. The
+primary checkout was behind `main` that day, with 1.2.0 still in its `server.json`, so `main`'s
+entry was published from a scratch folder as step 4 describes.
 
 The DNS alternative needs no deploy: a TXT record on the apex, `magicbooklet.com`, never under
 a selector such as `_mcp-auth.magicbooklet.com`:
