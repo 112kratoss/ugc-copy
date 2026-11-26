@@ -288,11 +288,24 @@ describe('settings screen (HIG S16)', () => {
     expect(profile.findAll((node) => String(node.type) === 'icon' && node.props.name === 'ChevronRight')).toHaveLength(1);
   });
 
-  it('offers help from settings', () => {
+  // The support chat itself, as the side menu's Help & Support opens it (owner, 2026-11-26).
+  it('opens the support chat from Help & support', () => {
     const tree = renderScreen();
     const help = rowByTitle(tree, 'Help & support');
     renderer.act(() => { (help.props.onPress as () => void)(); });
-    expect(routerPush).toHaveBeenCalledWith('/help');
+    expect(routerPush).toHaveBeenCalledWith('/support');
+  });
+
+  // The chat answers a guest with its sign-in prompt and the email, so the row says so.
+  it('tells a guest that Help & support asks for a sign-in, or offers the email', () => {
+    const accountRow = String(rowByTitle(renderScreen(), 'Help & support').props.accessibilityLabel);
+    expect(accountRow).toContain('Write to us here in the app.');
+
+    authState.user = null;
+    const guestRow = rowByTitle(renderScreen(), 'Help & support');
+    expect(String(guestRow.props.accessibilityLabel)).toContain('Sign in to write to us here in the app, or email us without signing in.');
+    renderer.act(() => { (guestRow.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith('/support');
   });
 
   it('opens AI data sharing, whose row says whether prompts and media may go to AI services', () => {

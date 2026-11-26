@@ -2,6 +2,7 @@
 
 import clsx from 'clsx';
 import { AlertCircle, LifeBuoy, Mail, RefreshCw } from 'lucide-react';
+import Link from 'next/link';
 import { useMemo, useState } from 'react';
 
 import { Button, Kicker, StatusCallout, Text } from '@/components/DesignSystem';
@@ -99,9 +100,14 @@ export default function SupportConversationClient() {
           />
         )}
 
+        {/* The shell's Help & feedback opens this page for a browser with a session (owner,
+            2026-11-26), so the contact page's phone, address and policy links, child safety and
+            account deletion among them, are reached from here. */}
         <Text variant="caption" className="mt-5 block">
           Prefer email? Write to{' '}
           <a href={SUPPORT_MAILTO} className="underline underline-offset-2">{siteConfig.supportEmail}</a>.
+          {' '}Our phone, address and policies are on the{' '}
+          <Link href="/contact" prefetch={false} className="underline underline-offset-2">contact page</Link>.
         </Text>
       </div>
     </div>

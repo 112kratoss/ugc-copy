@@ -72,7 +72,6 @@ const LEGACY_SIZES: Record<string, number> = {
   'app/(tabs)/showcase.tsx': 0,
   'app/(tabs)/studio.tsx': 0,
   'app/auth.tsx': 0,
-  'app/help.tsx': 0,
   'app/invite.tsx': 0,
   'app/onboarding.tsx': 0,
   'app/post/[id].tsx': 0,

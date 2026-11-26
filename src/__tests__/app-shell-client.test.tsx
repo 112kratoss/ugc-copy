@@ -7,6 +7,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/components/AppShellClient';
+import { publishAppShellAuthentication, resetAppShellAuthenticationForTests } from '@/components/app-shell-auth-state';
 import { APP_NAV_ITEMS, type AppNavClickHandler } from '@/components/app-shell-nav';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
@@ -165,6 +166,8 @@ function standMenuOpen(menu: HTMLElement) {
 
 describe('AppShellClient', () => {
   beforeEach(() => {
+    // The account island's session check, which each page load starts without.
+    resetAppShellAuthenticationForTests();
     mockedPathname = '/';
     mockedSegment = null;
     mockedScrollY = 0;
@@ -1321,6 +1324,81 @@ describe('AppShellClient', () => {
 
     expect(screen.getByRole('main')).toHaveTextContent('Referral content');
     expect(screen.queryByRole('navigation', { name: 'Primary mobile navigation' })).not.toBeInTheDocument();
+  });
+
+  // Owner, 2026-11-26: the support option opens the chat. A browser holding a session cookie (a
+  // guest's too, which the chat's page answers with sign-in and the email) gets the chat; one with
+  // none gets the contact page, since the chat's route would only send it to sign-in.
+  describe('Help & feedback', () => {
+    const COOKIE = 'sb-shellref-auth-token';
+
+    afterEach(() => {
+      document.cookie = `${COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+      vi.unstubAllEnvs();
+    });
+
+    function helpHrefs() {
+      const sidebar = within(screen.getByRole('complementary', { name: 'Primary navigation' }))
+        .getByRole('link', { name: 'Help & feedback' }).getAttribute('href');
+      fireEvent.click(screen.getByRole('button', { name: /^Open navigation/ }));
+      const drawer = within(screen.getByRole('dialog', { name: 'Navigation' }))
+        .getByRole('link', { name: 'Help & feedback' }).getAttribute('href');
+      return [sidebar, drawer];
+    }
+
+    it('opens the support chat from the sidebar and the drawer in a browser holding a session', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      document.cookie = `${COOKIE}=base64-session; path=/`;
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+
+      expect(helpHrefs()).toEqual(['/support', '/support']);
+    });
+
+    it('opens the contact page in a browser holding none', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+
+      expect(helpHrefs()).toEqual(['/contact', '/contact']);
+    });
+
+    // A cookie is only a hint: once the account island finds its session over, the chat's route
+    // would send the visitor to sign-in, so the contact page it is.
+    it('opens the contact page once the account check finds the cookie’s session over', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      document.cookie = `${COOKIE}=base64-session; path=/`;
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      act(() => publishAppShellAuthentication(false));
+
+      expect(helpHrefs()).toEqual(['/contact', '/contact']);
+    });
+
+    it('opens the chat after a sign-in later in the visit, before the cookie is read again', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      act(() => publishAppShellAuthentication(true));
+
+      expect(helpHrefs()).toEqual(['/support', '/support']);
+    });
   });
 
   // The post composer asks before its work is lost (useLeaveGuard): one tap on

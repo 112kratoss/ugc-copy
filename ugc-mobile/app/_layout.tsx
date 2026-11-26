@@ -465,7 +465,6 @@ function RootLayoutNav() {
                 <Stack.Screen name="r/[code]" options={{ title: 'Your Invite' }} />
                 <Stack.Screen name="settings" options={{ title: 'Settings' }} />
                 <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
-                <Stack.Screen name="help" options={{ title: 'Help & Support' }} />
                 {/* A message is pulled right to reply to it, as in a chat
                     app: the full-screen back pan would take that drag (see
                     post/new above), so only the edge swipe goes back here. */}

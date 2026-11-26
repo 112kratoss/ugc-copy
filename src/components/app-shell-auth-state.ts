@@ -12,6 +12,11 @@ export function readAppShellAuthentication() {
   return currentAuthenticationState;
 }
 
+/** Back to "not checked yet", as a page load starts: for tests, which share this module. */
+export function resetAppShellAuthenticationForTests() {
+  currentAuthenticationState = null;
+}
+
 export function subscribeToAppShellAuthentication(listener: AuthenticationListener) {
   listeners.add(listener);
   return () => {

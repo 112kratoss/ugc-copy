@@ -12,8 +12,9 @@ vi.mock('next/navigation', () => ({
 }));
 
 describe('the contact page', () => {
-    // A signed-in visitor's only help entry is "Help & feedback", which opens
-    // this page; child safety and account deletion were linked nowhere they could see.
+    // A signed-in visitor reaches this page from the support chat's footnote, since "Help &
+    // feedback" opens the chat for a browser with a session (2026-11-26; a signed-out one still
+    // opens this page); child safety and account deletion were linked nowhere they could see.
     it('links child safety and account deletion beside the policies', () => {
         render(<Contact />);
 

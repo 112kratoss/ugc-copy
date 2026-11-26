@@ -45,6 +45,7 @@ import { CREDIT_BALANCE_LOADING_LABEL, UNKNOWN_AMOUNT_LABEL, formatCreditAmount 
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
 import { UNLOCKED_RECIPES_LABEL, UNLOCKED_RECIPES_PATH } from '@/lib/recipe-unlocked-notice';
+import { SUPPORT_CONVERSATION_PATH } from '@/lib/support-conversation-policy/support-conversation-policy';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 
@@ -415,7 +416,9 @@ export function HomeSideMenu({
               <MenuRow icon={<PackageOpen size={21} color={theme.colors.text} />} label={UNLOCKED_RECIPES_LABEL} chosen={handoff.chosen === UNLOCKED_RECIPES_PATH} onPress={() => openScreen(UNLOCKED_RECIPES_PATH)} />
               <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginVertical: 4 }} />
               <MenuRow icon={<Settings size={21} color={theme.colors.text} />} label="Settings" chosen={handoff.chosen === '/settings'} onPress={() => openScreen('/settings')} />
-              <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" chosen={handoff.chosen === '/help'} onPress={() => openScreen('/help')} />
+              {/* Straight into the support chat (owner, 2026-11-26): its screen
+                  answers a guest with sign-in and the email beside it. */}
+              <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" chosen={handoff.chosen === SUPPORT_CONVERSATION_PATH} onPress={() => openScreen(SUPPORT_CONVERSATION_PATH)} />
             </View>
 
             <View style={{ flex: 1, minHeight: 16 }} />

@@ -41,11 +41,13 @@ import { AppText, IconButton, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { showActionSheet, type ActionSheetAction } from '@/lib/action-sheet';
 import { ApiError } from '@/lib/api-client';
 import { useAppForeground } from '@/lib/app-foreground';
+import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { formatSupportDetails, readCreatorSession } from '@/lib/creator-session-diagnostics';
 import { showConfirmDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
-import { verticalHitSlop } from '@/lib/hit-target';
+import { MIN_HIT_TARGET_PT, verticalHitSlop } from '@/lib/hit-target';
 import { uploadPickedMedia } from '@/lib/media';
 import {
   SUPPORT_CONVERSATION_PATH,
@@ -99,6 +101,7 @@ import {
   supportMessageSheetTitle,
   supportSendFailureWords,
 } from '@/lib/support-conversation-view-model';
+import { supportMailUrl } from '@/lib/support-mail';
 import {
   keepSupportPhoto,
   letGoSupportPhoto,
@@ -110,7 +113,38 @@ import {
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
-const SUPPORT_MAIL_URL = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Magicbooklet app support')}`;
+/** The mail "Email us instead" opens, read at the press so its build and session lines are current. */
+function supportMailWithDetails() {
+  return supportMailUrl([
+    formatAppVersionLabel(readAppVersionParts()),
+    formatSupportDetails({ ...readUpdateRuntime(), session: readCreatorSession() }),
+  ]);
+}
+
+/**
+ * The mail under the privacy note, as the web's footnote under its thread: Help & Support opens
+ * this screen itself (owner, 2026-11-26), and it is the only place the app gives the address.
+ */
+function SupportMailLine() {
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={`Prefer email? Write to ${SUPPORT_EMAIL}`}
+      accessibilityHint="Opens your email app."
+      onPress={() => void Linking.openURL(supportMailWithDetails())}
+      style={({ pressed }) => ({
+        minHeight: MIN_HIT_TARGET_PT,
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+        Prefer email? Write to <AppText variant="caption" color="primary">{SUPPORT_EMAIL}</AppText>
+      </AppText>
+    </Pressable>
+  );
+}
 
 /** How far a message is pulled right to reply to it, and how far it can go. */
 const SWIPE_REPLY_TRIGGER = 56;
@@ -654,7 +688,7 @@ export default function SupportScreen() {
           accent="primary"
           onPress={() => router.push({ pathname: '/auth', params: { returnTo: SUPPORT_CONVERSATION_PATH } } as never)}
         />
-        <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(SUPPORT_MAIL_URL)} />
+        <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(supportMailWithDetails())} />
       </Screen>
     );
   }
@@ -678,6 +712,10 @@ export default function SupportScreen() {
             disabled={conversation.isFetching}
             onPress={() => void conversation.refetch()}
           />
+        ) : null}
+        {/* A thread that will not load still leaves the mail: this screen is the only place the app gives the address. */}
+        {failed ? (
+          <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(supportMailWithDetails())} />
         ) : null}
       </Screen>
     );
@@ -743,6 +781,7 @@ export default function SupportScreen() {
         <Lock size={appTheme.icon.xs} color={theme.colors.muted} />
         <AppText variant="caption" color="muted" style={{ flexShrink: 1, textAlign: 'center' }}>{SUPPORT_WORDS.privacyNote}</AppText>
       </View>
+      <SupportMailLine />
     </View>
   );
 
