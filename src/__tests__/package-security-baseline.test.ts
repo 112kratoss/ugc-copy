@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -101,7 +101,10 @@ describe('package security baseline', () => {
     // export `expand` by name only, and ESLint then dies with "expand is not a
     // function". But 4.0.0 to 5.0.11 carry two denial-of-service advisories.
     // So minimatch 3 gets the 1.x line it was written for, and every other
-    // copy resolves to a fixed 5.x.
+    // copy resolves to a fixed 5.x. The patch that made 5.0.9 callable went
+    // with the pin: patch-package fails the install on a patch whose version
+    // is not the one installed.
+    expect(existsSync(join(projectRoot, 'patches', 'brace-expansion+5.0.9.patch'))).toBe(false);
     expect(packageJson.overrides).not.toHaveProperty('brace-expansion');
     expect(packageJson.overrides).toMatchObject({
       'minimatch@3.1.5': { 'brace-expansion': '1.1.22' },
