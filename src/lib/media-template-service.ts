@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError } from '@/lib/backend-logger';
+import { isMediaCursorBoundary } from '@/lib/media-library-cursor';
 import {
   compileTemplateGraph,
   createTemplateSnapshotHash,
@@ -314,12 +315,14 @@ async function attachTemplateDetails(
 
 const PUBLIC_TEMPLATE_PAGE_SIZE = 48;
 
-function decodeTemplateCursor(value: string | null | undefined): { createdAt: string; id: string } | null {
-  if (!value) return null;
+export function decodeTemplateCursor(value: string | null | undefined): { createdAt: string; id: string } | null {
+  // The two values go into a PostgREST `.or()` below, unescaped, on a route
+  // that takes no sign-in: a cursor is an id and a timestamp or it is nothing.
+  if (!value || value.length > 512 || !/^[A-Za-z0-9_-]+$/.test(value)) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<string, unknown>;
-    return typeof parsed.createdAt === 'string' && typeof parsed.id === 'string'
-      ? { createdAt: parsed.createdAt, id: parsed.id }
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Record<string, unknown> | null;
+    return parsed && typeof parsed === 'object' && isMediaCursorBoundary(parsed.createdAt, parsed.id)
+      ? { createdAt: parsed.createdAt as string, id: parsed.id as string }
       : null;
   } catch {
     return null;
