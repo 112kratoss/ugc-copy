@@ -41,15 +41,16 @@ import { AppText, IconButton, PrimaryButton, Screen, SecondaryButton, SectionTit
 import { showActionSheet, type ActionSheetAction } from '@/lib/action-sheet';
 import { ApiError } from '@/lib/api-client';
 import { useAppForeground } from '@/lib/app-foreground';
+import { formatAppVersionLabel, readAppVersionParts, readUpdateRuntime } from '@/lib/app-version-label';
 import { useAuth } from '@/lib/auth';
 import { copyToClipboard } from '@/lib/copy-to-clipboard';
+import { formatSupportDetails, readCreatorSession } from '@/lib/creator-session-diagnostics';
 import { showConfirmDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { uploadPickedMedia } from '@/lib/media';
 import {
   SUPPORT_CONVERSATION_PATH,
-  SUPPORT_EMAIL,
   SUPPORT_MESSAGE_COUNTER_FROM,
   SUPPORT_MESSAGE_MAX_LENGTH,
   SUPPORT_REACTION_EMOJIS,
@@ -99,6 +100,7 @@ import {
   supportMessageSheetTitle,
   supportSendFailureWords,
 } from '@/lib/support-conversation-view-model';
+import { supportMailUrl } from '@/lib/support-mail';
 import {
   keepSupportPhoto,
   letGoSupportPhoto,
@@ -110,7 +112,13 @@ import {
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 
-const SUPPORT_MAIL_URL = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Magicbooklet app support')}`;
+/** The mail "Email us instead" opens, read at the press so its build and session lines are current. */
+function supportMailWithDetails() {
+  return supportMailUrl([
+    formatAppVersionLabel(readAppVersionParts()),
+    formatSupportDetails({ ...readUpdateRuntime(), session: readCreatorSession() }),
+  ]);
+}
 
 /** How far a message is pulled right to reply to it, and how far it can go. */
 const SWIPE_REPLY_TRIGGER = 56;
@@ -654,7 +662,7 @@ export default function SupportScreen() {
           accent="primary"
           onPress={() => router.push({ pathname: '/auth', params: { returnTo: SUPPORT_CONVERSATION_PATH } } as never)}
         />
-        <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(SUPPORT_MAIL_URL)} />
+        <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(supportMailWithDetails())} />
       </Screen>
     );
   }

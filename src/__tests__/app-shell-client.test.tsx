@@ -1323,6 +1323,52 @@ describe('AppShellClient', () => {
     expect(screen.queryByRole('navigation', { name: 'Primary mobile navigation' })).not.toBeInTheDocument();
   });
 
+  // Owner, 2026-11-26: the support option opens the chat. A browser holding a session cookie (a
+  // guest's too, which the chat's page answers with sign-in and the email) gets the chat; one with
+  // none gets the contact page, since the chat's route would only send it to sign-in.
+  describe('Help & feedback', () => {
+    const COOKIE = 'sb-shellref-auth-token';
+
+    afterEach(() => {
+      document.cookie = `${COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+      vi.unstubAllEnvs();
+    });
+
+    function helpHrefs() {
+      const sidebar = within(screen.getByRole('complementary', { name: 'Primary navigation' }))
+        .getByRole('link', { name: 'Help & feedback' }).getAttribute('href');
+      fireEvent.click(screen.getByRole('button', { name: /^Open navigation/ }));
+      const drawer = within(screen.getByRole('dialog', { name: 'Navigation' }))
+        .getByRole('link', { name: 'Help & feedback' }).getAttribute('href');
+      return [sidebar, drawer];
+    }
+
+    it('opens the support chat from the sidebar and the drawer in a browser holding a session', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      document.cookie = `${COOKIE}=base64-session; path=/`;
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+
+      expect(helpHrefs()).toEqual(['/support', '/support']);
+    });
+
+    it('opens the contact page in a browser holding none', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+
+      expect(helpHrefs()).toEqual(['/contact', '/contact']);
+    });
+  });
+
   // The post composer asks before its work is lost (useLeaveGuard): one tap on
   // Home in the bottom navigation used to drop a typed post and its files.
   describe('over a page with unsaved work', () => {

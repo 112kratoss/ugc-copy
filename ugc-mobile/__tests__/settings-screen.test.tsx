@@ -288,11 +288,12 @@ describe('settings screen (HIG S16)', () => {
     expect(profile.findAll((node) => String(node.type) === 'icon' && node.props.name === 'ChevronRight')).toHaveLength(1);
   });
 
-  it('offers help from settings', () => {
+  // The support chat itself, as the side menu's Help & Support opens it (owner, 2026-11-26).
+  it('opens the support chat from Help & support', () => {
     const tree = renderScreen();
     const help = rowByTitle(tree, 'Help & support');
     renderer.act(() => { (help.props.onPress as () => void)(); });
-    expect(routerPush).toHaveBeenCalledWith('/help');
+    expect(routerPush).toHaveBeenCalledWith('/support');
   });
 
   it('opens AI data sharing, whose row says whether prompts and media may go to AI services', () => {

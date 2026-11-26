@@ -130,12 +130,13 @@ describe('sign-in help without a mail sender (decision D2)', () => {
     expect(url.searchParams.get('subject')).toBe('Trouble signing in');
   });
 
-  it('uses the address the help screen and the web give for support', () => {
-    // Read as text: the web module imports Next, and the help screen is a route. The help screen
-    // takes the address from the support rules the web and the server share.
-    const helpScreen = readFileSync('app/help.tsx', 'utf8');
+  it('uses the address the support mail and the web give for support', () => {
+    // Read as text: the web module imports Next. The support chat's mail (`lib/support-mail.ts`,
+    // the Help screen's until Help & Support opened the chat) takes the address from the support
+    // rules the web and the server share.
+    const supportMail = readFileSync('lib/support-mail.ts', 'utf8');
     const webSiteConfig = readFileSync('../src/lib/seo.ts', 'utf8');
-    expect(helpScreen).toMatch(/\bSUPPORT_EMAIL,[\s\S]*?from '@\/lib\/support-conversation-policy\/support-conversation-policy'/);
+    expect(supportMail).toMatch(/\bSUPPORT_EMAIL\b[\s\S]*?from '@\/lib\/support-conversation-policy\/support-conversation-policy'/);
     expect(SUPPORT_EMAIL).toBe(SIGN_IN_SUPPORT_EMAIL);
     expect(webSiteConfig.match(/supportEmail:\s*['"]([^'"]+)['"]/)?.[1]).toBe(SIGN_IN_SUPPORT_EMAIL);
   });

@@ -24,6 +24,7 @@ import {
   summarizeMediaDiagnostics,
 } from '@/lib/media-diagnostics';
 import { canRevealNsfwInApp } from '@/lib/nsfw-reveal-policy';
+import { SUPPORT_CONVERSATION_PATH } from '@/lib/support-conversation-policy/support-conversation-policy';
 import { CREDIT_BALANCE_LOADING_LABEL, formatCreditAmount } from '@/lib/pricing';
 import { useAuth, type AccountDeletionOutcome } from '@/lib/auth';
 import { env } from '@/lib/env';
@@ -119,11 +120,13 @@ export default function SettingsScreen() {
 
       <GroupLabel>Support & legal</GroupLabel>
 
+      {/* The support chat itself, as the side menu's Help & Support opens it
+          (owner, 2026-11-26). */}
       <SettingsCard
         icon={<CircleHelp size={appTheme.icon.feature} color={theme.colors.text} />}
         title="Help & support"
-        body="Find quick guidance for creations, recipes, and contacting support."
-        onPress={() => router.push('/help' as never)}
+        body="Write to us here in the app. We reply in the same conversation and you get a notification."
+        onPress={() => router.push(SUPPORT_CONVERSATION_PATH as never)}
       />
 
       <SettingsCard

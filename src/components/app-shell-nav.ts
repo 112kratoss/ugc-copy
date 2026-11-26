@@ -279,6 +279,17 @@ export function hidesBottomNav(pathname: string) {
   return CREATOR_PAGE_PATHS.some((path) => isExactOrChild(pathname, path));
 }
 
+/**
+ * Where the shell's "Help & feedback" goes (owner, 2026-11-26: the support option opens the
+ * chat). A browser holding a session opens the support chat at `/support`, where a guest's
+ * session meets the page's sign-in prompt with the email beside it. One holding none opens the
+ * contact page: the chat's route would only send it to sign-in, and the contact page has the
+ * email, the form and the link to the chat.
+ */
+export function getAppShellHelpHref(hasSession: boolean): '/support' | '/contact' {
+  return hasSession ? '/support' : '/contact';
+}
+
 export function isMinimalAppChromePath(pathname: string) {
   return (
     pathname === '/child-safety' ||

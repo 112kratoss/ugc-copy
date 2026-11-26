@@ -27,6 +27,7 @@ import {
   type AppNavClickHandler,
   CREATE_MENU_ITEMS,
   getActiveAppNavItem,
+  getAppShellHelpHref,
   getAppShellTitle,
   getCreateMenuHref,
   getReselectableTabId,
@@ -47,6 +48,7 @@ import DeferredAppShellAccount from './DeferredAppShellAccount';
 import { AppShellSearch, AppShellSearchButton } from '@/components/AppShellSearch';
 import AlertsBadge from '@/components/AlertsBadge';
 import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
+import { useSupabaseAuthCookieHint } from './useSupabaseAuthCookieHint';
 
 // The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
 // (its search field, the bell, the Create menu, the account menu), so the side
@@ -383,6 +385,9 @@ const AppShellFrame = memo(function AppShellFrame({
   }
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  // The server draws the contact page's address, which no cookie can be read for; the browser
+  // swaps in the chat's once hydrated when it holds a session cookie (getAppShellHelpHref).
+  const helpHref = getAppShellHelpHref(useSupabaseAuthCookieHint());
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
@@ -542,7 +547,7 @@ const AppShellFrame = memo(function AppShellFrame({
         </nav>
 
         <Link
-          href="/contact"
+          href={helpHref}
           prefetch={false}
           className="ui-focus-ring mx-3 mb-4 flex min-h-12 items-center gap-3 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] pl-2 pr-4 py-2 text-[13px] font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-default)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
         >
@@ -706,7 +711,7 @@ const AppShellFrame = memo(function AppShellFrame({
             </nav>
 
             <Link
-              href="/contact"
+              href={helpHref}
               prefetch={false}
               onClick={() => setMobileOpen(false)}
               className="ui-focus-ring mt-8 flex min-h-12 items-center gap-3 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-sm font-bold text-[var(--ui-text-secondary)]"

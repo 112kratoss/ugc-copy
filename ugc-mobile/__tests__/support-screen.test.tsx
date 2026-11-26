@@ -10,6 +10,10 @@ type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const routerState = vi.hoisted(() => ({ push: vi.fn() }));
 const openUrl = vi.hoisted(() => vi.fn());
+const appVersion = vi.hoisted(() => ({
+  label: null as string | null,
+  runtime: { runtimeVersion: null as string | null, channel: null as string | null },
+}));
 const actionSheet = vi.hoisted(() => ({ show: vi.fn() }));
 const confirmDialog = vi.hoisted(() => ({ show: vi.fn(async () => true) }));
 const clipboard = vi.hoisted(() => ({ copy: vi.fn(async () => undefined) }));
@@ -166,7 +170,15 @@ vi.mock('@/lib/theme', () => ({
   },
 }));
 
+// The build lines the guest's mail carries, as the foot of Settings shows them.
+vi.mock('@/lib/app-version-label', () => ({
+  formatAppVersionLabel: () => appVersion.label,
+  readAppVersionParts: () => ({ version: null, build: null, update: null }),
+  readUpdateRuntime: () => appVersion.runtime,
+}));
+
 import { ApiError } from '../lib/api-client';
+import { recordCreatorSession, resetCreatorSessionForTests } from '../lib/creator-session-diagnostics';
 import SupportScreen from '../app/support';
 
 // The thread's clock, pinned to a local midday. The fixtures are dated minutes
@@ -268,6 +280,9 @@ beforeEach(() => {
   query.data = conversation;
   query.isError = false;
   photoFiles.live.clear();
+  appVersion.label = null;
+  appVersion.runtime = { runtimeVersion: null, channel: null };
+  resetCreatorSessionForTests();
 });
 
 /** An upload that reads its file, as `uploadPickedMedia` does: a copy no longer there fails it. */
@@ -299,7 +314,29 @@ describe('Message support', () => {
     expect(routerState.push).toHaveBeenCalledWith({ pathname: '/auth', params: { returnTo: '/support' } });
 
     act(() => { (tree.root.findByType('secondary-button' as never).props.onPress as () => void)(); });
-    expect(openUrl).toHaveBeenCalledWith(expect.stringMatching(/^mailto:info@magicbooklet\.com\?/));
+    expect(openUrl).toHaveBeenCalledWith('mailto:info@magicbooklet.com?subject=Magicbooklet%20app%20support');
+  });
+
+  // Help & Support opens this screen itself (owner, 2026-11-26), so the guest's mail carries what
+  // the Help screen's did: the build lines Settings shows, below room for the message.
+  it("puts this phone's build and runtime lines in the guest's mail, below room for the message", () => {
+    authState.user = null;
+    appVersion.label = 'Version 0.1.9 (64) · update a17f193a';
+    appVersion.runtime = { runtimeVersion: '0.1.9', channel: 'production' };
+    recordCreatorSession({ tool: 'video', outcome: 'recovered', referenceCount: 2, catalogRevision: 'rev-1', draftFormat: 'v1 per identity, remix 4' });
+    const tree = render();
+
+    act(() => { (tree.root.findByType('secondary-button' as never).props.onPress as () => void)(); });
+
+    const url = new URL(openUrl.mock.calls[0][0] as string);
+    expect(`${url.protocol}${url.pathname}`).toBe('mailto:info@magicbooklet.com');
+    expect(url.searchParams.get('subject')).toBe('Magicbooklet app support');
+    expect(url.searchParams.get('body')).toBe([
+      '',
+      '',
+      'Version 0.1.9 (64) · update a17f193a',
+      'Runtime 0.1.9 · channel production · video draft repaired from its source, 2 references · catalog rev-1 · drafts v1 per identity, remix 4',
+    ].join('\n'));
   });
 
   it('draws the thread as a chat app does: a day, quotes, links, reactions, ticks and deleted messages', () => {

@@ -243,6 +243,17 @@ describe('HomeSideMenu hand-off', () => {
     expect(container.listeners.size).toBe(0);
   });
 
+  // Owner, 2026-11-26: the support option opens the chat, with no page of cards before it.
+  it('opens the support chat itself from Help & Support', () => {
+    routerState.push.mockClear();
+    const tree = renderMenu(1250);
+
+    renderer.act(() => pressable(tree, 'Help & Support').props.onPress());
+
+    expect(routerState.push).toHaveBeenCalledWith('/support');
+    expect(pressable(tree, 'Help & Support').props.style.opacity).toBe(appTheme.opacity.pressed);
+  });
+
   it('opens one screen for two quick taps, on any rows', () => {
     routerState.push.mockClear();
     const tree = renderMenu(1250);
