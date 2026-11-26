@@ -155,9 +155,10 @@ the form shows. If it is per account, another person's plugin would be refused a
 `MCP_CLIENT_IDS.chatgpt` stays `CLIENT_ID_PENDING_CHATGPT` and the setup page shows ChatGPT as
 coming soon until one of two things happens. Either a second ChatGPT account shows the same id
 for `https://magicbooklet.com/api/mcp` (then the id goes into `MCP_CLIENT_IDS`), or the app is
-listed in ChatGPT's directory. Switching ChatGPT on is then only that id, because the setup page
-already carries ChatGPT's full steps (Advanced OAuth settings, no secret, `offline_access`
-unticked). A different callback id is added by passing the client's whole list, the existing URI
+listed in ChatGPT's directory. Switching ChatGPT on then needs no new page text, because the setup
+page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, `offline_access`
+unticked). The id goes into `MCP_CLIENT_IDS` and the shared callback into
+`MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by passing the client's whole list, the existing URI
 included, to `auth.admin.oauth.updateClient`, which replaces `redirect_uris` (`ops:oauth-clients`
 has no update command); Codex's second URI was added that way.
 
