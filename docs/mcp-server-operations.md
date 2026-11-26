@@ -49,15 +49,21 @@ agent token is the creator's session under RLS, like any user token, so whoever 
 can read and change what that account may until the grant is revoked (which deletes the token's
 session) or the hour runs out. Revocation and expiry are the remedy; see "Revoking a client".
 
-That last paragraph is why the app has an authorization server of its own, which replaces
-Supabase's at the cutover: the next section. Everything from "Enabling the OAuth server" on
-describes Supabase's server and holds until the cutover's step 5.
+That last paragraph is why the app has an authorization server of its own, which replaced
+Supabase's at the cutover on 2026-11-26: the next section. This section, and everything from
+"Enabling the OAuth server" on that describes Supabase's server, is how it was until then.
 
 ## The app's own authorization server
 
+Since 2026-11-26 this is the only authorization server on production
+(`MCP_AUTHORIZATION_SERVER=app`): Supabase Auth's OAuth server is switched off, and the sections
+that describe it ("How a connection works" above, "Enabling the OAuth server", "Registering a
+client", the Supabase half of "Revoking") are the record of how it was, kept until the follow-up
+that removes that path from the code.
+
 Plan and decisions: `docs/plans/agent-token-broker-plan-2026-11-26.md`. Code:
-`src/lib/agent-oauth-*.ts`, `src/lib/oauth-authorization-server-metadata.ts`, migration
-`20261126121704_agent_oauth_server.sql`.
+`src/lib/agent-oauth-*.ts`, `src/lib/oauth-authorization-server-metadata.ts`, migrations
+`20261126121704_agent_oauth_server.sql` and `20261126151150_agent_oauth_hardening.sql`.
 
 The app is the OAuth 2.1 authorization server for both MCP routes. An agent's access token is
 `mbat_` and 256 random bits, its refresh token `mbrt_` and the same: rows of hashes in this
@@ -166,6 +172,12 @@ revoke 30; the consent answer and Disconnect 20 a minute per account.
 
 ### Cutover
 
+Done on production on 2026-11-26; the plan's "Cutover, as done" is the record. Two things it
+taught: the Supabase dashboard's OAuth Server switch asks to confirm and then still needs **Save
+changes**, and ending what Supabase issued needs only its sessions, consents and unanswered
+requests (step 6's three statements), not its apps. The steps below are as they were carried
+out, kept for another environment.
+
 Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a creator sees.
 
 1. Deploy with the flag unset. The migration creates empty tables.
@@ -180,12 +192,17 @@ Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a cre
    Disconnect it; reconnect. Read the Vercel logs for `agent_oauth_token_issued`.
 5. Set `MCP_AUTHORIZATION_SERVER=app`; configuration-only redeployment. Every agent still holding
    a Supabase token is answered 401 and signs in again through the app.
-6. End what Supabase's server issued. Supabase dashboard → Authentication → OAuth Server → Apps:
-   delete each app. Deleting an app deletes its consents and its sessions (`auth.oauth_consents`
-   and `auth.sessions.oauth_client_id` reference `auth.oauth_clients` with `on delete cascade`),
-   so no old access or refresh token works. The same in the SQL editor, if the dashboard is
-   awkward: `delete from auth.oauth_clients;`
-7. Same page: switch the OAuth server off.
+6. End what Supabase's server issued, in the SQL editor. Its apps can stay: with the server off
+   they are inert, and leaving them keeps a way back.
+
+   ```sql
+   delete from auth.sessions where oauth_client_id is not null;  -- their refresh tokens go with them
+   delete from auth.oauth_consents;
+   delete from auth.oauth_authorizations;                        -- requests nobody answered
+   ```
+
+7. Supabase dashboard → Authentication → OAuth Server: switch it off, confirm, then **Save
+   changes** (until it is saved the endpoints still answer).
 8. Wait one hour, the life of an access JWT Supabase issued before step 6 (its session is gone,
    so Auth and every RLS-guarded table refuse it already; after the hour it does not verify at
    all). Then check: `curl -s -o /dev/null -w '%{http_code}' https://<project-ref>.supabase.co/auth/v1/.well-known/oauth-authorization-server`
@@ -197,7 +214,10 @@ Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a cre
 10. Follow-up PR: delete the `supabase` and `both` paths (the plan's last step).
 
 Rollback before step 6: set the flag back to `supabase` and redeploy. Supabase's clients and
-grants are untouched until step 6; the app's grants stay in its tables, unused.
+grants are untouched until step 6; the app's grants stay in its tables, unused. Production is
+past it: with Supabase's sessions and consents gone and its server off, the flag set back to
+`supabase` or left unset answers every agent call 401. The way back would be to switch
+Supabase's server on again, set `both`, and have each agent sign in afresh.
 
 ## Enabling the OAuth server (production dashboard)
 
