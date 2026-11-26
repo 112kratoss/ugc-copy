@@ -89,8 +89,9 @@ export type McpClientIds = Readonly<Record<McpClientSurface, string>>;
 
 /**
  * Each surface's production OAuth client id: a placeholder until its client is registered.
- * Registered 2026-11-09 (runbook, "Registered clients"); ChatGPT's waits for its connector, whose
- * redirect URI exists only once the connector does.
+ * Registered 2026-11-09 (runbook, "Registered clients"). ChatGPT's client exists since 2026-11-26
+ * (`9ac8b21e-…`, for the owner's own plugin) but stays a placeholder here: its redirect carries a
+ * callback id that may differ per ChatGPT account, so the setup page keeps it "coming soon".
  */
 export const MCP_CLIENT_IDS: McpClientIds = {
   claude: 'cf5743f9-c83c-4f6c-9afb-0803d5aee698',
@@ -130,9 +131,10 @@ export function isPostingOnlyClientId(clientId: string | null | undefined): bool
 
 /**
  * The exact redirect URIs each client sends, which its OAuth client must be registered with
- * (GoTrue matches them exactly). ChatGPT's is per connector,
- * `https://chatgpt.com/connector/oauth/{callback_id}`, shown on the connector's page once it is
- * created, so it has no entry here: register what that page shows.
+ * (GoTrue matches them exactly). ChatGPT's is `https://chatgpt.com/connector/oauth/{callback_id}`,
+ * shown in the Add custom MCP server form before it is saved, with an id that may differ per
+ * ChatGPT account, so it has no entry here: register what that form shows (runbook,
+ * "Registered clients").
  */
 export const MCP_CLIENT_REDIRECT_URIS: Readonly<Record<McpClientSurface, readonly string[]>> = {
   claude: ['https://claude.ai/api/mcp/auth_callback'],

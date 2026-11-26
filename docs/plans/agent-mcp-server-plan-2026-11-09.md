@@ -17,6 +17,18 @@ owner's two submissions (the Anthropic directory exception and the ChatGPT direc
 "Distribution"), one real Codex sign-in, retention for `agent_tool_calls`, and `run_template`
 after a usage check.
 
+Update, 2026-11-26: several of those have closed.
+- The registry entry is at 1.2.1 (published 2026-11-24), with the plugin repository as its
+  `repository`.
+- The only grant approved before phase 4 is the owner's own, so nothing needs revoking.
+- ChatGPT's client is registered, and the owner's own ChatGPT plugin is connected and checked.
+  The setup page keeps ChatGPT as coming soon until another account is known to get the same
+  callback id (runbook, "Registered clients").
+- Agents have made runs and public posts: a batch on 2026-11-15 hit the old cap of ten a day.
+
+Still open: the two directory submissions (held by the owner since 2026-11-11), one real Codex
+sign-in, retention for `agent_tool_calls`, and `run_template` after a usage check.
+
 Decided on 2026-11-09 after the competitor analysis in
 [`../research/agent-mcp-competitor-analysis-2026-11-09.md`](../research/agent-mcp-competitor-analysis-2026-11-09.md).
 Phase 0 ran the same day and came back GO: every check and its result is in
