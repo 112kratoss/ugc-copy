@@ -50,6 +50,8 @@ async function signIn(page: Page) {
     { name: 'mb_name_step_shown', value: USER_ID, url: ORIGIN },
   ]);
   await page.route('https://example.supabase.co/auth/v1/user/oauth/grants*', (route) => route.fulfill({ json: [] }));
+  // Connected apps reads the app's own authorization server's grants too (connected-apps.ts): none.
+  await page.route('**/api/oauth/grants', (route) => route.fulfill({ json: { grants: [] } }));
   await page.route('https://example.supabase.co/auth/v1/user', (route) => route.fulfill({ json: user }));
   await page.route('https://example.supabase.co/rest/v1/profiles*', (route) => {
     const row = { display_name: 'Workflow User', avatar_url: null, credits: 617, username: null };
