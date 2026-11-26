@@ -40,7 +40,7 @@ select is(
 select ok(
   (select count(*) = 34 from public.get_operational_table_growth() as growth
    where growth.table_name not in ('auth.users', 'guest_identities')),
-  'every table reported before is still reported, the two search by meaning added (20261112215420), the search log''s opened results (20261115105353), the post view marks and days (20261123070740) and Help & Support''s two reaction tables (20261126175321)'
+  'every table reported before is still reported, the two search by meaning added (20261112215420), the search log''s opened results (20261115105353), the post view marks and days (20261123070740) and Help & Support''s two reaction tables (20261126225318)'
 );
 
 create temporary table guests_before on commit drop as

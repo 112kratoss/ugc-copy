@@ -12,7 +12,7 @@ import {
 import { OPERATIONAL_TABLE_ROW_BUDGETS } from '@/lib/operational-table-growth';
 
 const read = (relative: string) => fs.readFileSync(path.resolve(process.cwd(), relative), 'utf8');
-const migration = read('supabase/migrations/20261126175321_support_updates_roadmap.sql');
+const migration = read('supabase/migrations/20261126225318_support_updates_roadmap.sql');
 const previousTypeCheck = read('supabase/migrations/20261122150427_support_conversations.sql');
 const previousGrowth = read('supabase/migrations/20261123070741_post_view_count_totals.sql');
 
