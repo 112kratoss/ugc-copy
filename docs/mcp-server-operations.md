@@ -114,7 +114,7 @@ Server → Apps page does the same by hand.
 |---|---|---|
 | Claude.ai, Claude Desktop, Claude mobile | `https://claude.ai/api/mcp/auth_callback` (exactly this) | Settings → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`; under Advanced ("Use your own OAuth client") the client id, no secret |
 | Claude Code | `http://localhost:8976/callback` (our documented port; the URI must match exactly, so the port is fixed) | `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp` (user scope: the default, `local`, ties the server to the folder the command ran in), then `/mcp` (or `claude mcp login magicbooklet`, which needs a terminal) |
-| ChatGPT (connectors, Apps SDK) | the per-connector `https://chatgpt.com/connector/oauth/{callback_id}` shown on the connector's management page: create the connector first, then register its URI (GoTrue sends no RFC 9207 `iss`, so ChatGPT's shared redirect does not apply) | Settings → Connectors → Create (developer mode) with the URL and the client id |
+| ChatGPT (plugins, Apps SDK) | `https://chatgpt.com/connector/oauth/{callback_id}`, shown under Advanced OAuth settings in the Add custom MCP server form before anything is saved (GoTrue sends no RFC 9207 `iss`, so ChatGPT's stable redirect does not apply). The owner's account shows `R0qoU77QhExz` for this server; whether another account gets the same id is not known ("Registered clients") | Plugins → Add → Add custom MCP server: the URL, OAuth, and under Advanced OAuth settings the client id, no secret, token method `none`, with `offline_access` unticked; works on the Free plan |
 | Codex CLI | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` (exactly this: Codex appends a callback ID derived from the server URL and inserts the pinned port; a `callback_url` without that ID is ignored, see "Distribution") | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` under `[mcp_servers.magicbooklet.oauth]` in `~/.codex/config.toml`, then `codex mcp login magicbooklet` |
 | Cursor | `http://localhost:8787/callback` (desktop) and `https://www.cursor.com/agents/mcp/oauth/callback` (web and Cursor Agents) | `auth: { CLIENT_ID: "<id>" }` on the server entry in `.cursor/mcp.json`, or the deeplink |
 
@@ -124,12 +124,13 @@ no port-agnostic loopback). Supabase accepts and ignores the `resource` paramete
 The token's `scope` is only `openid profile email phone` class and is never shown as permissions;
 the consent screen shows the fixed description of what an agent may do.
 
-### Registered clients (production, 2026-11-09)
+### Registered clients (production, 2026-11-09; ChatGPT 2026-11-26)
 
 Dynamic client registration is off on production (its metadata has no `registration_endpoint`),
 so the clients below are the only ones. Their ids are public values: the full server's live in
 `MCP_CLIENT_IDS` (`src/lib/mcp-client-directory.ts`), which the setup page and the Claude Code
-plugin read, and the posting-only ones in `MCP_POSTING_ONLY_CLIENT_IDS` beside it.
+plugin read (all but ChatGPT's, which stays a placeholder there; see below the table), and the
+posting-only ones in `MCP_POSTING_ONLY_CLIENT_IDS` beside it.
 
 | Client | Client id | Redirect URIs registered |
 |---|---|---|
@@ -137,13 +138,29 @@ plugin read, and the posting-only ones in `MCP_POSTING_ONLY_CLIENT_IDS` beside i
 | Claude Code | `0b968a27-4f37-4972-8d7a-f3c67b365a33` | `http://localhost:8976/callback` |
 | Cursor | `cd3b041d-a942-4917-b37f-735744ca4026` | `http://localhost:8787/callback`, `https://www.cursor.com/agents/mcp/oauth/callback` |
 | Codex | `6508034a-cdb9-4f23-9263-7bf332096acb` | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` and `http://localhost:8977/callback/PPpoTd8EYBlz` (the URI Codex derives from the server URL, below, and its `localhost` spare; registered 2026-11-10), plus the earlier `http://127.0.0.1:8977/callback/magicbooklet` and `http://localhost:8977/callback/magicbooklet` |
-| ChatGPT | not yet: the owner creates the connector first | per connector, from its management page |
+| ChatGPT | `9ac8b21e-ac4c-4670-9227-1c0b84b2413c` (registered 2026-11-26) | `https://chatgpt.com/connector/oauth/R0qoU77QhExz` (the callback id the owner's ChatGPT account shows) |
 | Claude (posting), the directory listing's (confidential) | `1b4db392-2141-413b-be41-f833dfdcab42` | `https://claude.ai/api/mcp/auth_callback` |
 | Claude (posting), for a connector added by URL (public) | `1e2e3615-17a1-448f-9d4c-5cbcd2a572a7` | `https://claude.ai/api/mcp/auth_callback` |
 
 The last two rows are the posting-only clients (`MCP_POSTING_ONLY_CLIENT_IDS`, both registered
 2026-11-10); the first of them is the one confidential client (`client_secret_post`).
 "Anthropic's Connectors Directory", below, says what posting-only means and where the secret is.
+
+ChatGPT's client serves the owner's own plugin, "Magic Booklet", connected as
+info@magicbooklet.com and checked with `list_models` in a chat on 2026-11-26. The id in its
+redirect is not per connector, as this runbook first said. A second, unsaved form on the same
+account showed the same `R0qoU77QhExz`, also for `/api/mcp/posts`. It is not a plain SHA-256 of
+the server or issuer URL either, as Codex's is. OpenAI's Apps SDK guide says only to copy the URI
+the form shows. If it is per account, another person's plugin would be refused at sign-in, so
+`MCP_CLIENT_IDS.chatgpt` stays `CLIENT_ID_PENDING_CHATGPT` and the setup page shows ChatGPT as
+coming soon until one of two things happens. Either a second ChatGPT account shows the same id
+for `https://magicbooklet.com/api/mcp` (then the id goes into `MCP_CLIENT_IDS`), or the app is
+listed in ChatGPT's directory. Switching ChatGPT on then needs no new page text, because the setup
+page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, `offline_access`
+unticked). The id goes into `MCP_CLIENT_IDS` and the shared callback into
+`MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by passing the client's whole list, the existing URI
+included, to `auth.admin.oauth.updateClient`, which replaces `redirect_uris` (`ops:oauth-clients`
+has no update command); Codex's second URI was added that way.
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
@@ -857,11 +874,16 @@ section 9) has the sources.
   matters: the default scope, `local`, ties the server to the folder the command ran in, so it
   would be missing from every other project. The redirect is `http://localhost:8976/callback`;
   the port must be free while the person signs in.
-- **ChatGPT**: Plugins → + → Add custom MCP server, the URL under Connection, OAuth with the
-  client id, then Create as a plugin; workspace policies decide whether custom servers are
-  allowed. The redirect is per connector, `https://chatgpt.com/connector/oauth/{callback_id}`,
-  shown on the connector's management page once it exists (GoTrue sends no RFC 9207 `iss`, so
-  ChatGPT's stable `https://chatgpt.com/connector_platform_oauth_redirect` does not apply).
+- **ChatGPT**: Plugins → Add → Add custom MCP server: the URL under Connection, OAuth, and
+  under Advanced OAuth settings the client id (no secret, token method `none`). Untick the default
+  scope `offline_access`, since GoTrue refuses any scope beyond `openid profile email phone`. Then
+  tick "I understand and want to continue" and choose Create as a plugin; Continue to Magic
+  Booklet opens the consent page. It works on the Free plan, and workspace policies decide
+  whether custom servers are allowed. The redirect is
+  `https://chatgpt.com/connector/oauth/{callback_id}`, shown in that same section before
+  anything is saved (GoTrue sends no RFC 9207 `iss`, so ChatGPT's stable
+  `https://chatgpt.com/connector_platform_oauth_redirect` does not apply). Register it before
+  creating the plugin.
 - **Codex**: `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`
   writes `[mcp_servers.magicbooklet]` with `url`, and `[mcp_servers.magicbooklet.oauth]` with
   `client_id` (a configured client id skips registration). Two things decide the redirect URI:
@@ -1225,8 +1247,9 @@ the owner can send to mcp-review@anthropic.com:
 
 ### ChatGPT directory submission
 
-A developer-mode connector works for anyone whose workspace allows custom servers; a listing in
-ChatGPT's directory is a separate submission that OpenAI reviews. Before submitting:
+Anyone whose workspace allows custom servers can add the server as a plugin, but sign-in works
+only for an account whose callback id is registered on the client ("Registered clients"). A
+listing in ChatGPT's directory is a separate submission that OpenAI reviews. Before submitting:
 
 - No selling or upselling credits inside tool output. A short balance answers
   `INSUFFICIENT_CREDITS` with the balance and the shortfall only, never a pack, a price or a
@@ -1234,5 +1257,7 @@ ChatGPT's directory is a separate submission that OpenAI reviews. Before submitt
   tool, its text and its structured content.
 - Tool annotations must match what each tool does (`readOnlyHint` on the reads,
   `destructiveHint` on `create_media`), and a reviewer needs an account with credits.
-- Register on the ChatGPT client the exact redirect URI ChatGPT's management page shows for the
-  server (the callback-ID form, since GoTrue sends no `iss`) before the review starts.
+- Register on the ChatGPT client the exact redirect URI ChatGPT shows for the app (the
+  callback-ID form, since GoTrue sends no `iss`) before the review starts. It may differ from the
+  owner's own plugin's (`R0qoU77QhExz`, "Registered clients"). Keep both: pass the whole list to
+  `auth.admin.oauth.updateClient`, which replaces it.

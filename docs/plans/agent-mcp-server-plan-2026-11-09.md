@@ -17,6 +17,22 @@ owner's two submissions (the Anthropic directory exception and the ChatGPT direc
 "Distribution"), one real Codex sign-in, retention for `agent_tool_calls`, and `run_template`
 after a usage check.
 
+Update, 2026-11-26: several of those have closed.
+- The registry entry is at 1.2.1 (published 2026-11-24), with the plugin repository as its
+  `repository`.
+- The only grant approved before phase 4 is the owner's own, so nothing needs revoking.
+- ChatGPT's client is registered, and the owner's own ChatGPT plugin is connected and checked.
+  The setup page keeps ChatGPT as coming soon until another account is known to get the same
+  callback id (runbook, "Registered clients").
+- Agents have made runs and public posts: a batch on 2026-11-15 hit the old cap of ten a day.
+
+Still open:
+- a second ChatGPT account's callback id, which decides whether the setup page can offer ChatGPT;
+- the two directory submissions, held by the owner since 2026-11-11;
+- one real Codex sign-in;
+- retention for `agent_tool_calls`;
+- `run_template`, after a usage check.
+
 Decided on 2026-11-09 after the competitor analysis in
 [`../research/agent-mcp-competitor-analysis-2026-11-09.md`](../research/agent-mcp-competitor-analysis-2026-11-09.md).
 Phase 0 ran the same day and came back GO: every check and its result is in
@@ -519,7 +535,7 @@ resource holds, listing posts that have no creation (`list_creations` lists crea
 |---|---|---|
 | Claude.ai, Claude Desktop | Customize → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`, client id under Advanced settings, no secret | public, redirect `https://claude.ai/api/mcp/auth_callback` |
 | Claude Code | `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp`, then `/mcp`; or the plugin, not both | public, redirect `http://localhost:8976/callback` |
-| ChatGPT | Plugins → + → Add custom MCP server with the URL and, under OAuth, the client id | public (the page shows no secret), redirect per connector from its management page |
+| ChatGPT | Plugins → Add → Add custom MCP server with the URL and, under Advanced OAuth settings, the client id, with `offline_access` unticked | public (no secret), redirect `https://chatgpt.com/connector/oauth/{callback_id}` as ChatGPT's form shows it (the owner's account: `R0qoU77QhExz`; whether it is per account or per authorization server is not known) |
 | Codex | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` in `config.toml`, then `codex mcp login magicbooklet` | public, redirect `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` (and its `localhost` spare) |
 | Cursor | `auth.CLIENT_ID` on the server's entry in `.cursor/mcp.json` | public, redirects `http://localhost:8787/callback` and `https://www.cursor.com/agents/mcp/oauth/callback` |
 
