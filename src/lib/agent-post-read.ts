@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { isGeneratedRecipeSetupText } from '@/lib/post-public-content';
 import { isMediaPostWithoutCreation } from '@/lib/post-resource-bundles';
 
 /**
@@ -128,7 +129,19 @@ function count(value: number | null): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
+/**
+ * A caption as anyone but the post's owner may read it. A recipe published before 2026-11-03
+ * keeps its settings as a caption that begins "Saved generation setup"; under a paid recipe every
+ * page and feed blanks that caption (`sanitizePublicPostContent`), and so does this read. A paid
+ * recipe still in draft counts: what it will sell is not told ahead of it.
+ */
+function captionForViewer(value: string | null, isOwn: boolean, resource: ResourceRow | null): string | null {
+  const underPaidRecipe = Boolean(resource && !resource.retired_at && resource.access_mode === 'paid');
+  return !isOwn && underPaidRecipe && isGeneratedRecipeSetupText(value) ? '' : value;
+}
+
 export function toAgentPostView(row: PostRow, viewerUserId: string, resource: ResourceRow | null = null): AgentPostView {
+  const isOwn = row.user_id === viewerUserId;
   return {
     postId: row.id,
     ownerUserId: row.user_id,
@@ -136,8 +149,8 @@ export function toAgentPostView(row: PostRow, viewerUserId: string, resource: Re
     source: agentPostSource(row),
     format: row.post_format ?? null,
     title: row.title,
-    description: row.description,
-    body: row.body,
+    description: captionForViewer(row.description, isOwn, resource),
+    body: captionForViewer(row.body, isOwn, resource),
     category: row.category,
     visibility: row.visibility === 'public' ? 'public' : 'private',
     state: agentPostState(row),

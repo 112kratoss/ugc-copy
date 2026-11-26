@@ -213,3 +213,35 @@ describe('a post as an agent reads it', () => {
     expect(alone.from.mock.calls.map(([table]) => table)).toEqual(['posts']);
   });
 });
+
+describe('a paid recipe\'s setup caption (security audit, 2026-11-26)', () => {
+  // Recipes published before 2026-11-03 keep their settings as a caption that
+  // begins "Saved generation setup". Under a paid recipe every page and feed
+  // blanks it for anyone (`sanitizePublicPostContent`); get_post handed it over.
+  const setup = 'Saved generation setup\nModel: Example\nSeed: 42';
+
+  it('is not told to another creator\'s agent', () => {
+    const view = toAgentPostView(row({ body: setup, description: setup }) as never, OTHER, bundleRow() as never);
+    expect(view.body).toBe('');
+    expect(view.description).toBe('');
+    expect(view.title).toBe('Red bicycle');
+  });
+
+  it('is kept from another agent while the paid recipe is still a draft', () => {
+    const view = toAgentPostView(row({ body: setup }) as never, OTHER, bundleRow({ status: 'draft' }) as never);
+    expect(view.body).toBe('');
+  });
+
+  it('is the owner\'s to read', () => {
+    const view = toAgentPostView(row({ body: setup, description: setup }) as never, OWNER, bundleRow() as never);
+    expect(view.body).toBe(setup);
+    expect(view.description).toBe(setup);
+  });
+
+  it('stays where the recipe is free, retired or absent, and an ordinary caption always stays', () => {
+    expect(toAgentPostView(row({ body: setup }) as never, OTHER, bundleRow({ access_mode: 'free', price_usd_cents: 0 }) as never).body).toBe(setup);
+    expect(toAgentPostView(row({ body: setup }) as never, OTHER, bundleRow({ retired_at: '2026-11-01T00:00:00Z' }) as never).body).toBe(setup);
+    expect(toAgentPostView(row({ body: setup }) as never, OTHER, null).body).toBe(setup);
+    expect(toAgentPostView(row() as never, OTHER, bundleRow() as never).body).toBe('At dawn.');
+  });
+});
