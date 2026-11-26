@@ -39,10 +39,11 @@ export async function createMediaSupabaseClient(request: Request) {
   }
 
   const cookieClient = await createCookieSupabaseClient();
-  // An agent's OAuth-issued token placed in the auth cookie verifies like any user token, and the
-  // adapters' `requireIdentity` would take it from this client. It drives the MCP routes alone
-  // (`supabase-server.ts` refuses it as a page session the same way), so the request is served
-  // as one with no session: the anon client, which reads no cookie.
+  // A Supabase agent JWT (one carrying an OAuth client's id, agent-token.ts) placed in the auth
+  // cookie verifies like any user token, and the adapters' `requireIdentity` would take it from
+  // this client. It drives nothing in this app (`supabase-server.ts` refuses it as a page session
+  // the same way), so the request is served as one with no session: the anon client, which reads
+  // no cookie.
   if (await cookieSessionIsAgentToken(cookieClient)) {
     return createUserClient(request);
   }

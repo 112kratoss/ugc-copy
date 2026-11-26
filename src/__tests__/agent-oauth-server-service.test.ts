@@ -277,6 +277,16 @@ describe('the consent page', () => {
     expect((await loadAgentConsent({ authorizationId: fullClientAtPosts, userId: USER }, options))?.details.access).toBe(POSTING_AGENT_ACCESS);
   });
 
+  it('links the client\'s site only when it is an http(s) URL', async () => {
+    // The table holds no scheme check on client_uri, so this and the CLI's are the guards on the
+    // page's link.
+    for (const clientUri of ['javascript:alert(1)', 'data:text/html,hi', 'not a url', '']) {
+      store.state.clients.get(PUBLIC_CLIENT)!.clientUri = clientUri;
+      const loaded = await loadAgentConsent({ authorizationId: await start(), userId: USER }, options);
+      expect(loaded?.details.clientUri, clientUri).toBeNull();
+    }
+  });
+
   it('stores only the hash of the consent token', async () => {
     const id = await start();
     const loaded = await loadAgentConsent({ authorizationId: id, userId: USER }, options);

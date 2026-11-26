@@ -667,11 +667,6 @@ an upload post by the post's own format, so a deleted post with no creation behi
 unchanged repeats apart from the publications (two reads of `agent_tool_calls`): a repeat spends
 no limit, and a loop of them would otherwise fill the page and hide every other agent's posts.
 
-**Creators who connected before this release** approved the consent screen's earlier line, which
-named neither media from elsewhere nor a price. Re-authorizing takes the already-approved
-redirect, so they do not see the new one. Whether to revoke those grants so each is asked again
-(Revoking a client, or one creator's grant) is the owner's decision; nothing here does it.
-
 ```sql
 -- Posts agents published that carry a resource on sale, newest first.
 select c.created_at, c.client_id, c.user_id, c.post_id, p.post_format, p.visibility, p.title,
@@ -1282,11 +1277,14 @@ spends credits; `POSTING_AGENT_ACCESS`), Connected apps says the same of it
 `/api/mcp`. So what the person approved is what the token can do on this app's routes. Every
 other client may use either path, and the token is nothing at the Supabase project itself.
 
-The list is a deny-list, so it fails open: a client that is not on it gets the full server.
-**An id leaves the list only after its client is deleted from the OAuth server.** To replace a
-client (a lost secret): delete the old one in the dashboard first (Authentication → OAuth Apps;
-deleting it ends its grants), then register the new one and add its id; or leave the old id on
-the list beside the new one.
+The list is a deny-list, so it fails open: a client that is not on it, and whose row in
+`public.agent_oauth_clients` says `full`, gets the full server. Both posting clients' rows say
+`posts` as well (the cutover's import marked them), and either guard alone holds. **An id leaves
+the list only once its row says `posts` or is disabled.** A lost secret is replaced with
+`npm run ops:oauth-clients -- rotate-secret --client-id <id> --apply`, which keeps the id, so the
+list, the plugin and the listing stay as they are. A client is retired with `disable --client-id
+<id> --apply`, which ends its sign-ins and refuses its tokens at once; a client is never deleted
+through the Data API, and Supabase's dashboard no longer holds the app's clients.
 
 The confidential client's secret:
 

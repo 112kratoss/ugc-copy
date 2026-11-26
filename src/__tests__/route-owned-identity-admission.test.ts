@@ -329,8 +329,8 @@ describe('route-owned identity admission', () => {
   });
 
   it('rebuilds an admitted POST with its body, the fresh assertion and none of the caller\'s', async () => {
-    const body = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
-    const original = request('POST', '/api/mcp', body);
+    const body = JSON.stringify({ title: 'A post' });
+    const original = request('POST', '/api/showcase/publish', body);
     const identity = client(undefined, null, { sub: USER_ID, role: 'authenticated', is_anonymous: false });
     const admission = await evaluateUserFacingRouteIdentity(original, { createUserClient: () => identity });
     expect(admission.rejection).toBeNull();

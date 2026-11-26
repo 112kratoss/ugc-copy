@@ -110,6 +110,19 @@ describe('oauth-clients CLI: the app\'s own authorization server', () => {
     }
   });
 
+  it('refuses a create without a name or a redirect URI, or with a client site that is not https', () => {
+    const mint = { clientId: () => 'new-client-id', secret: () => 'mbcs_minted-secret' };
+    const build = (args: string[]) => () => buildAppClientRow(parseArguments(['create', ...args]).flags, mint);
+    const named = ['--name', 'X', '--redirect-uri', 'https://x.test/cb'];
+    expect(build(['--redirect-uri', 'https://x.test/cb'])).toThrow(/--name is required/);
+    expect(build(['--name', '  ', '--redirect-uri', 'https://x.test/cb'])).toThrow(/--name is required/);
+    expect(build(['--name', 'X'])).toThrow(/At least one --redirect-uri is required/);
+    expect(build([...named, '--client-uri', 'http://x.test'])).toThrow(/--client-uri must be https/);
+    expect(build([...named, '--client-uri', 'javascript:alert(1)'])).toThrow(/--client-uri must be https/);
+    expect(build([...named, '--client-uri', 'not a url'])).toThrow(/--client-uri is not a URL/);
+    expect(build([...named, '--client-uri', 'https://x.test'])().row.client_uri).toBe('https://x.test');
+  });
+
   it('registers a client only with --apply, and its secret goes to the clipboard alone', async () => {
     const dry = harness();
     await dry.run(['create', '--name', 'Directory', '--redirect-uri', 'https://claude.ai/api/mcp/auth_callback', '--confidential']);

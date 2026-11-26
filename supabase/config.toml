@@ -365,9 +365,8 @@ enabled = false
 # Obtain from https://clerk.com/setup/supabase
 # domain = "example.clerk.accounts.dev"
 
-# OAuth server configuration. On for the local stack so /oauth/consent, agent tokens and
-# revocation can be exercised here (docs/mcp-server-operations.md); production's switch is the
-# dashboard, nothing pushes this file there.
+# Supabase Auth's OAuth server. Production's switch is the dashboard; nothing pushes this file
+# there.
 [auth.oauth_server]
 # Off, as on production since 2026-11-26: agents sign in through the app's own authorization
 # server (/oauth/authorize, docs/archive/agent-token-broker-plan-2026-11-26.md), whose token is no

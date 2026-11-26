@@ -115,9 +115,10 @@ export const MCP_CLIENT_IDS: McpClientIds = {
  *   server's URL (`/developers/mcp/posting`). The `claude` client above is the full server's; a
  *   person who adds the posting server with it has approved the full list, and has it.
  *
- * The line is a deny-list, so it fails open: an id leaves this list only after its client is
- * deleted from the OAuth server. A client replaced by a new one (a lost secret) is deleted
- * first, or its id stays here beside the new one (the runbook, "Its OAuth clients").
+ * The line is a deny-list, so it fails open: an id leaves this list only once its client's row
+ * in `public.agent_oauth_clients` says `posts` or is disabled (`ops:oauth-clients -- disable`).
+ * A lost secret is replaced with `rotate-secret`, which keeps the id (the runbook, "Its OAuth
+ * clients").
  */
 export const MCP_POSTING_ONLY_CLIENT_IDS: Readonly<Record<'claudeDirectory' | 'claudeByUrl', string>> = {
   claudeDirectory: '1b4db392-2141-413b-be41-f833dfdcab42',
@@ -133,7 +134,7 @@ export function isPostingOnlyClientId(clientId: string | null | undefined): bool
 
 /**
  * The exact redirect URIs each client sends, which its OAuth client must be registered with
- * (GoTrue matches them exactly). ChatGPT's is `https://chatgpt.com/connector/oauth/{callback_id}`,
+ * (the authorization server matches them exactly). ChatGPT's is `https://chatgpt.com/connector/oauth/{callback_id}`,
  * shown in the Add custom MCP server form before it is saved, with an id that may differ per
  * ChatGPT account, so it has no entry here: register what that form shows (runbook,
  * "Registered clients").
