@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { accessSync, constants as fsConstants, createWriteStream } from 'node:fs';
 import { readFile, stat } from 'fs/promises';
+import { LOCAL_VIDEO_INPUT_OPTIONS } from '@/lib/media-demuxers';
 import { mediaEncoderCommand, MediaOutputLimitError } from '@/lib/media-encoder-limit';
 import { createMediaScratchWorkspace } from '@/lib/staging-workspace';
 import path from 'path';
@@ -85,12 +86,12 @@ export async function createVideoPosterBufferFromFile(inputPath: string, sourceL
   }
 }
 
-export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string, sourceLeaseFd?: number, outputLeaseFd?: number) {
-  const ffmpegPath = getFfmpegPath();
-  const args = [
+export function buildVideoPosterArgs(inputPath: string, framePath: string, seekTime: string): string[] {
+  return [
     '-y',
     '-ss',
     seekTime,
+    ...LOCAL_VIDEO_INPUT_OPTIONS,
     '-i',
     inputPath,
     '-frames:v',
@@ -99,6 +100,11 @@ export async function runVideoPosterFfmpeg(inputPath: string, framePath: string,
     '3',
     framePath,
   ];
+}
+
+export async function runVideoPosterFfmpeg(inputPath: string, framePath: string, seekTime: string, sourceLeaseFd?: number, outputLeaseFd?: number) {
+  const ffmpegPath = getFfmpegPath();
+  const args = buildVideoPosterArgs(inputPath, framePath, seekTime);
 
   const command = await mediaEncoderCommand(ffmpegPath, args, VIDEO_POSTER_MAX_OUTPUT_BYTES);
   await new Promise<void>((resolve, reject) => {

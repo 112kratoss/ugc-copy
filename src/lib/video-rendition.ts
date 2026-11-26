@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
+import { LOCAL_VIDEO_INPUT_OPTIONS, REFERENCE_MEDIA_DEMUXERS } from '@/lib/media-demuxers';
 import { getFfmpegPath } from '@/lib/video-poster';
 import { mediaEncoderCommand, MediaOutputLimitError } from '@/lib/media-encoder-limit';
 
@@ -115,6 +116,7 @@ export function buildRenditionArgs(
 ): string[] {
   return [
     '-y',
+    ...LOCAL_VIDEO_INPUT_OPTIONS,
     '-i',
     inputPath,
     // Explicit mapping: provider output does not reliably put video on stream 0,
@@ -252,7 +254,7 @@ async function runFfmpeg(
 export async function probeVideoFile(inputPath: string, signal?: AbortSignal, sourceLeaseFd?: number): Promise<VideoProbeResult> {
   // `-i` with no output makes ffmpeg exit non-zero after printing stream info.
   try {
-    const output = await runFfmpeg(['-hide_banner', '-i', inputPath], signal, sourceLeaseFd === undefined ? [] : [sourceLeaseFd]);
+    const output = await runFfmpeg(['-hide_banner', ...LOCAL_VIDEO_INPUT_OPTIONS, '-i', inputPath], signal, sourceLeaseFd === undefined ? [] : [sourceLeaseFd]);
     return parseVideoProbeOutput(output);
   } catch (error) {
     signal?.throwIfAborted();
@@ -271,17 +273,26 @@ export const MEDIA_DURATION_PROBE_TIMEOUT_MS = 20_000;
  * speaks many protocols, and none of the others should ever be reachable from
  * a generation request.
  */
+export function buildDurationProbeArgs(input: string): string[] {
+  return [
+    '-hide_banner',
+    '-nostdin',
+    '-protocol_whitelist',
+    'https,tls,tcp',
+    // The protocol list says where the reference is read from; this says what
+    // it may be. Without it a playlist stored as a clip sends the probe to
+    // every address the playlist names (media-demuxers.ts).
+    '-format_whitelist',
+    REFERENCE_MEDIA_DEMUXERS,
+    '-i',
+    input,
+  ];
+}
+
 export async function probeMediaDurationSeconds(input: string, signal?: AbortSignal): Promise<number | null> {
   signal?.throwIfAborted();
   const output = await new Promise<string>((resolve, reject) => {
-    const child = spawn(getFfmpegPath(), [
-      '-hide_banner',
-      '-nostdin',
-      '-protocol_whitelist',
-      'https,tls,tcp',
-      '-i',
-      input,
-    ], {
+    const child = spawn(getFfmpegPath(), buildDurationProbeArgs(input), {
       stdio: ['ignore', 'ignore', 'pipe'],
       timeout: MEDIA_DURATION_PROBE_TIMEOUT_MS,
       killSignal: 'SIGKILL',
