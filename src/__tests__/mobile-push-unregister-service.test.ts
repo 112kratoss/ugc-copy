@@ -246,7 +246,7 @@ describe('mobile push token unregister service', () => {
     expect(endAgentAccess).toHaveBeenCalledTimes(1);
   });
 
-  it('ends no app for a caller it does not know or one over its limit', async () => {
+  it('ends no app for a caller it does not know', async () => {
     const endAgentAccess = vi.fn(async () => 0);
     await unregisterMobilePushTokenForRoute({
       endAgentAccess,
@@ -254,29 +254,46 @@ describe('mobile push token unregister service', () => {
       requestBody: { scope: 'account' },
       userSupabase: createUserClient({ authenticated: false }).client,
     });
-    await unregisterMobilePushTokenForRoute({
+    expect(endAgentAccess).not.toHaveBeenCalled();
+  });
+
+  // The limit is shared with every phone's ordinary sign-out. A person at it must still be able to
+  // end their agents, so they are ended first, and the refusal that follows does not say otherwise.
+  it('ends the apps before its rate limit, so an account at the limit still ends them', async () => {
+    const endAgentAccess = vi.fn(async () => 1);
+    const result = await unregisterMobilePushTokenForRoute({
       endAgentAccess,
       getAdminSupabase: () => createRateLimitClient(false),
       requestBody: { scope: 'account' },
       userSupabase: createUserClient().client,
     });
-    expect(endAgentAccess).not.toHaveBeenCalled();
+    expect(endAgentAccess).toHaveBeenCalledWith('user-1');
+    expect(result).toMatchObject({ ok: false, status: 429 });
+    expect((result as { body: Record<string, unknown> }).body.code).toBeUndefined();
+    expect((result as { rateLimitError?: unknown }).rateLimitError).toBeDefined();
   });
 
-  it('answers a failure when the apps could not be ended, and retires the push tokens all the same', async () => {
-    const user = createUserClient();
-    await expect(unregisterMobilePushTokenForRoute({
-      endAgentAccess: vi.fn(async () => { throw new Error('db down'); }),
+  it('marks every refusal after a failed ending, so no answer reads as ended when it was not', async () => {
+    const failing = () => vi.fn(async () => { throw new Error('db down'); });
+    // The apps could not be ended, and the push tokens were retired: the test above this block's
+    // sibling. Here: and then the limit refused, or the token update failed.
+    const limited = await unregisterMobilePushTokenForRoute({
+      endAgentAccess: failing(),
+      getAdminSupabase: () => createRateLimitClient(false),
+      requestBody: { scope: 'account' },
+      userSupabase: createUserClient().client,
+    });
+    expect(limited).toMatchObject({ ok: false, status: 429, body: { code: 'AGENT_ACCESS_NOT_ENDED' } });
+    // Answered from the body, which carries the mark; the limiter's own response would drop it.
+    expect((limited as { rateLimitError?: unknown }).rateLimitError).toBeUndefined();
+
+    const tokensFailed = await unregisterMobilePushTokenForRoute({
+      endAgentAccess: failing(),
       getAdminSupabase: () => createRateLimitClient(),
       requestBody: { scope: 'account' },
-      userSupabase: user.client,
-    })).resolves.toEqual({
-      ok: false,
-      body: { error: 'Failed to disconnect the account\'s connected apps.', code: 'AGENT_ACCESS_NOT_ENDED' },
-      status: 500,
+      userSupabase: createUserClient({ updateError: new Error('update failed') }).client,
     });
-    expect(AGENT_ACCESS_NOT_ENDED_CODE).toBe('AGENT_ACCESS_NOT_ENDED');
-    expect(user.updateCalls).toHaveLength(1);
+    expect(tokensFailed).toMatchObject({ ok: false, status: 500, body: { error: 'Failed to unregister mobile push token.', code: 'AGENT_ACCESS_NOT_ENDED' } });
   });
 
   it('reads no other scope as the whole account', async () => {

@@ -5,6 +5,7 @@ import {
   buildAuthorizationResponseUrl,
   checkAuthorizeRequest,
   isRegisteredRedirectUri,
+  isStorableRedirectUri,
   readClientCredentials,
   readTokenGrantRequest,
   resolveGrantSurface,
@@ -205,6 +206,42 @@ describe('/oauth/authorize', () => {
     expect(denied.searchParams.get('error_description')).toBe('The account declined.');
     expect(denied.searchParams.get('state')).toBe('a b&c');
     expect(denied.hash).toBe('');
+  });
+
+  // The same cases supabase/tests/database/agent_oauth_hardening.test.sql puts to the table's rule.
+  it('says what the tables will store as a redirect URI, as the tables say it', () => {
+    for (const uri of [
+      'https://claude.ai/api/mcp/auth_callback',
+      'https://chatgpt.com/connector/oauth/abc_DEF-123?x=1',
+      'https://ok.test/@handle/callback',
+      'https://ok.test:8443',
+      'http://localhost:8976/callback',
+      'http://127.0.0.1:8977/callback/PPpoTd8EYBlz',
+      'http://[::1]:8787/callback',
+    ]) {
+      expect(isStorableRedirectUri(uri), uri).toBe(true);
+    }
+    for (const uri of [
+      'javascript:alert(1)',
+      'data:text/html,<script>',
+      'myapp://callback',
+      'http://example.com/callback',
+      'http://localhost.evil.test/callback',
+      'https://claude.ai/cb#fragment',
+      'https://user:pass@claude.ai/cb',
+      'https://user@claude.ai/cb',
+      'https://claude.ai/cb https://evil.test/',
+      'https://claude.ai/cb\nhttps://evil.test/',
+      'HTTPS://claude.ai/cb',
+      'http://LOCALHOST:8976/callback',
+      'https://claude.ai?x=1',
+      'https://under_score.test/cb',
+      '',
+      null,
+      42,
+    ]) {
+      expect(isStorableRedirectUri(uri), String(uri)).toBe(false);
+    }
   });
 
   it('builds no answer for an address that is not http(s), whatever a row came to hold', () => {

@@ -111,6 +111,11 @@ describe('oauth-clients CLI: the app\'s own authorization server', () => {
     // Kept as typed: the match is by exact string, and the URL parser would add a slash here.
     const bare = buildAppClientRow(parseArguments(['create', '--app', '--name', 'X', '--redirect-uri', 'http://localhost:8787', '--redirect-uri', 'http://localhost:8787']).flags, mint);
     expect(bare.row.redirect_uris).toEqual(['http://localhost:8787']);
+    // What the URL parser takes and the table would refuse is refused here, in words.
+    for (const uri of ['HTTPS://claude.ai/cb', 'http://LOCALHOST:8787/callback', 'https://user@claude.ai/cb', 'https://claude.ai?x=1']) {
+      expect(() => buildAppClientRow(parseArguments(['create', '--app', '--name', 'X', '--redirect-uri', uri]).flags, mint), uri)
+        .toThrow(/Not a redirect URI this server stores/);
+    }
   });
 
   it('registers a client only with --apply, and its secret goes to the clipboard alone', async () => {

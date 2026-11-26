@@ -1,8 +1,9 @@
 -- Hardening of the app's own authorization server (20261126121704), from its security review
 -- (docs/plans/agent-token-broker-plan-2026-11-26.md, "After the security review"):
 --
--- 1. Bounds. A grant may be refreshed twelve times an hour, an account may hold twenty live grants
---    per client, and revoked grants are purged, so no account can grow the token table without end.
+-- 1. Bounds. A grant is given at most twelve refresh tokens in any hour, an account holds twenty
+--    live grants per client and keeps twenty ended ones, and ended grants are purged, so no
+--    account can grow these tables without end.
 -- 2. A grant ends with the password it was given under: one changed or reset since ends the
 --    grant at its next use, whatever the client did or did not ask.
 -- 3. A redirect URI is https, or http on a loopback host, with no fragment and no userinfo,
@@ -19,8 +20,8 @@ set search_path = ''
 as $$
   select p_uri is not null
      and char_length(p_uri) between 1 and 2048
-     -- No whitespace or control character, no fragment, no userinfo.
-     and p_uri !~ '[[:space:][:cntrl:]#@]'
+     -- No whitespace or control character and no fragment. Userinfo cannot pass the host below.
+     and p_uri !~ '[[:space:][:cntrl:]#]'
      and (
        p_uri ~ '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^[:space:]]*)?$'
        or p_uri ~ '^http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?(/[^[:space:]]*)?$'
@@ -45,10 +46,10 @@ revoke all on function public.agent_oauth_redirect_uris_ok(text[]) from public, 
 grant execute on function public.agent_oauth_redirect_uri_ok(text) to service_role;
 grant execute on function public.agent_oauth_redirect_uris_ok(text[]) to service_role;
 
-alter table public.agent_oauth_clients
-  add constraint agent_oauth_clients_redirect_uris_are_web
-  check (public.agent_oauth_redirect_uris_ok(redirect_uris));
-
+-- The tables are changed in one order, authorizations, then grants, then clients: the order the
+-- functions running against them take their locks in (a request's row, a grant's row, then a
+-- read of the client), so this migration waits for a token exchange in flight instead of
+-- deadlocking with it.
 alter table public.agent_oauth_authorizations
   add constraint agent_oauth_authorizations_redirect_uri_is_web
   check (public.agent_oauth_redirect_uri_ok(redirect_uri));
@@ -84,6 +85,14 @@ alter table public.agent_oauth_grants drop constraint agent_oauth_grants_revoked
 alter table public.agent_oauth_grants
   add constraint agent_oauth_grants_revoked_reason_check
   check (revoked_reason in ('user', 'client', 'reuse', 'code_replay', 'operator', 'credentials_changed', 'superseded'));
+
+-- Purged by when they ended (agent_oauth_purge_expired).
+create index agent_oauth_grants_revoked_idx
+  on public.agent_oauth_grants (revoked_at) where revoked_at is not null;
+
+alter table public.agent_oauth_clients
+  add constraint agent_oauth_clients_redirect_uris_are_web
+  check (public.agent_oauth_redirect_uris_ok(redirect_uris));
 
 -- ---------------------------------------------------------------------------------------------
 -- Issue: with the fingerprint, and at most twenty live grants per account and client
@@ -152,6 +161,17 @@ begin
   loop
     perform public.agent_oauth_revoke_grant(v_old.id, 'superseded');
   end loop;
+  -- And twenty ended ones, the newest: enough to say what happened to a connection, and a bound
+  -- on what approving in a loop can leave behind before the purge's thirty days.
+  delete from public.agent_oauth_grants
+   where id in (
+     select id from public.agent_oauth_grants
+      where user_id = v_authorization.user_id
+        and client_id = v_authorization.client_id
+        and revoked_at is not null
+      order by revoked_at desc, id desc
+      offset 20
+   );
   return jsonb_build_object(
     'outcome', 'issued',
     'grant_id', v_grant_id,
@@ -233,9 +253,11 @@ begin
     perform public.agent_oauth_revoke_grant(v_grant.id, 'reuse');
     return jsonb_build_object('outcome', 'reuse_detected', 'grant_id', v_grant.id, 'user_id', v_grant.user_id);
   end if;
-  -- Twelve refreshes of one grant an hour. An access token lasts the hour, so an honest client
-  -- needs one, and a few processes sharing a stored token a few more; a loop is told to wait and
-  -- changes nothing. It also bounds how many pairs the reuse grace can hand out, and with the
+  -- At most twelve refresh tokens of one grant in any hour, the one issued with the grant
+  -- included (so eleven refreshes in a grant's first hour, twelve in any later one). An access
+  -- token lasts the hour, so an honest client needs one, and a few processes sharing a stored
+  -- token a few more; a loop is told to wait and changes nothing. Counting what was issued,
+  -- not what was used, also bounds how many pairs the reuse grace can hand out and, with the
   -- ninety days a used token is kept, how many rows a grant can hold.
   if (select count(*) from public.agent_oauth_tokens
        where grant_id = v_grant.id and kind = 'refresh' and created_at > now() - interval '1 hour') >= 12 then

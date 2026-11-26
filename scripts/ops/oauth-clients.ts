@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 import { createClient, type CreateOAuthClientParams, type OAuthClient, type SupabaseClient } from '@supabase/supabase-js';
 
+import { isStorableRedirectUri } from '../../src/lib/agent-oauth-request';
 import { AGENT_CLIENT_SECRET_PREFIX, hashAgentSecret, mintAgentSecret } from '../../src/lib/agent-oauth-tokens';
 import { MCP_POSTING_ONLY_CLIENT_IDS } from '../../src/lib/mcp-client-directory';
 
@@ -198,6 +199,12 @@ export function buildAppClientRow(flags: Flags, mint: { clientId: () => string; 
   // As typed, once each: this server matches a redirect URI as an exact string, and the URL
   // parser's own spelling (a slash after a bare origin) is not what the client will send.
   const redirectUris = [...new Set(listFlag(flags, '--redirect-uri').map((uri) => uri.trim()))];
+  // The table's own rule, said here in words before the database says it as a constraint error.
+  for (const uri of redirectUris) {
+    if (!isStorableRedirectUri(uri)) {
+      throw new Error(`Not a redirect URI this server stores: ${uri}\nUse https://host[:port]/path, or http on localhost, 127.0.0.1 or [::1], in lower case, with no fragment and no user@.`);
+    }
+  }
   return {
     secret,
     row: {

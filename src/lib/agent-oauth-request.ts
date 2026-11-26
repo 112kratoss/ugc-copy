@@ -117,6 +117,19 @@ export function isRegisteredRedirectUri(client: Pick<AgentOAuthClient, 'redirect
   return client.redirectUris.includes(redirectUri);
 }
 
+/**
+ * The rule the tables hold a stored redirect URI to (`agent_oauth_redirect_uri_ok`, migration
+ * 20261126151150), for code that writes one: https, or http on a loopback host, in lower case,
+ * with a path if it has a query, and no fragment, whitespace or userinfo. `agent-oauth-request.test.ts`
+ * and the migration's pgTAP run the same cases through both.
+ */
+export function isStorableRedirectUri(uri: unknown): uri is string {
+  if (typeof uri !== 'string' || uri.length < 1 || uri.length > 2048) return false;
+  if (/[\s\u0000-\u001f\u007f#]/u.test(uri)) return false;
+  return /^https:\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?(\/\S*)?$/u.test(uri)
+    || /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?(\/\S*)?$/u.test(uri);
+}
+
 export type AuthorizeRequest = {
   clientId: string;
   redirectUri: string;

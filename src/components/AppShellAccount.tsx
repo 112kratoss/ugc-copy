@@ -39,6 +39,10 @@ import { pushToast, requestConfirmation } from './feedback-state';
  */
 const AGENT_ACCESS_NOT_ENDED = 'AGENT_ACCESS_NOT_ENDED';
 
+/** Said after a sign-out everywhere that could not confirm the account's connected apps were ended. */
+export const AGENT_ACCESS_MAY_REMAIN_MESSAGE =
+  'You’re signed out everywhere, but your connected apps may still be connected. Sign in and disconnect them under Connected apps in your profile settings.';
+
 type ProfileSummary = {
   display_name: string | null;
   avatar_url: string | null;
@@ -502,15 +506,17 @@ export default function AppShellAccount({
    *
    * The same request ends the apps the account connected through the app's own
    * authorization server, which are not sessions and so outlive the sign-out
-   * itself (`mobile-push-unregister-service.ts`). When the server says it could
-   * not end them, the request is made once more, and the answer says so if it
-   * still could not: the person is told after the sign-out, rather than left
-   * believing an agent is gone that is not.
+   * itself (`mobile-push-unregister-service.ts`). The server ends them before
+   * anything else and marks every answer where it could not, so an answer
+   * without the mark means they are ended. When the answer carries the mark,
+   * or there is no answer (cut short, offline), the request is made once
+   * more; if that is no better, the person is told after the sign-out, rather
+   * than left believing an agent is gone that may not be.
    */
-  const retireAccountPushTokens = async (): Promise<{ agentAccessLeft: boolean }> => {
+  const retireAccountPushTokens = async (): Promise<{ agentAccessMayRemain: boolean }> => {
     const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
     const accessToken = data.session?.access_token;
-    if (!accessToken) return { agentAccessLeft: false };
+    if (!accessToken) return { agentAccessMayRemain: false };
     const ask = async (): Promise<boolean> => {
       const deadline = new AbortController();
       const timeoutId = window.setTimeout(() => deadline.abort(), 5000);
@@ -525,13 +531,13 @@ export default function AppShellAccount({
         const body: unknown = await response.json().catch(() => null);
         return Boolean(body) && typeof body === 'object' && (body as { code?: unknown }).code === AGENT_ACCESS_NOT_ENDED;
       } catch {
-        // Offline or cut short: the sign-out still runs.
-        return false;
+        // Offline or cut short: the sign-out still runs, and whether the apps were ended is not known.
+        return true;
       } finally {
         window.clearTimeout(timeoutId);
       }
     };
-    return { agentAccessLeft: (await ask()) && (await ask()) };
+    return { agentAccessMayRemain: (await ask()) && (await ask()) };
   };
 
   /**
@@ -554,7 +560,7 @@ export default function AppShellAccount({
     const userId = session?.user?.id;
     // While this session can still send them.
     if (userId) await releaseFeedEventsForSignOut(userId);
-    const { agentAccessLeft } = await retireAccountPushTokens();
+    const { agentAccessMayRemain } = await retireAccountPushTokens();
     markBrowserSignOut(...await sessionsEnding());
     const { error } = await supabase.auth.signOut({ scope: 'global' })
       .catch((thrown: unknown) => ({ error: thrown }));
@@ -577,11 +583,13 @@ export default function AppShellAccount({
       await clearCreatorDataForSignOut(userId);
     }
     setIsSigningOutEverywhere(false);
-    if (agentAccessLeft) {
-      // Every device is signed out; an app connected to the account is not.
+    if (agentAccessMayRemain) {
+      // Every device is signed out; an app connected to the account may not be. Kept on screen
+      // long enough to read across the move to the sign-in page.
       pushToast({
         tone: 'error',
-        message: 'You’re signed out everywhere, but your connected apps could not be disconnected. Sign in and disconnect them under Connected apps in your profile settings.',
+        message: AGENT_ACCESS_MAY_REMAIN_MESSAGE,
+        durationMs: 20_000,
       });
     }
     leaveSignedOut();

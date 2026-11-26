@@ -245,22 +245,30 @@ A second review, of the merged code (2026-11-26), found nothing critical or high
 and what became of them (migration `20261126151150_agent_oauth_hardening.sql`):
 
 1. **Token rows could be grown without end** by an account refreshing its own grant in a loop.
-   Now a grant is given twelve refresh tokens an hour: the thirteenth request is answered 429
-   with `Retry-After` and changes nothing. An account holds twenty live grants per client; one
-   more ends the oldest (`superseded`). Revoked grants are purged after thirty days. A grant
-   driven as hard as it can be holds about 26,000 small rows over the ninety days a used token
-   is kept. The same count bounds how many pairs the reuse grace can hand out.
+   Now a grant is given at most twelve refresh tokens in any hour, the one issued with it
+   included: the request past that is answered 429 with `Retry-After` and changes nothing. An
+   account holds twenty live grants per client, one more ending the oldest (`superseded`), and
+   keeps twenty ended ones; ended grants are purged after thirty days. A grant driven as hard as
+   it can be holds about 26,000 small rows over the ninety days a used token is kept. The same
+   count bounds how many pairs the reuse grace can hand out.
 2. **A grant outlived account recovery.** A grant now carries a digest of the account's stored
    password hash and ends at its next use once that has changed (`credentials_changed`): a
    password change or reset ends every app connected under the old one, with no client's help.
    An account with no password (Google, Apple) is unaffected. "Sign out everywhere" ends grants
    whatever the flag says, so a grant made under `both` does not outlive a sign-out made during
-   a rollback; and when the server could not end them, the web asks once more, signs out all the
-   same, and tells the person their connected apps are still connected.
-3. **The import trusted Supabase's redirect URIs.** The table now holds every redirect URI to
-   https, or http on a loopback host, with no fragment and no userinfo, and the import skips and
-   names a client that fails it (`redirect_uris_unusable`). The page already followed only an
+   a rollback. The server ends them before the request's own rate limit and marks every answer
+   where it could not; with that mark, or with no answer at all, the web asks once more, signs
+   out all the same, and tells the person their connected apps may still be connected.
+3. **The import trusted Supabase's redirect URIs.** The tables now hold every redirect URI to
+   https, or http on a loopback host, in lower case, with no fragment and no userinfo, and the
+   import skips and names a client that fails it (`redirect_uris_unusable`). `create --app`
+   applies the same rule in words (`isStorableRedirectUri`). The page already followed only an
    http(s) redirect; `buildAuthorizationResponseUrl` now builds no other.
+
+A third review, of these fixes, found nothing critical or high and is answered in the same
+change: the ordering against the rate limit above, the migration's table order (the order the
+functions lock in, so it waits for a token exchange in flight), the count of ended grants, and
+the rule's TypeScript twin.
 
 Left as they are, on purpose: the first account to render a request binds it (the consent page
 is what keeps that from being silent), and a confidential client may send its secret in the body
@@ -278,6 +286,11 @@ or a Basic header whichever it registered with.
 - `import`'s dry run reads Supabase's clients through the admin API, which shows no secret hash,
   so only `--apply` can say that a confidential client's hash is in another form
   (`secret_hash_unusable`). It changes nothing for that client; read its output.
+- A grant ends when the account's stored password hash changes, which is a password change or
+  reset. Supabase Auth also rewrites that hash at sign-in for a hash it wants to upgrade (an
+  imported argon2 or scrypt hash, a bcrypt cost other than its default): such an account's apps
+  would be asked to connect again once. On 2026-11-26 production had none: 75 accounts with no
+  password and 8 with a bcrypt hash at the default cost.
 - Sign out everywhere ends the app's grants through the account-wide push-token request. The web
   says so when that failed; an installed phone app only logs it, and a build older than that
   request (before 2026-10-17) does not send it. A password change is the certain way to end

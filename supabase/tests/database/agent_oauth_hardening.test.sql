@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(42);
+select plan(51);
 
 -- ---------------------------------------------------------------------------------------------
 -- Redirect URIs
@@ -17,6 +17,10 @@ select ok(public.agent_oauth_redirect_uri_ok('https://chatgpt.com/connector/oaut
 select ok(public.agent_oauth_redirect_uri_ok('http://localhost:8976/callback'), 'http on localhost is one');
 select ok(public.agent_oauth_redirect_uri_ok('http://127.0.0.1:8977/callback/PPpoTd8EYBlz'), 'and on 127.0.0.1');
 select ok(public.agent_oauth_redirect_uri_ok('http://[::1]:8787/callback'), 'and on the IPv6 loopback');
+select ok(public.agent_oauth_redirect_uri_ok('https://ok.test/@handle/callback'), 'an @ in the path is not userinfo');
+select ok(public.agent_oauth_redirect_uri_ok('https://ok.test:8443'), 'a bare origin with a port is one');
+select ok(not public.agent_oauth_redirect_uri_ok('HTTPS://claude.ai/cb'), 'the scheme is lower case');
+select ok(not public.agent_oauth_redirect_uri_ok('https://claude.ai?x=1'), 'a query needs a path');
 select ok(not public.agent_oauth_redirect_uri_ok('javascript:alert(1)'), 'a javascript: address is not');
 select ok(not public.agent_oauth_redirect_uri_ok('data:text/html,<script>'), 'nor a data: address');
 select ok(not public.agent_oauth_redirect_uri_ok('myapp://callback'), 'nor a custom scheme');
@@ -24,6 +28,7 @@ select ok(not public.agent_oauth_redirect_uri_ok('http://example.com/callback'),
 select ok(not public.agent_oauth_redirect_uri_ok('http://localhost.evil.test/callback'), 'nor a host that only starts like one');
 select ok(not public.agent_oauth_redirect_uri_ok('https://claude.ai/cb#fragment'), 'nor one with a fragment');
 select ok(not public.agent_oauth_redirect_uri_ok('https://user:pass@claude.ai/cb'), 'nor one with userinfo');
+select ok(not public.agent_oauth_redirect_uri_ok('https://user@claude.ai/cb'), 'with or without a password');
 select ok(not public.agent_oauth_redirect_uri_ok('https://claude.ai/cb https://evil.test/'), 'nor two in one');
 select ok(not public.agent_oauth_redirect_uri_ok(''), 'nor nothing');
 select ok(not public.agent_oauth_redirect_uri_ok(null), 'nor null');
@@ -52,6 +57,12 @@ insert into auth.users (id, email, aud, role, is_anonymous, encrypted_password, 
 insert into public.agent_oauth_clients (client_id, client_name, redirect_uris) values
   ('client-hard', 'Hardening client', array['http://localhost:8976/callback']);
 
+select throws_ok(
+  $$insert into public.agent_oauth_authorizations (id, client_id, redirect_uri, surface, code_challenge, expires_at)
+    values ('mbar_' || repeat('j', 43), 'client-hard', 'javascript:alert(1)', 'full', repeat('c', 43), now())$$,
+  '23514', null, 'a request cannot be stored with a redirect URI that is not a web address either'
+);
+
 create function pg_temp.grant_for(p_user uuid, p_tag text) returns uuid language plpgsql as $$
 declare
   v_id text := 'mbar_' || rpad(p_tag, 43, 'z');
@@ -79,8 +90,8 @@ select is(
   'a grant is issued with the fingerprint of the account''s stored password hash'
 );
 select ok(
-  (select credential_fingerprint from public.agent_oauth_grants where id = (select first_grant from made)) !~ 'stored-hash-one',
-  'which is a digest, never the stored hash itself'
+  (select credential_fingerprint from public.agent_oauth_grants where id = (select first_grant from made)) ~ '^[0-9a-f]{64}$',
+  'which is a SHA-256 digest, 64 hex characters, and so not the stored hash'
 );
 select ok(public.agent_oauth_token_admission(rpad('oneacc', 43, 'A')) is not null, 'its access token admits');
 
@@ -207,6 +218,24 @@ select is(
   2,
   'a grant revoked today stays, to be told from one that never was'
 );
+
+-- An account keeps twenty ended grants per client: approving in a loop leaves no more behind.
+insert into public.agent_oauth_grants (user_id, client_id, surface, credential_fingerprint, created_at, revoked_at, revoked_reason)
+select 'ba200000-0000-4000-8000-000000000002', 'client-hard', 'full', public.agent_oauth_credential_fingerprint(null),
+       now() - make_interval(hours => n), now() - make_interval(mins => n), 'user'
+  from generate_series(1, 25) as n;
+insert into made select pg_temp.grant_for('ba200000-0000-4000-8000-000000000002', 'trm');
+select is(
+  (select count(*)::int from public.agent_oauth_grants where user_id = 'ba200000-0000-4000-8000-000000000002' and revoked_at is not null),
+  20,
+  'after the next approval the account has twenty ended grants for the client, the newest'
+);
+select is(
+  (select count(*)::int from public.agent_oauth_grants where user_id = 'ba200000-0000-4000-8000-000000000002' and revoked_at is null),
+  20,
+  'and twenty live ones'
+);
+select has_index('public', 'agent_oauth_grants', 'agent_oauth_grants_revoked_idx', 'the purge reads ended grants by an index');
 
 -- ---------------------------------------------------------------------------------------------
 -- The import refuses a client whose redirect URI is not a web address (where the stack has

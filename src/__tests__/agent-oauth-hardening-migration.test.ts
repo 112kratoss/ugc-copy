@@ -11,7 +11,7 @@ const between = (from: string, to: string) => sql.slice(sql.indexOf(from), sql.i
 describe('agent_oauth_hardening migration', () => {
   it('holds every stored redirect URI to a web address, in the table itself', () => {
     const check = between('create function public.agent_oauth_redirect_uri_ok', 'create function public.agent_oauth_redirect_uris_ok');
-    expect(check).toContain("p_uri !~ '[[:space:][:cntrl:]#@]'");
+    expect(check).toContain("p_uri !~ '[[:space:][:cntrl:]#]'");
     expect(check).toContain("'^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^[:space:]]*)?$'");
     expect(check).toContain("'^http://(localhost|127\\.0\\.0\\.1|\\[::1\\])(:[0-9]{1,5})?(/[^[:space:]]*)?$'");
     expect(sql).toMatch(/alter table public\.agent_oauth_clients\s+add constraint agent_oauth_clients_redirect_uris_are_web\s+check \(public\.agent_oauth_redirect_uris_ok\(redirect_uris\)\)/u);
@@ -56,6 +56,18 @@ describe('agent_oauth_hardening migration', () => {
     const issue = between('create or replace function public.agent_oauth_issue_grant', 'create or replace function public.agent_oauth_rotate_refresh_token');
     expect(issue).toMatch(/order by created_at desc, id desc\s+offset 20\s+loop\s+perform public\.agent_oauth_revoke_grant\(v_old\.id, 'superseded'\);/u);
     expect(issue).toContain('insert into public.agent_oauth_grants (user_id, client_id, surface, credential_fingerprint)');
+    // And twenty ended ones.
+    expect(issue).toMatch(/and revoked_at is not null\s+order by revoked_at desc, id desc\s+offset 20/u);
+  });
+
+  it('changes the tables in the order the functions lock them, so it waits for traffic and does not deadlock with it', () => {
+    const authorizations = sql.indexOf('alter table public.agent_oauth_authorizations');
+    const grants = sql.indexOf('alter table public.agent_oauth_grants');
+    const clients = sql.indexOf('alter table public.agent_oauth_clients');
+    expect(authorizations).toBeGreaterThan(0);
+    expect(authorizations).toBeLessThan(grants);
+    expect(grants).toBeLessThan(clients);
+    expect(sql).toMatch(/create index agent_oauth_grants_revoked_idx\s+on public\.agent_oauth_grants \(revoked_at\) where revoked_at is not null/u);
   });
 
   it('purges grants a month after they were revoked', () => {
