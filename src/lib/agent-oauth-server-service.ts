@@ -58,7 +58,7 @@ import {
 
 /**
  * The app's own authorization server for the MCP routes
- * (`docs/plans/agent-token-broker-plan-2026-11-26.md`): what happens between an agent asking to
+ * (`docs/archive/agent-token-broker-plan-2026-11-26.md`): what happens between an agent asking to
  * act as a creator and the agent holding an opaque token that this app alone can read.
  *
  * 1. `/oauth/authorize` checks the request and stores it (`startAgentAuthorization`).

@@ -369,12 +369,10 @@ enabled = false
 # revocation can be exercised here (docs/mcp-server-operations.md); production's switch is the
 # dashboard, nothing pushes this file there.
 [auth.oauth_server]
-# Enable OAuth server functionality
-enabled = true
-# Path for OAuth consent flow UI
-authorization_url_path = "/oauth/consent"
-# Allow dynamic client registration
-allow_dynamic_registration = false
+# Off, as on production since 2026-11-26: agents sign in through the app's own authorization
+# server (/oauth/authorize, docs/archive/agent-token-broker-plan-2026-11-26.md), whose token is no
+# Supabase session. Keep it off: an agent must never hold a Supabase session.
+enabled = false
 
 [edge_runtime]
 enabled = true

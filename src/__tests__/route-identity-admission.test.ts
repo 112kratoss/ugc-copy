@@ -178,10 +178,10 @@ describe('central route identity admission', () => {
     await expect(response.json()).resolves.toMatchObject({ code: 'SESSION_MERGED' });
   });
 
-  it('refuses an agent token on every API route but the MCP server, before any lookup', async () => {
-    // An agent token is the OAuth-issued Supabase JWT an MCP client holds, carrying that
-    // client's id (agent-token.ts). Supabase binds it to no resource, so the route must: a
-    // leaked agent token can then do only what the consent screen said, on /api/mcp alone.
+  it('refuses a Supabase agent JWT on every API route, the MCP server included, before any lookup', async () => {
+    // A Supabase agent JWT is the token Supabase Auth's OAuth server issued to an MCP client,
+    // carrying that client's id (agent-token.ts). Agents now sign in through the app's own
+    // server, whose token is no JWT, so no route of this app takes one.
     const agentClaims = {
       sub: SUBJECT,
       aud: 'authenticated',
@@ -206,17 +206,18 @@ describe('central route identity admission', () => {
       expect(client.rpc, `${method} ${pathname}`).not.toHaveBeenCalled();
     }
 
-    // The MCP route owns its admission (the proxy defers it); the same evaluator admits the
-    // agent token there, with its claims for the route to read the client from.
-    const client = identityClient({ claims: agentClaims });
-    const admission = await evaluateUserFacingRouteIdentity(requestWithMethod('POST', '/api/mcp'), {
-      createUserClient: () => client,
-      signIdentityAdmission: async () => 'signed-assertion',
-    });
-    expect(admission.rejection).toBeNull();
-    expect(admission.assertion).toBe('signed-assertion');
-    expect(admission.claims).toMatchObject({ sub: SUBJECT, client_id: 'client-claude' });
-    expect(client.rpc).toHaveBeenCalledTimes(1);
+    // The MCP routes own their admission (the proxy defers it, and they refuse every JWT); the
+    // evaluator refuses the agent JWT on their paths too, should anything ever ask it there.
+    for (const pathname of ['/api/mcp', '/api/mcp/posts']) {
+      const client = identityClient({ claims: agentClaims });
+      const admission = await evaluateUserFacingRouteIdentity(requestWithMethod('POST', pathname), {
+        createUserClient: () => client,
+        signIdentityAdmission: async () => 'signed-assertion',
+      });
+      expect(admission.rejection?.status, pathname).toBe(403);
+      expect(admission.assertion, pathname).toBeNull();
+      expect(client.rpc, pathname).not.toHaveBeenCalled();
+    }
 
     // An app session's token carries no client id and is admitted everywhere as before, with
     // its claims along.
@@ -579,7 +580,8 @@ describe('central route identity admission', () => {
       ['a malformed header', authenticatedRequest('/api/generations', 'Token signed-user-token'), identityClient()],
       ['a token failing verification', authenticatedRequest('/api/generations'), identityClient({ claims: null })],
       ['a subject that is not a user id', authenticatedRequest('/api/generations'), identityClient({ claims: { sub: 'nope', role: 'authenticated' } })],
-      ['an agent token off the MCP server', authenticatedRequest('/api/generations'), identityClient({ claims: agentClaims })],
+      ['an agent token', authenticatedRequest('/api/generations'), identityClient({ claims: agentClaims })],
+      ['an agent token on the MCP server', requestWithMethod('POST', '/api/mcp'), identityClient({ claims: agentClaims })],
       ['a guest on a registered-only route', authenticatedRequest('/api/showcase/publish'), identityClient({ anonymous: true })],
     ];
     for (const [label, request, client] of neverTold) {
@@ -591,7 +593,6 @@ describe('central route identity admission', () => {
     // The same tokens where admission can still let them through.
     for (const [label, request, client] of [
       ['a guest on a guest route', authenticatedRequest('/api/generate'), identityClient({ anonymous: true })],
-      ['an agent token on the MCP server', requestWithMethod('POST', '/api/mcp'), identityClient({ claims: agentClaims })],
     ] as const) {
       const onTokenVerified = vi.fn();
       await evaluateUserFacingRouteIdentity(request, { createUserClient: () => client, onTokenVerified });

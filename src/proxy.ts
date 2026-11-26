@@ -286,8 +286,8 @@ export async function proxy(
   // so a stale merged/deleting JWT cannot reach a route adapter on the web.
   // Only the routes that own their admission (the feed's reads, the MCP
   // server) defer it to their own handler. Compatibility/CORS still run here;
-  // caller assertions are stripped. An agent token on any other API route is
-  // refused by the evaluator itself (403 AGENT_TOKEN_NOT_ALLOWED).
+  // caller assertions are stripped. A Supabase agent JWT is refused on every
+  // API route by the evaluator itself (403 AGENT_TOKEN_NOT_ALLOWED).
   const identityAdmission = usesRouteOwnedIdentityAdmission(request)
     ? DEFERRED_IDENTITY_ADMISSION
     : await evaluateUserFacingRouteIdentity(request, identityDependencies);

@@ -2,7 +2,7 @@
 
 The agents' MCP server lives at `https://magicbooklet.com/api/mcp`. An agent in Claude.ai, Claude
 Desktop, Claude Code, ChatGPT, Codex or Cursor connects to it, signs a creator in through
-Supabase Auth's OAuth 2.1 server, and then creates media with that creator's credits and
+the app's own OAuth 2.1 authorization server, and then creates media with that creator's credits and
 publishes it as that creator (phase 1: `list_models`, `get_model`, `quote_generation`,
 `create_media`, `get_generation`, `list_creations`, `enhance_prompt`; phase 2: `upload_input`,
 `publish_post`, `get_post`, `delete_post`, and the `agent_tool_calls` audit table every call
@@ -17,51 +17,27 @@ Code: `src/app/api/mcp/route.ts` → `src/lib/mcp-route-adapter-service.ts` (kil
 admission, transport) → `src/lib/mcp-server-service.ts` (the tools) → the services the web
 calls. The protected-resource metadata every client reads first is served at
 `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/api/mcp`
-(`src/lib/oauth-protected-resource-metadata.ts`). What makes a token an agent's token is
-`src/lib/agent-token.ts`.
+(`src/lib/oauth-protected-resource-metadata.ts`). The token the routes take, and the Supabase
+agent JWT every route refuses, are named in `src/lib/agent-token.ts`.
 
-## How a connection works
+## Before 2026-11-26
 
-1. The agent POSTs to `/api/mcp` with no token and is answered 401 with
-   `WWW-Authenticate: Bearer resource_metadata="https://magicbooklet.com/.well-known/oauth-protected-resource/api/mcp", error="invalid_token"`.
-2. It reads that document, which names the authorization server:
-   `https://<project-ref>.supabase.co/auth/v1`, Supabase Auth's OAuth server.
-3. It sends the person's browser to Supabase's authorize endpoint (PKCE), which sends them to
-   our consent page, `/oauth/consent`. Signed out, the page goes through `/login` first; a guest
-   session is refused (registered accounts only); an account approves or denies.
-4. Supabase redirects to the client's redirect URI with a code; the agent exchanges it for an
-   ordinary Supabase JWT (one hour, with a refresh token) that carries the OAuth client's id in
-   its `client_id` claim.
-5. Every tool call carries that token. The route verifies it as the proxy verifies any token
-   (signature against the project's JWKS, then the lifecycle round trip: session still valid,
-   account not banned, not merged, not deleting) and additionally requires the `client_id`
-   claim. Every service, RLS policy and rate limit then applies to the agent as it applies to
-   the creator in the browser.
-
-On this app's own surfaces an agent token drives no API route but `/api/mcp` and its
-posting-only form `/api/mcp/posts` ("Anthropic's Connectors Directory"), and no page or
-cookie session: the proxy refuses a `client_id`-bearing token on every other `/api` route (403
-`AGENT_TOKEN_NOT_ALLOWED`), the server-rendered pages refuse it as a session
-(`getServerAuthState`), and the media routes, which take a browser's cookie session when no
-bearer token is sent, refuse it there too (`media-route-shared.ts`). What the claim does not do is
-bind the token to this app: against the Supabase project directly (PostgREST, Storage, Auth) an
-agent token is the creator's session under RLS, like any user token, so whoever holds a leaked one
-can read and change what that account may until the grant is revoked (which deletes the token's
-session) or the hour runs out. Revocation and expiry are the remedy; see "Revoking a client".
-
-That last paragraph is why the app has an authorization server of its own, which replaced
-Supabase's at the cutover on 2026-11-26: the next section. This section, and everything from
-"Enabling the OAuth server" on that describes Supabase's server, is how it was until then.
+Until 2026-11-26 an agent signed a creator in through Supabase Auth's OAuth 2.1 server, which
+issued an ordinary Supabase JWT carrying the OAuth client's id in its `client_id` claim, and the
+MCP routes took that JWT. That day the app's own authorization server (below) replaced it,
+Supabase's was switched off, and afterwards the code that read its tokens, the cutover flag
+`MCP_AUTHORIZATION_SERVER` and the client import were removed. A JWT carrying a `client_id` claim
+is still refused everywhere: 403 `AGENT_TOKEN_NOT_ALLOWED` on every `/api` route, no session for a
+page or for a media route's cookie branch, and 401 at the MCP routes like every JWT. Keep
+Supabase's OAuth server off: the dashboard's switch on production, `[auth.oauth_server] enabled =
+false` in `supabase/config.toml` locally. The archived plan is the record of both servers and of
+the cutover.
 
 ## The app's own authorization server
 
-Since 2026-11-26 this is the only authorization server on production
-(`MCP_AUTHORIZATION_SERVER=app`): Supabase Auth's OAuth server is switched off, and the sections
-that describe it ("How a connection works" above, "Enabling the OAuth server", "Registering a
-client", the Supabase half of "Revoking") are the record of how it was, kept until the follow-up
-that removes that path from the code.
+The only authorization server for both MCP routes.
 
-Plan and decisions: `docs/plans/agent-token-broker-plan-2026-11-26.md`. Code:
+Plan and decisions: `docs/archive/agent-token-broker-plan-2026-11-26.md`. Code:
 `src/lib/agent-oauth-*.ts`, `src/lib/oauth-authorization-server-metadata.ts`, migrations
 `20261126121704_agent_oauth_server.sql` and `20261126151150_agent_oauth_hardening.sql`.
 
@@ -72,30 +48,19 @@ refuse it). An access token lasts an hour; a refresh token is replaced on every 
 90 days unused; a refresh token used again more than 10 seconds after its first use revokes its
 grant (`agent_oauth_refresh_reuse_detected` in the logs).
 
-### The flag
+### How a connection works
 
-`MCP_AUTHORIZATION_SERVER` on Vercel, read per request; a change needs a configuration-only
-redeployment.
-
-| Value | Metadata names | `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`, `/api/oauth/*` | MCP routes accept |
-|---|---|---|---|
-| unset, `supabase` | Supabase | 404 | Supabase agent JWTs |
-| `both` | the app | on | the app's tokens, and Supabase agent JWTs already issued |
-| `app` | the app | on | the app's tokens only; every JWT is answered 401 |
-
-`MCP_SERVER_DISABLED=1` still answers both MCP routes 503 in every mode.
-
-### How a connection works under it
-
-1. 401 with the same challenge; the protected-resource document names `https://magicbooklet.com`
-   as the authorization server, whose RFC 8414 document is
-   `/.well-known/oauth-authorization-server`.
+1. The agent POSTs to `/api/mcp` with no token and is answered 401 with
+   `WWW-Authenticate: Bearer resource_metadata="https://magicbooklet.com/.well-known/oauth-protected-resource/api/mcp", error="invalid_token"`.
+   That document names `https://magicbooklet.com` as the authorization server, whose RFC 8414
+   document is `/.well-known/oauth-authorization-server`.
 2. The client sends the browser to `/oauth/authorize` with its client id, its registered redirect
    URI (matched as an exact string), a PKCE S256 challenge and `resource` (the MCP URL it
    connects to). A request that fails the client or redirect check is shown a plain page; any
    later refusal goes to the client's redirect URI as `error=…`.
-3. The request is stored and the browser goes to `/oauth/consent?authorization_id=mbar_…`: the
-   same page, the same sign-in round trip, the same guest wall. The page lists the access of the
+3. The request is stored and the browser goes to `/oauth/consent?authorization_id=mbar_…`.
+   Signed out, the page goes through `/login` first; a guest session is refused (registered
+   accounts only). The page lists the access of the
    server the grant is for (the posting list for `/api/mcp/posts`). Consent is asked every time.
 4. Allow sends the browser to the redirect URI with a code (2 minutes, single use). The client
    exchanges it at `/oauth/token` with its PKCE verifier; the confidential directory client also
@@ -110,24 +75,22 @@ redeployment.
 Rows of `public.agent_oauth_clients`; no dynamic registration. `npm run ops:oauth-clients`:
 
 ```bash
-npm run ops:oauth-clients -- list --app
-npm run ops:oauth-clients -- import            # what the cutover would copy from Supabase; --apply does it
-npm run ops:oauth-clients -- create --app --name "<name>" --redirect-uri <uri> [--confidential] [--posting-only] --apply
+npm run ops:oauth-clients -- list
+npm run ops:oauth-clients -- create --name "<name>" --redirect-uri <uri> [--confidential] [--posting-only] --apply
 npm run ops:oauth-clients -- disable --client-id <id> --apply    # its sign-ins and tokens stop at once
 npm run ops:oauth-clients -- enable --client-id <id> --apply
 npm run ops:oauth-clients -- rotate-secret --client-id <id> --apply   # new secret to the clipboard
 ```
 
-`import` without `--apply` lists Supabase's clients through the admin API, which shows no secret
-hash; only `--apply` reads the table and can report a skip, so read its output. `import` keeps
-every id, redirect URI and, for a confidential client, the stored hash of its
-secret (GoTrue v2.186.0 stores `base64url(SHA-256(secret))`, the form this server uses), so no
-setup command, plugin or directory listing changes. It marks the ids in
-`MCP_POSTING_ONLY_CLIENT_IDS` as `posts`: such a client is never granted `/api/mcp`. It skips a
-client already present, and names any confidential client whose hash is in another form
-(`secret_hash_unusable`): give that one a new secret with `rotate-secret` and update whoever
-holds it. A new redirect URI for an existing client (ChatGPT's per-account callback) is an
-`update` of `redirect_uris` in the SQL editor until the CLI grows a command for it.
+The seven clients registered with Supabase's server ("Registered clients", below) were copied
+here at the cutover with their ids, redirect URIs and, for the confidential directory client, the
+stored hash of its secret (GoTrue v2.186.0 stored `base64url(SHA-256(secret))`, the form this
+server uses), so no setup command, plugin or directory listing changed; the one-time import that
+did it is gone. The ids in `MCP_POSTING_ONLY_CLIENT_IDS` are `posts` rows: such a client is never
+granted `/api/mcp`. A new redirect URI for an existing client (ChatGPT's per-account callback) is
+an `update` of `redirect_uris` in the SQL editor, the existing ones kept, until the CLI grows a
+command for it. `--app`, which chose this table while Supabase's server was the default, is still
+accepted and changes nothing.
 
 ### Revoking
 
@@ -136,8 +99,7 @@ holds it. A new redirect URI for an existing client (ChatGPT's per-account callb
 - One client for everyone: `disable --client-id <id> --apply`.
 - One creator, every app: "Sign out everywhere", on the web or in the app. Both send the
   account-wide `POST /api/mobile/notifications/unregister` (`scope: 'account'`) first, and the
-  server ends the account's grants there, before that request's own rate limit and whatever the
-  flag says. A failure logs `agent_access_sign_out_everywhere_failed` and every answer after it
+  server ends the account's grants there, before that request's own rate limit. A failure logs `agent_access_sign_out_everywhere_failed` and every answer after it
   carries `code: AGENT_ACCESS_NOT_ENDED`; with that code, or with no answer, the web asks once
   more, signs out all the same, and tells the person their connected apps may still be
   connected. An installed phone app logs it and goes on.
@@ -151,7 +113,7 @@ holds it. A new redirect URI for an existing client (ChatGPT's per-account callb
   and changes nothing), and an account holds twenty live grants per client (one more ends the
   oldest, `superseded`) and keeps twenty ended ones.
 - A redirect URI is https, or http on `localhost`, `127.0.0.1` or `[::1]`, in lower case, with no
-  fragment and no `user@`; the tables refuse any other, and `create --app` says so first.
+  fragment and no `user@`; the tables refuse any other, and `create` says so first.
 - Everyone: the kill switch. To end every grant without switching the server off:
   `select public.agent_oauth_revoke_grant(id, 'operator') from public.agent_oauth_grants where revoked_at is null;`
 
@@ -163,8 +125,8 @@ holds it. A new redirect URI for an existing client (ChatGPT's per-account callb
 `agent_oauth_code_replayed`, and the refusals `agent_oauth_authorize_refused`,
 `agent_oauth_token_refused`, `agent_oauth_revoke_refused` with the OAuth error code. Each names
 the client and, where known, the account and the grant; none carries a token, a code, a secret
-or a request parameter. `mcp_request_refused` gains `reason: token_kind` (a token of a kind the
-flag does not take).
+or a request parameter. `mcp_request_refused` carries `reason: token_kind` for a bearer token
+that is not one of this server's access tokens, any JWT included ("Reading the logs").
 
 Rate limits: authorize 30 a minute per network address; token 600 a minute per network address
 (a hosted client makes every creator's exchanges from a few addresses);
@@ -176,7 +138,8 @@ Done on production on 2026-11-26; the plan's "Cutover, as done" is the record. T
 taught: the Supabase dashboard's OAuth Server switch asks to confirm and then still needs **Save
 changes**, and ending what Supabase issued needs only its sessions, consents and unanswered
 requests (step 6's three statements), not its apps. The steps below are as they were carried
-out, kept for another environment.
+out. The import and the flag they use were removed from the code afterwards (step 10), so they
+cannot be run again as written.
 
 Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a creator sees.
 
@@ -211,51 +174,23 @@ Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a cre
    URL and a client id, never an authorization server, and both are unchanged: nothing to
    republish. Reconnect once from the Claude connectors-directory listing (posting server) and
    from ChatGPT to confirm their held client id (and the directory's secret) still sign in.
-10. Follow-up PR: delete the `supabase` and `both` paths (the plan's last step).
+10. Follow-up PR: delete the `supabase` and `both` paths (the plan's last step). Done the same
+    day: the flag, the code that read Supabase's tokens and the import are gone, and the
+    `MCP_AUTHORIZATION_SERVER` variable left in Vercel is read by nothing.
 
-Rollback before step 6: set the flag back to `supabase` and redeploy. Supabase's clients and
-grants are untouched until step 6; the app's grants stay in its tables, unused. Production is
-past it: with Supabase's sessions and consents gone and its server off, the flag set back to
-`supabase` or left unset answers every agent call 401. The way back would be to switch
-Supabase's server on again, set `both`, and have each agent sign in afresh.
+There is no way back to Supabase's server: the code no longer reads its tokens.
 
-## Enabling the OAuth server (production dashboard)
+## Exercising it locally
 
-Supabase Auth's OAuth server is off by default and is enabled per project in the dashboard,
-not from this repository.
+The app's server needs nothing of Supabase Auth's beyond its accounts, so the local stack runs it
+as it is. To go through a whole connection (authorize, consent, token, a tool call, revocation)
+run a throwaway stack: a scratchpad copy of `supabase/` with a `project_id` of its own and its
+ports moved to 563xx, `site_url` set to the dev server's origin, then the dev server from the
+worktree with that stack's URL and keys in its env, as the E2E server is given its env, and no
+`.env*` file written. Register a client on it with `ops:oauth-clients` pointed at that stack.
+Never against production, and never with a real account's token.
 
-1. Authentication → OAuth Server (beta): enable it.
-2. Set the authorization path to `/oauth/consent` (the consent page this app serves; the
-   dashboard composes it with the project's Site URL, which is `https://magicbooklet.com`).
-3. Leave dynamic client registration **off** (the spike's recommendation,
-   `docs/research/mcp-oauth-spike-2026-11-09.md`): registration works on this GoTrue, but every
-   zero-config `claude mcp add` or Codex install would add a client row and the consent screen
-   would name whatever the client registered. Off, the client list is ours: one public client per
-   surface, below. Phase 3 kept it off: every client connects with a pre-registered client
-   ("Distribution", below).
-4. Verify discovery and the no-key endpoints (Production switch-on, below): the three discovery
-   URLs answer metadata rather than `feature_disabled`, and `/auth/v1/oauth/authorize` and
-   `/auth/v1/oauth/token` answer without an `apikey` header through production Kong (OAuth
-   clients cannot send one). `GET /auth/v1/health` names the Auth version; the spike ran on GoTrue
-   v2.186.0, which production also runs.
-
-The local stack has the same block on in `supabase/config.toml` (`[auth.oauth_server]`,
-`enabled = true`, `authorization_url_path = "/oauth/consent"`, registration off); nothing pushes
-that file to production, whose switch is the dashboard alone. The switch alone does not make the
-flow runnable against the stack as it is, because its `site_url` stays `https://magicbooklet.com`
-on purpose: a local authorize would send the browser to production's consent page. To exercise
-`/oauth/consent`, an agent token and revocation locally, run the stack the spike did
-(`docs/research/mcp-oauth-spike-2026-11-09.md`, "Stack config changes"): a scratchpad copy of
-`supabase/` with a `project_id` of its own, its ports moved to 563xx, `site_url` and
-`additional_redirect_urls` set to the dev server's origin (the spike used
-`http://localhost:3300`, with `http://localhost:3300/**` and `http://127.0.0.1:3300/**`),
-`[auth.oauth_server] enabled = true`, and an ES256 signing key (`supabase gen signing-key
---algorithm ES256` into the copy, named by `signing_keys_path`) so tokens verify like
-production's; without the key the stack signs HS256 and `openid` cannot issue an ID token. The
-dev server is then started from the worktree with that stack's URL and anon key in its env, as
-the E2E server is given its env, and no `.env*` file is written.
-
-## Registering a client (an "OAuth App")
+## Registering a client
 
 Each agent product is one **public** OAuth client (`token_endpoint_auth_method: none`, with a
 `client_uri` so the consent screen can name and link it), registered with the ops script under
@@ -277,27 +212,26 @@ posting client's was). It registers on whichever
 project `.env.local` points at and names that project's origin in every output: the file is
 hand-toggled between the local stack and production (`docs/local-development.md`), so check that
 the **production** block is the active one before `--apply`, or the client id you paste into a
-connector form is one production has never heard of. The dashboard's Authentication → OAuth
-Server → Apps page does the same by hand.
+connector form is one production has never heard of.
 
 | Client | Redirect URI(s) to register | How the creator connects |
 |---|---|---|
 | Claude.ai, Claude Desktop, Claude mobile | `https://claude.ai/api/mcp/auth_callback` (exactly this) | Settings → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`; under Advanced ("Use your own OAuth client") the client id, no secret |
 | Claude Code | `http://localhost:8976/callback` (our documented port; the URI must match exactly, so the port is fixed) | `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp` (user scope: the default, `local`, ties the server to the folder the command ran in), then `/mcp` (or `claude mcp login magicbooklet`, which needs a terminal) |
-| ChatGPT (plugins, Apps SDK) | `https://chatgpt.com/connector/oauth/{callback_id}`, shown under Advanced OAuth settings in the Add custom MCP server form before anything is saved (GoTrue sends no RFC 9207 `iss`, so ChatGPT's stable redirect does not apply). The owner's account shows `R0qoU77QhExz` for this server; whether another account gets the same id is not known ("Registered clients") | Plugins → Add → Add custom MCP server: the URL, OAuth, and under Advanced OAuth settings the client id, no secret, token method `none`, with `offline_access` unticked; works on the Free plan |
+| ChatGPT (plugins, Apps SDK) | `https://chatgpt.com/connector/oauth/{callback_id}`, shown under Advanced OAuth settings in the Add custom MCP server form before anything is saved (the server sends no RFC 9207 `iss`, so ChatGPT's stable redirect does not apply). The owner's account shows `R0qoU77QhExz` for this server; whether another account gets the same id is not known ("Registered clients") | Plugins → Add → Add custom MCP server: the URL, OAuth, and under Advanced OAuth settings the client id, no secret, token method `none`, with `offline_access` unticked; works on the Free plan |
 | Codex CLI | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` (exactly this: Codex appends a callback ID derived from the server URL and inserts the pinned port; a `callback_url` without that ID is ignored, see "Distribution") | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` under `[mcp_servers.magicbooklet.oauth]` in `~/.codex/config.toml`, then `codex mcp login magicbooklet` |
 | Cursor | `http://localhost:8787/callback` (desktop) and `https://www.cursor.com/agents/mcp/oauth/callback` (web and Cursor Agents) | `auth: { CLIENT_ID: "<id>" }` on the server entry in `.cursor/mcp.json`, or the deeplink |
 
 A redirect URI must match exactly: scheme, host, port and path (`127.0.0.1` is not `localhost`;
-no port-agnostic loopback). Supabase accepts and ignores the `resource` parameter clients send
-(it binds a token to no resource), which is why the route requires the `client_id` claim instead.
-The token's `scope` is only `openid profile email phone` class and is never shown as permissions;
-the consent screen shows the fixed description of what an agent may do.
+no port-agnostic loopback). The `resource` a client sends binds its grant to one of the two MCP
+servers. The token's one scope, `mcp`, is never shown as a permission; the consent screen shows
+the fixed description of what the grant's server lets an agent do.
 
 ### Registered clients (production, 2026-11-09; ChatGPT 2026-11-26)
 
-Dynamic client registration is off on production (its metadata has no `registration_endpoint`),
-so the clients below are the only ones. Their ids are public values: the full server's live in
+There is no dynamic client registration (the metadata has no `registration_endpoint`), so the
+clients below are the only ones. They were registered with Supabase's server on those dates and
+copied to `public.agent_oauth_clients`, ids unchanged, at the cutover. Their ids are public values: the full server's live in
 `MCP_CLIENT_IDS` (`src/lib/mcp-client-directory.ts`), which the setup page and the Claude Code
 plugin read (all but ChatGPT's, which stays a placeholder there; see below the table), and the
 posting-only ones in `MCP_POSTING_ONLY_CLIENT_IDS` beside it.
@@ -328,9 +262,8 @@ for `https://magicbooklet.com/api/mcp` (then the id goes into `MCP_CLIENT_IDS`),
 listed in ChatGPT's directory. Switching ChatGPT on then needs no new page text, because the setup
 page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, `offline_access`
 unticked). The id goes into `MCP_CLIENT_IDS` and the shared callback into
-`MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by passing the client's whole list, the existing URI
-included, to `auth.admin.oauth.updateClient`, which replaces `redirect_uris` (`ops:oauth-clients`
-has no update command); Codex's second URI was added that way.
+`MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by an `update` of the client's `redirect_uris` on
+`public.agent_oauth_clients`, the existing URI kept (`ops:oauth-clients` has no update command).
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
@@ -845,21 +778,12 @@ group by client_id order by credits desc;
 ## Connected apps
 
 A creator sees the agents they approved under **Connected apps** on `/profile/edit` (one row per
-OAuth client, named as the client registered itself, with the day it was approved) and ends one's
-access with **Disconnect**, which asks first. The section reads and revokes through Supabase
-Auth's grants API from the web session (`supabase.auth.oauth.listGrants()`,
-`revokeGrant({ clientId })`; `src/lib/connected-apps.ts`, `src/app/profile/edit/ConnectedApps.tsx`),
-so no route of this app is involved. Where the project's OAuth server is off (the local stack as
-shipped, a preview project) the grants API answers `feature_disabled`, which the section reads as
-no apps connected rather than as a failure. Revoking deletes the client's sessions: the agent's next
-call fails the route's lifecycle check and is answered 401 with the challenge, its refresh fails,
-and connecting again goes through the consent screen afresh.
-
-Since the app has an authorization server of its own ("The app's own authorization server"), the
-section lists both servers' grants as one list: the app's through `GET /api/oauth/grants` with
-the session's token, Supabase's as above until its server is off, which then reads as none.
-Disconnect goes to each server that listed the app (`combineConnectedAppsClients`); a list that
-one server could not answer is shown as a failure, never as shorter.
+OAuth client, named as the client is registered, with the day it was approved) and ends one's
+access with **Disconnect**, which asks first. The section reads and ends the grants through
+`GET` and `DELETE /api/oauth/grants` with the session's token (`src/lib/connected-apps.ts`,
+`src/app/profile/edit/ConnectedApps.tsx`); a list that cannot be read is shown as a failure, never
+as empty. Disconnecting deletes the grant's tokens: the agent's next call is answered 401 with the
+challenge, its refresh fails, and connecting again goes through the consent screen afresh.
 
 ## The kill switch
 
@@ -880,9 +804,11 @@ table has no such column), `tool`, `outcome` (`ok`, `error` or `threw`), `code` 
 when it failed: `COST_CHANGED`, `INSUFFICIENT_CREDITS`, `RATE_LIMITED`, `NOT_OWNER`,
 `NOT_READY`, …), `costCredits` when the answer carried a cost, `generationId` and `postId` where
 the call was about one, and `elapsedMs`. Prompts and results are never logged. A refused
-request logs `mcp_request_refused` with the status, the `surface` and the reason (`no_token`,
-`token`, `identity`, `AGENT_TOKEN_REQUIRED`, or `AGENT_SURFACE_NOT_ALLOWED` for a posting-only
-client at `/api/mcp`). A call to a tool a server does not have is refused by the SDK and leaves
+request logs `mcp_request_refused` with the `surface` and either the reason (`no_token`; or
+`token_kind`, a bearer token that is not one of this server's access tokens, any JWT included) or
+the admission's status and code (`UNAUTHORIZED` for an unknown, expired or revoked token,
+`REGISTRATION_REQUIRED`, `SESSION_MERGED`, `ACCOUNT_DELETING`, `IDENTITY_CHECK_UNAVAILABLE`, or
+`AGENT_SURFACE_NOT_ALLOWED` for a grant for the posting server at `/api/mcp`). A call to a tool a server does not have is refused by the SDK and leaves
 no line and no audit row. In the Vercel logs, filter on `msg:mcp_tool_call` and
 group by `clientId` to see which client spends what; `outcome:threw` is a bug to read with its
 `errorName` and `errorMessage`. The same facts are queryable in the audit table (Publishing by
@@ -900,19 +826,15 @@ with `retry_after_seconds`. The staging quota is not one of them: it answers `UP
 
 ## Revoking a client, or one creator's grant
 
-- One creator: the creator does it themselves under Connected apps on `/profile/edit` (above:
-  `listGrants`, `revokeGrant({ clientId })`). An operator does the same for them in the dashboard
-  under Authentication → Users → the user, or by signing the user out everywhere (which revokes
-  every session, the agent's included). A revoked grant deletes the client's sessions: the agent's
-  access token still verifies by signature until it expires, but the route's lifecycle round trip
-  answers `session_valid: false` and the next call is 401 with the challenge, and the refresh
-  fails. That is why the route never trusts the signature alone.
-- One client for everyone: Authentication → OAuth Server → Apps → the app → delete or disable
-  it. Tokens already issued keep working until they expire (one hour); the refresh fails after
-  that.
-- Everyone at once: the kill switch above.
+"The app's own authorization server" → "Revoking", above: Disconnect for one creator and one app,
+`disable --client-id` for one client, sign out everywhere or a password change for one creator's
+every app, and the kill switch for everyone.
 
-## Production switch-on checks
+## Production switch-on checks (2026-11-09, Supabase's server)
+
+The record of switching Supabase's OAuth server on. Checks 1 and 2 were of that server and no
+longer apply; the app's own server was checked on production on 2026-11-26 (the archived plan's
+proof). Checks 3 to 5 are still how a client is proved, against the app's server today.
 
 Before the first client is announced, with the OAuth server enabled on the production project
 (`<ref>` is the project reference), each of these must hold; the spike proved them on a local
@@ -990,8 +912,10 @@ After a release that touches the server:
 curl -sS https://magicbooklet.com/.well-known/oauth-protected-resource/api/mcp
 ```
 
-answers the metadata with `resource` `https://magicbooklet.com/api/mcp` and the project's
-`/auth/v1` as its authorization server, and
+answers the metadata with `resource` `https://magicbooklet.com/api/mcp` and
+`https://magicbooklet.com` as its authorization server, `curl -sS
+https://magicbooklet.com/.well-known/oauth-authorization-server` answers the RFC 8414 document
+with that issuer, and
 
 ```bash
 curl -sS -o /dev/null -D - -X POST -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' https://magicbooklet.com/api/mcp
@@ -1052,18 +976,19 @@ section 9) has the sources.
   the port must be free while the person signs in.
 - **ChatGPT**: Plugins → Add → Add custom MCP server: the URL under Connection, OAuth, and
   under Advanced OAuth settings the client id (no secret, token method `none`). Untick the default
-  scope `offline_access`, since GoTrue refuses any scope beyond `openid profile email phone`. Then
+  scope `offline_access` (Supabase's server refused any scope beyond `openid profile email phone`;
+  the app's grants `mcp` whatever is asked, so either way works). Then
   tick "I understand and want to continue" and choose Create as a plugin; Continue to Magic
   Booklet opens the consent page. It works on the Free plan, and workspace policies decide
   whether custom servers are allowed. The redirect is
   `https://chatgpt.com/connector/oauth/{callback_id}`, shown in that same section before
-  anything is saved (GoTrue sends no RFC 9207 `iss`, so ChatGPT's stable
+  anything is saved (the server sends no RFC 9207 `iss`, so ChatGPT's stable
   `https://chatgpt.com/connector_platform_oauth_redirect` does not apply). Register it before
   creating the plugin.
 - **Codex**: `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`
   writes `[mcp_servers.magicbooklet]` with `url`, and `[mcp_servers.magicbooklet.oauth]` with
   `client_id` (a configured client id skips registration). Two things decide the redirect URI:
-  - The port: Codex listens on a random one unless pinned, and GoTrue matches ports exactly, so
+  - The port: Codex listens on a random one unless pinned, and the server matches ports exactly, so
     the person adds `callback_port = 8977` under `[mcp_servers.magicbooklet.oauth]` (the global
     `mcp_oauth_callback_port = 8977` works too). The setup page shows the whole block.
   - The path: with no `iss` from the authorization server, Codex appends a server-specific
@@ -1075,7 +1000,7 @@ section 9) has the sources.
     client's one redirect URI is `http://127.0.0.1:8977/callback/PPpoTd8EYBlz`.
 
   Then `codex mcp login magicbooklet` (`--no-browser` prints the URL and takes the pasted
-  redirect). If GoTrue ever sends `iss` and advertises
+  redirect). If the server ever sends `iss` and advertises
   `authorization_response_iss_parameter_supported`, Codex changes how it picks the callback:
   register what `codex mcp add` then prints.
 - **Cursor**: `"auth": { "CLIENT_ID": "<id>" }` on the server's entry in `~/.cursor/mcp.json`
@@ -1355,8 +1280,7 @@ a list of its own (publish, change and delete posts, read creations and posts, n
 spends credits; `POSTING_AGENT_ACCESS`), Connected apps says the same of it
 (`connectedAppAccess`), and a token issued to it answers 403 `AGENT_SURFACE_NOT_ALLOWED` at
 `/api/mcp`. So what the person approved is what the token can do on this app's routes. Every
-other client may use either path. Against the Supabase project itself the token is the
-creator's session under RLS, as any agent token is.
+other client may use either path, and the token is nothing at the Supabase project itself.
 
 The list is a deny-list, so it fails open: a client that is not on it gets the full server.
 **An id leaves the list only after its client is deleted from the OAuth server.** To replace a
@@ -1370,16 +1294,14 @@ The confidential client's secret:
   `~/.config/magicbooklet/claude-posting-client-secret` (owner-only, never in the repository).
   To enter it in the portal: `pbcopy < ~/.config/magicbooklet/claude-posting-client-secret`, then
   paste.
-- GoTrue holds a client to the method it was registered with: this one answers
-  `client_secret_post` only. `client_secret_basic` and no secret are refused with `invalid
-  authentication method: client is registered for 'client_secret_post' but '…' was used`
-  (checked 2026-11-10 with a bogus code: `invalid_grant` by post, that refusal otherwise). If
-  Claude's token exchange fails with that message in the Auth logs, register the client again
-  with the method Claude sent.
+- The token endpoint takes its secret in the body (`client_secret_post`) or a Basic header
+  (`client_secret_basic`), and answers `invalid_client` without it or with a wrong one
+  (`agent_oauth_token_refused` in the logs). Supabase's server held the client to
+  `client_secret_post` alone; this one does not.
 
 **What a listing does not cover.** Claude Code signs in from a listing with a client ID metadata
 document or dynamic registration on any loopback port. Production has neither (registration is
-off; GoTrue's metadata advertises no `client_id_metadata_document_supported`), so in Claude Code
+off; the metadata advertises no `client_id_metadata_document_supported`), so in Claude Code
 the listing cannot sign in, and the plugin and the setup page's command stay the way in.
 
 **Before submitting.** Add `https://magicbooklet.com/api/mcp/posts` in Claude as a custom
@@ -1434,6 +1356,6 @@ listing in ChatGPT's directory is a separate submission that OpenAI reviews. Bef
 - Tool annotations must match what each tool does (`readOnlyHint` on the reads,
   `destructiveHint` on `create_media`), and a reviewer needs an account with credits.
 - Register on the ChatGPT client the exact redirect URI ChatGPT shows for the app (the
-  callback-ID form, since GoTrue sends no `iss`) before the review starts. It may differ from the
-  owner's own plugin's (`R0qoU77QhExz`, "Registered clients"). Keep both: pass the whole list to
-  `auth.admin.oauth.updateClient`, which replaces it.
+  callback-ID form, since the server sends no `iss`) before the review starts. It may differ from
+  the owner's own plugin's (`R0qoU77QhExz`, "Registered clients"). Keep both: an `update` of the
+  client's `redirect_uris` on `public.agent_oauth_clients`, the existing one kept.

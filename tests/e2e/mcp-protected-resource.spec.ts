@@ -3,12 +3,9 @@ import { expect, test } from '@playwright/test';
 /**
  * The first two steps every MCP client takes against the server, offline: the RFC 9728
  * protected-resource document (both well-known URLs) and the 401 challenge an unauthenticated
- * call is answered with, whose `resource_metadata` names that document. The E2E server runs with
- * `MCP_AUTHORIZATION_SERVER=both` (playwright.config.ts), so the authorization server it names
- * is the app's own, this origin, whose RFC 8414 document is read here too
- * (docs/plans/agent-token-broker-plan-2026-11-26.md); with the flag unset it names the project's
- * `/auth/v1`, which `oauth-protected-resource-metadata.test.ts` holds. Nothing here needs a token
- * or a page.
+ * call is answered with, whose `resource_metadata` names that document. The authorization server
+ * it names is the app's own, this origin, whose RFC 8414 document is read here too
+ * (docs/archive/agent-token-broker-plan-2026-11-26.md). Nothing here needs a token or a page.
  */
 
 const BASE = 'http://127.0.0.1:3100';

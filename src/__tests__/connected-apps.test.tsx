@@ -14,7 +14,6 @@ import {
   connectedAppAccess,
   disconnectQuestion,
   formatConnectedDate,
-  isOAuthServerDisabledError,
   listConnectedApps,
   toConnectedApps,
   type ConnectedAppsClient,
@@ -23,10 +22,10 @@ import { MCP_CLIENT_IDS, MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-di
 
 // The page's own client is the browser's; the component takes the grants API as a prop, so the
 // module that builds the browser client is never loaded here.
-vi.mock('@/lib/supabase', () => ({ supabase: { auth: { oauth: {} } } }));
+vi.mock('@/lib/supabase', () => ({ supabase: { auth: {} } }));
 
-const CLAUDE = { client: { id: 'client-claude', name: 'Claude Code', client_uri: 'https://claude.com/claude-code' }, scopes: ['openid', 'email'], granted_at: '2026-11-09T10:00:00.000Z' };
-const CODEX = { client: { id: 'client-codex', name: 'Codex' }, scopes: ['openid'], granted_at: '2026-11-08T09:00:00.000Z' };
+const CLAUDE = { client: { id: 'client-claude', name: 'Claude Code', uri: 'https://claude.com/claude-code' }, granted_at: '2026-11-09T10:00:00.000Z', surface: 'full' };
+const CODEX = { client: { id: 'client-codex', name: 'Codex', uri: null }, granted_at: '2026-11-08T09:00:00.000Z', surface: 'full' };
 
 function api(overrides: Partial<ConnectedAppsClient> = {}) {
   return {
@@ -60,20 +59,13 @@ describe('the connected apps rules', () => {
     expect(disconnectQuestion(apps[0])).toMatchObject({ title: 'Disconnect Codex?', confirmLabel: 'Disconnect', tone: 'danger' });
   });
 
-  it('reads a switched-off OAuth server as no apps connected, and any other failure as a failure', async () => {
-    expect(isOAuthServerDisabledError({ code: 'feature_disabled', message: 'OAuth server is disabled' })).toBe(true);
-    expect(isOAuthServerDisabledError({ status: 404, message: 'Not Found' })).toBe(true);
-    expect(isOAuthServerDisabledError({ message: 'OAuth 2.1 server is not enabled for this project' })).toBe(true);
-    expect(isOAuthServerDisabledError({ code: 'bad_jwt', message: 'invalid token' })).toBe(false);
-    expect(isOAuthServerDisabledError(null)).toBe(false);
-    expect(await listConnectedApps({
-      listGrants: async () => ({ data: null, error: { code: 'feature_disabled', message: 'OAuth server is disabled' } }),
-      revokeGrant: async () => ({ error: null }),
-    })).toEqual([]);
-    await expect(listConnectedApps({
-      listGrants: async () => ({ data: null, error: { code: 'bad_jwt', message: 'invalid token' } }),
-      revokeGrant: async () => ({ error: null }),
-    })).rejects.toThrow('invalid token');
+  it('reads every failure as a failure, never as no apps connected', async () => {
+    for (const error of [{ status: 404, message: 'Not Found' }, { status: 401, message: 'invalid token' }, { message: '' }]) {
+      await expect(listConnectedApps({
+        listGrants: async () => ({ data: null, error }),
+        revokeGrant: async () => ({ error: null }),
+      }), JSON.stringify(error)).rejects.toThrow(error.message || 'The connected apps could not be read.');
+    }
   });
 });
 
@@ -164,18 +156,12 @@ describe('the Connected apps section', () => {
     expect(within(list).getByRole('button', { name: 'Disconnect Codex' })).toBeInTheDocument();
   });
 
-  it('shows the empty state for an account with no apps, and where the OAuth server is switched off', async () => {
+  it('shows the empty state for an account with no apps', async () => {
     const client = api({ listGrants: vi.fn(async () => ({ data: [], error: null })) });
-    const first = render(<ConnectedApps client={client} />);
+    render(<ConnectedApps client={client} />);
     expect(await screen.findByText(CONNECTED_APPS_COPY.emptyTitle)).toBeInTheDocument();
     expect(screen.getByText(CONNECTED_APPS_COPY.emptyBody)).toBeInTheDocument();
     expect(screen.queryByRole('list')).not.toBeInTheDocument();
-    first.unmount();
-
-    // The local stack as shipped and a preview project: no danger callout on every visit.
-    const off = api({ listGrants: vi.fn(async () => ({ data: null, error: { code: 'feature_disabled', message: 'OAuth server is disabled' } })) });
-    render(<ConnectedApps client={off} />);
-    expect(await screen.findByText(CONNECTED_APPS_COPY.emptyTitle)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 

@@ -5,12 +5,10 @@ import {
   PROTOCOL_VERSION_META_KEY,
 } from '@modelcontextprotocol/server';
 import { NextRequest } from 'next/server';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import {
-  IDENTITY_ADMISSION_HEADER,
-  registerIdentityAdmissionContext,
-} from '@/lib/identity-admission-assertion';
+import { hashAgentSecret } from '@/lib/agent-oauth-tokens';
+import { IDENTITY_ADMISSION_HEADER } from '@/lib/identity-admission-assertion';
 import {
   bearerChallenge,
   createMcpRouteHandlers,
@@ -28,21 +26,24 @@ const GENERATION_ID = '22222222-2222-4222-8222-222222222222';
 const METADATA_URL = `${SITE}/.well-known/oauth-protected-resource/api/mcp`;
 const POSTS_METADATA_URL = `${SITE}/.well-known/oauth-protected-resource/api/mcp/posts`;
 
-const ACTIVE = { state: 'active', session_valid: true, banned: false, created_at: '2026-11-09T00:00:00Z' };
-const AGENT_CLAIMS = { sub: USER_ID, aud: 'authenticated', role: 'authenticated', is_anonymous: false, client_id: 'client-claude' };
-const SESSION_CLAIMS = { sub: USER_ID, aud: 'authenticated', role: 'authenticated', is_anonymous: false };
-const GUEST_AGENT_CLAIMS = { ...AGENT_CLAIMS, is_anonymous: true };
+/** The app's own access token (`agent-oauth-tokens.ts`); the MCP routes take no other. */
+const APP_TOKEN = `mbat_${'t'.repeat(43)}`;
+/** A JWT, an app session's or a Supabase agent's: refused before anything reads it. */
+const JWT = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ4IiwiY2xpZW50X2lkIjoiYyJ9.c2lnbmF0dXJl';
 
-function identity(claims: Record<string, unknown> | null = AGENT_CLAIMS, admission: unknown = ACTIVE) {
-  return {
-    auth: {
-      getClaims: vi.fn(async () => (
-        claims ? { data: { claims }, error: null } : { data: null, error: new Error('bad token') }
-      )),
-    },
-    rpc: vi.fn(async () => ({ data: admission, error: null })),
-  };
-}
+/** The admission lookup's answer for a live grant (`agent_oauth_token_admission`). */
+const ADMITTED = {
+  grant_id: '33333333-3333-4333-8333-333333333333',
+  user_id: USER_ID,
+  client_id: 'client-claude',
+  surface: 'full',
+  state: 'active',
+  created_at: '2026-10-01T00:00:00Z',
+  email: 'creator@example.test',
+  is_anonymous: false,
+  banned: false,
+};
+const POSTING_GRANT = { ...ADMITTED, client_id: MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory, surface: 'posts' };
 
 function rpc(method: string, params?: Record<string, unknown>, options: { token?: string | null; id?: number; path?: string } = {}) {
   const headers: Record<string, string> = {
@@ -50,7 +51,7 @@ function rpc(method: string, params?: Record<string, unknown>, options: { token?
     accept: 'application/json, text/event-stream',
     [IDENTITY_ADMISSION_HEADER]: 'forged',
   };
-  if (options.token !== null) headers.authorization = `Bearer ${options.token ?? 'agent-token'}`;
+  if (options.token !== null) headers.authorization = `Bearer ${options.token ?? APP_TOKEN}`;
   return new NextRequest(`${SITE}${options.path ?? '/api/mcp'}`, {
     method: 'POST',
     headers,
@@ -65,7 +66,7 @@ function modernRpc(method: string, params: Record<string, unknown> = {}, options
     headers: {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
-      authorization: 'Bearer agent-token',
+      authorization: `Bearer ${APP_TOKEN}`,
       'mcp-protocol-version': '2026-07-28',
       'mcp-method': method,
     },
@@ -104,7 +105,7 @@ function summaryPayload() {
   };
 }
 
-/** A route's user client: it must never need GoTrue, since the admitted request carries the assertion. */
+/** The tools' per-request client: it must never need GoTrue, since the admitted identity is registered on it. */
 function routeClient() {
   return {
     auth: {
@@ -114,8 +115,8 @@ function routeClient() {
 }
 
 function harness(overrides: {
-  claims?: Record<string, unknown> | null;
-  admission?: unknown;
+  /** The admission lookup's answer: a live grant's row unless said; null for no live grant. */
+  admission?: Record<string, unknown> | null;
   env?: Record<string, string | undefined>;
   services?: Partial<McpToolServices>;
   /** The audit insert's answer; an error here must never reach the agent. */
@@ -123,12 +124,11 @@ function harness(overrides: {
   /** Which server the route is; the full one unless said. */
   surface?: McpSurface;
 } = {}) {
-  const identityClient = identity(overrides.claims === undefined ? AGENT_CLAIMS : overrides.claims, overrides.admission);
-  const userClients: Array<{ request: Request; client: ReturnType<typeof routeClient> }> = [];
-  const createUserClient = vi.fn((request: Request) => {
+  const admissionRpc = vi.fn(async () => ({ data: overrides.admission === undefined ? ADMITTED : overrides.admission, error: null }));
+  const requestClients: Array<ReturnType<typeof routeClient>> = [];
+  const createRequestServiceClient = vi.fn(() => {
     const client = routeClient();
-    registerIdentityAdmissionContext(client, request);
-    userClients.push({ request, client });
+    requestClients.push(client);
     return client as unknown as SupabaseClient;
   });
   const insert = vi.fn(overrides.auditInsert ?? (async () => ({ error: null })));
@@ -136,7 +136,7 @@ function harness(overrides: {
     if (table !== 'agent_tool_calls') throw new Error(`unexpected table ${table}`);
     return { insert };
   });
-  const admin = { from } as unknown as SupabaseClient;
+  const admin = { from, rpc: admissionRpc } as unknown as SupabaseClient;
   const log = vi.fn();
   // The route's `after`: every task is kept so a test can wait for the audit row behind the answer.
   const deferred: Array<Promise<unknown>> = [];
@@ -144,9 +144,8 @@ function harness(overrides: {
   const listOwnerGenerationsForRoute = vi.fn(async () => summaryPayload());
   const dependencies: McpRouteDependencies = {
     ...(overrides.surface ? { surface: overrides.surface } : {}),
-    identity: { createUserClient: () => identityClient },
-    createUserClient,
     createServiceClient: () => admin,
+    createRequestServiceClient: createRequestServiceClient as never,
     siteUrl: SITE,
     kieApiKey: 'kie-test-key',
     log,
@@ -160,9 +159,9 @@ function harness(overrides: {
   };
   return {
     handlers: createMcpRouteHandlers(dependencies),
-    identityClient,
-    createUserClient,
-    userClients,
+    admissionRpc,
+    createRequestServiceClient,
+    requestClients,
     log,
     listOwnerGenerationsForRoute,
     insert,
@@ -172,11 +171,6 @@ function harness(overrides: {
 }
 
 describe('MCP route adapter', () => {
-  beforeEach(() => {
-    vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'test-secret-with-at-least-32-characters');
-  });
-  afterEach(() => vi.unstubAllEnvs());
-
   it('reads the kill switch as 1 or true and nothing else', () => {
     expect(isMcpServerDisabled({ MCP_SERVER_DISABLED: '1' })).toBe(true);
     expect(isMcpServerDisabled({ MCP_SERVER_DISABLED: 'true' })).toBe(true);
@@ -186,7 +180,7 @@ describe('MCP route adapter', () => {
   });
 
   it('answers 503 with Retry-After from the kill switch before reading any token, on every method', async () => {
-    const { handlers, identityClient, createUserClient } = harness({ env: { MCP_SERVER_DISABLED: '1' } });
+    const { handlers, admissionRpc, createRequestServiceClient } = harness({ env: { MCP_SERVER_DISABLED: '1' } });
     for (const response of [
       await handlers.POST(rpc('tools/list')),
       await handlers.GET(),
@@ -197,8 +191,8 @@ describe('MCP route adapter', () => {
       expect(response.headers.get('cache-control')).toBe('private, no-store');
       await expect(response.json()).resolves.toMatchObject({ code: 'MCP_SERVER_DISABLED' });
     }
-    expect(identityClient.auth.getClaims).not.toHaveBeenCalled();
-    expect(createUserClient).not.toHaveBeenCalled();
+    expect(admissionRpc).not.toHaveBeenCalled();
+    expect(createRequestServiceClient).not.toHaveBeenCalled();
   });
 
   it('answers GET and DELETE 405: no SSE streams and no sessions', async () => {
@@ -210,8 +204,8 @@ describe('MCP route adapter', () => {
     }
   });
 
-  it('challenges a missing token with the protected-resource metadata, before contacting Auth', async () => {
-    const { handlers, identityClient } = harness();
+  it('challenges a missing token with the protected-resource metadata, before any lookup', async () => {
+    const { handlers, admissionRpc } = harness();
     const response = await handlers.POST(rpc('tools/list', undefined, { token: null }));
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate')).toBe(
@@ -219,17 +213,18 @@ describe('MCP route adapter', () => {
     );
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-    expect(identityClient.auth.getClaims).not.toHaveBeenCalled();
+    expect(admissionRpc).not.toHaveBeenCalled();
   });
 
-  it('challenges an invalid token the same way, after the signature check and before any lookup', async () => {
-    const { handlers, identityClient, createUserClient } = harness({ claims: null });
+  it('challenges a token with no live grant the same way, after one lookup by its hash', async () => {
+    const { handlers, admissionRpc, createRequestServiceClient } = harness({ admission: null });
     const response = await handlers.POST(rpc('tools/list'));
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate')).toContain(`Bearer resource_metadata="${METADATA_URL}", error="invalid_token"`);
     await expect(response.json()).resolves.toMatchObject({ code: 'UNAUTHORIZED' });
-    expect(identityClient.rpc).not.toHaveBeenCalled();
-    expect(createUserClient).not.toHaveBeenCalled();
+    expect(admissionRpc).toHaveBeenCalledTimes(1);
+    expect(admissionRpc).toHaveBeenCalledWith('agent_oauth_token_admission', { p_token_hash: hashAgentSecret(APP_TOKEN) });
+    expect(createRequestServiceClient).not.toHaveBeenCalled();
   });
 
   it("builds the challenge's metadata URL from the site origin", () => {
@@ -239,47 +234,43 @@ describe('MCP route adapter', () => {
   });
 
   it('refuses a guest 403 REGISTRATION_REQUIRED, as the proxy would', async () => {
-    const { handlers, createUserClient } = harness({ claims: GUEST_AGENT_CLAIMS });
+    const { handlers, createRequestServiceClient } = harness({ admission: { ...ADMITTED, is_anonymous: true } });
     const response = await handlers.POST(rpc('tools/list'));
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({ code: 'REGISTRATION_REQUIRED' });
-    expect(createUserClient).not.toHaveBeenCalled();
+    expect(createRequestServiceClient).not.toHaveBeenCalled();
   });
 
-  it("refuses an app session's token, which carries no client_id, with 403 AGENT_TOKEN_REQUIRED", async () => {
-    const { handlers, identityClient, createUserClient } = harness({ claims: SESSION_CLAIMS });
-    const response = await handlers.POST(rpc('tools/list'));
-    expect(response.status).toBe(403);
+  it('refuses a JWT, an app session\'s or an agent\'s, with the challenge and before any lookup', async () => {
+    const { handlers, admissionRpc, createRequestServiceClient } = harness();
+    const response = await handlers.POST(rpc('tools/list', undefined, { token: JWT }));
+    expect(response.status).toBe(401);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
-    await expect(response.json()).resolves.toMatchObject({ code: 'AGENT_TOKEN_REQUIRED' });
-    // The lifecycle was checked (a live identity), and nothing of the server ran.
-    expect(identityClient.rpc).toHaveBeenCalledTimes(1);
-    expect(createUserClient).not.toHaveBeenCalled();
+    expect(response.headers.get('www-authenticate')).toContain(`Bearer resource_metadata="${METADATA_URL}", error="invalid_token"`);
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
+    expect(admissionRpc).not.toHaveBeenCalled();
+    expect(createRequestServiceClient).not.toHaveBeenCalled();
   });
 
-  it('signs a revoked grant out: a still-valid signature with no session answers 401 with the challenge', async () => {
-    // Revoking a grant deletes the client's sessions. GoTrue keeps accepting the access token's
-    // signature until it expires, so a signature-only check would keep serving the agent; the
-    // lifecycle round trip answers session_valid false, and that is what signs the agent out
-    // (docs/research/mcp-oauth-spike-2026-11-09.md, check 3).
-    const { handlers, identityClient, createUserClient } = harness({ admission: { ...ACTIVE, session_valid: false } });
+  it('signs a disconnected agent out: a token whose grant is gone answers 401 with the challenge', async () => {
+    // Disconnecting, signing out everywhere or a password change ends the grant and deletes its
+    // tokens, so the lookup finds no live row at the agent's next call.
+    const { handlers, createRequestServiceClient } = harness({ admission: null });
     const response = await handlers.POST(rpc('tools/list'));
     expect(response.status).toBe(401);
     expect(response.headers.get('www-authenticate')).toBe(
       `Bearer resource_metadata="${METADATA_URL}", error="invalid_token", error_description="The access token is invalid or has expired. Sign in again."`,
     );
     await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-    expect(identityClient.auth.getClaims).toHaveBeenCalledTimes(1);
-    expect(identityClient.rpc).toHaveBeenCalledTimes(1);
-    expect(createUserClient).not.toHaveBeenCalled();
+    expect(createRequestServiceClient).not.toHaveBeenCalled();
   });
 
   it.each([
-    [{ ...ACTIVE, state: 'merged' }, 409, 'SESSION_MERGED'],
-    [{ ...ACTIVE, state: 'deleting' }, 409, 'ACCOUNT_DELETING'],
-    [{ ...ACTIVE, session_valid: false }, 401, 'UNAUTHORIZED'],
-    [{ ...ACTIVE, banned: true }, 401, 'UNAUTHORIZED'],
-  ])('passes the evaluator\'s other refusals through (%j)', async (admission, status, code) => {
+    [{ ...ADMITTED, state: 'merged' }, 409, 'SESSION_MERGED'],
+    [{ ...ADMITTED, state: 'deleting' }, 409, 'ACCOUNT_DELETING'],
+    [{ ...ADMITTED, state: 'unreadable' }, 503, 'IDENTITY_CHECK_UNAVAILABLE'],
+    [{ ...ADMITTED, banned: true }, 401, 'UNAUTHORIZED'],
+  ])('passes the admission\'s other refusals through (%j)', async (admission, status, code) => {
     const { handlers } = harness({ admission });
     const response = await handlers.POST(rpc('tools/list'));
     expect(response.status).toBe(status);
@@ -318,8 +309,8 @@ describe('MCP route adapter', () => {
     expect(tools.find((tool) => tool.name === 'create_media')?.annotations).toMatchObject({ destructiveHint: true });
   });
 
-  it('hands the services an admitted request carrying the fresh assertion, and logs one line per tool call without the prompt', async () => {
-    const { handlers, createUserClient, userClients, log, listOwnerGenerationsForRoute } = harness();
+  it('runs the tools as the admitted account, and logs one line per tool call without the prompt', async () => {
+    const { handlers, createRequestServiceClient, requestClients, log, listOwnerGenerationsForRoute } = harness();
     const response = await handlers.POST(rpc('tools/call', { name: 'list_creations', arguments: { limit: 5 } }, { id: 7 }));
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -331,17 +322,16 @@ describe('MCP route adapter', () => {
       creation_url: `${SITE}/creations?generation=${GENERATION_ID}`,
     });
 
-    // The request the services see is the admitted one: the caller's forged assertion is gone,
-    // the route's signed one is there, and the services read the identity from it without a
-    // GoTrue round trip, as they do behind the proxy.
-    expect(createUserClient).toHaveBeenCalledTimes(1);
-    const [{ request: admitted, client }] = userClients;
-    expect(admitted.headers.get(IDENTITY_ADMISSION_HEADER)).not.toBe('forged');
-    expect(admitted.headers.get('authorization')).toBe('Bearer agent-token');
+    // The services run on the request's own client, which knows the admitted account without a
+    // GoTrue round trip (the request they see has neither the token nor the caller's forged
+    // assertion: mcp-route-adapter-app-token.test.ts).
+    expect(createRequestServiceClient).toHaveBeenCalledTimes(1);
+    const [client] = requestClients;
     expect((await getVerifiedAuthUserResult(client)).data.user?.id).toBe(USER_ID);
     expect(client.auth.getUser).not.toHaveBeenCalled();
     expect(listOwnerGenerationsForRoute).toHaveBeenCalledTimes(1);
-    const [{ userId, searchParams }] = listOwnerGenerationsForRoute.mock.calls[0] as unknown as [{ userId: string; searchParams: URLSearchParams }];
+    const [{ userId, searchParams, supabase }] = listOwnerGenerationsForRoute.mock.calls[0] as unknown as [{ userId: string; searchParams: URLSearchParams; supabase: unknown }];
+    expect(supabase).toBe(client);
     expect(userId).toBe(USER_ID);
     expect(searchParams.get('detail')).toBe('summary');
     expect(searchParams.get('limit')).toBe('5');
@@ -431,12 +421,6 @@ describe('MCP route adapter', () => {
 
 describe('the posting-only MCP route', () => {
   const POSTS = '/api/mcp/posts';
-  const POSTING_CLIENT_CLAIMS = { ...AGENT_CLAIMS, client_id: MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory };
-
-  beforeEach(() => {
-    vi.stubEnv('IDENTITY_ADMISSION_SECRET', 'test-secret-with-at-least-32-characters');
-  });
-  afterEach(() => vi.unstubAllEnvs());
 
   it('challenges a missing or invalid token with its own protected-resource metadata', async () => {
     // Claude takes a document only when its resource is the URL the person connected.
@@ -447,28 +431,28 @@ describe('the posting-only MCP route', () => {
     const noToken = await missing.handlers.POST(rpc('tools/list', undefined, { token: null, path: POSTS }));
     expect(noToken.status).toBe(401);
     expect(noToken.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
-    expect(missing.identityClient.auth.getClaims).not.toHaveBeenCalled();
+    expect(missing.admissionRpc).not.toHaveBeenCalled();
 
-    const invalid = harness({ surface: 'posts', claims: null });
+    const invalid = harness({ surface: 'posts', admission: null });
     const badToken = await invalid.handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
     expect(badToken.status).toBe(401);
     expect(badToken.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
   });
 
-  it('keeps every refusal the full route has: the kill switch, a guest, an app session, a revoked grant', async () => {
+  it('keeps every refusal the full route has: the kill switch, a guest, a JWT, an ended grant', async () => {
     const off = harness({ surface: 'posts', env: { MCP_SERVER_DISABLED: '1' } });
     expect((await off.handlers.POST(rpc('tools/list', undefined, { path: POSTS }))).status).toBe(503);
     expect((await off.handlers.GET()).status).toBe(503);
 
-    const guest = await harness({ surface: 'posts', claims: GUEST_AGENT_CLAIMS }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    const guest = await harness({ surface: 'posts', admission: { ...POSTING_GRANT, is_anonymous: true } }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
     expect(guest.status).toBe(403);
     expect((await guest.json()).code).toBe('REGISTRATION_REQUIRED');
 
-    const session = await harness({ surface: 'posts', claims: SESSION_CLAIMS }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
-    expect(session.status).toBe(403);
-    expect((await session.json()).code).toBe('AGENT_TOKEN_REQUIRED');
+    const jwt = await harness({ surface: 'posts' }).handlers.POST(rpc('tools/list', undefined, { path: POSTS, token: JWT }));
+    expect(jwt.status).toBe(401);
+    expect(jwt.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
 
-    const revoked = await harness({ surface: 'posts', admission: { ...ACTIVE, session_valid: false } }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
+    const revoked = await harness({ surface: 'posts', admission: null }).handlers.POST(rpc('tools/list', undefined, { path: POSTS }));
     expect(revoked.status).toBe(401);
     expect(revoked.headers.get('www-authenticate')).toContain(`resource_metadata="${POSTS_METADATA_URL}"`);
 
@@ -478,7 +462,7 @@ describe('the posting-only MCP route', () => {
   });
 
   it('lists the six posting tools and says so in its instructions, through the real transport', async () => {
-    const { handlers } = harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS });
+    const { handlers } = harness({ surface: 'posts', admission: POSTING_GRANT });
     const initialized = await handlers.POST(rpc('initialize', {
       protocolVersion: '2025-06-18',
       capabilities: {},
@@ -503,7 +487,7 @@ describe('the posting-only MCP route', () => {
   });
 
   it('refuses a tool it does not have, and runs one it has under the same record', async () => {
-    const { handlers, log, insert, settled, listOwnerGenerationsForRoute } = harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS });
+    const { handlers, log, insert, settled, listOwnerGenerationsForRoute } = harness({ surface: 'posts', admission: POSTING_GRANT });
     // Every tool the full server has and this one has not is unknown here: refused by name, and nothing of it runs.
     const absentNames = MCP_TOOLS.map((tool) => tool.name).filter((name) => !mcpToolsFor('posts').some((tool) => tool.name === name));
     expect(absentNames).toHaveLength(6);
@@ -528,13 +512,13 @@ describe('the posting-only MCP route', () => {
     expect(insert).toHaveBeenCalledTimes(1);
   });
 
-  it('refuses a posting-only client at the full server, and takes every other client at either', async () => {
-    // The consent page showed this client the posting-only list, so its token reaches no tool that list left out.
-    const refused = harness({ claims: POSTING_CLIENT_CLAIMS });
+  it('refuses a grant for the posting server at the full server, and takes a full grant at either', async () => {
+    // The consent page showed this grant the posting-only list, so its token reaches no tool that list left out.
+    const refused = harness({ admission: POSTING_GRANT });
     const response = await refused.handlers.POST(rpc('tools/list'));
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ code: 'AGENT_SURFACE_NOT_ALLOWED' });
-    expect(refused.createUserClient).not.toHaveBeenCalled();
+    expect(refused.createRequestServiceClient).not.toHaveBeenCalled();
     const call = await refused.handlers.POST(rpc('tools/call', { name: 'create_media', arguments: {} }));
     expect(call.status).toBe(403);
     expect(refused.insert).not.toHaveBeenCalled();
@@ -549,7 +533,7 @@ describe('the posting-only MCP route', () => {
 
   it('holds the same line for a request in the 2026-07-28 envelope', async () => {
     // The SDK serves that revision through its own handler, built per request from the admitted context.
-    const posting = await harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS }).handlers.POST(modernRpc('tools/list', {}, { path: POSTS }));
+    const posting = await harness({ surface: 'posts', admission: POSTING_GRANT }).handlers.POST(modernRpc('tools/list', {}, { path: POSTS }));
     expect(posting.status).toBe(200);
     const tools = (await posting.json()).result.tools as Array<{ name: string }>;
     expect(tools.map((tool) => tool.name).sort()).toEqual(mcpToolsFor('posts').map((tool) => tool.name).sort());
@@ -558,12 +542,12 @@ describe('the posting-only MCP route', () => {
     expect(full.status).toBe(200);
     expect(((await full.json()).result.tools as unknown[]).length).toBe(MCP_TOOLS.length);
 
-    // The posting-only client is refused at the full server before either protocol leg is reached.
-    const refused = await harness({ claims: POSTING_CLIENT_CLAIMS }).handlers.POST(modernRpc('tools/list'));
+    // The posting grant is refused at the full server before either protocol leg is reached.
+    const refused = await harness({ admission: POSTING_GRANT }).handlers.POST(modernRpc('tools/list'));
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ code: 'AGENT_SURFACE_NOT_ALLOWED' });
 
-    const absent = await harness({ surface: 'posts', claims: POSTING_CLIENT_CLAIMS }).handlers.POST(
+    const absent = await harness({ surface: 'posts', admission: POSTING_GRANT }).handlers.POST(
       modernRpc('tools/call', { name: 'create_media', arguments: {} }, { path: POSTS }),
     );
     const absentBody = await absent.json();

@@ -6,7 +6,7 @@ const sql = readFileSync('supabase/migrations/20261126151150_agent_oauth_hardeni
 const between = (from: string, to: string) => sql.slice(sql.indexOf(from), sql.indexOf(to, sql.indexOf(from) + from.length));
 
 // The app's authorization server after its security review
-// (docs/plans/agent-token-broker-plan-2026-11-26.md, "After the security review"). The rules
+// (docs/archive/agent-token-broker-plan-2026-11-26.md, "After the security review"). The rules
 // themselves run against Postgres in supabase/tests/database/agent_oauth_hardening.test.sql.
 describe('agent_oauth_hardening migration', () => {
   it('holds every stored redirect URI to a web address, in the table itself', () => {

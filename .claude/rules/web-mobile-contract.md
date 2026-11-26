@@ -76,9 +76,11 @@ the verified subject alone, never the claims. The proxy-admitted routes keep adm
 each adapter counts its own limit, with its own key and at its own point,
 after the proxy's admission has answered. For
 `/api/mcp` and its posting-only form `/api/mcp/posts` (every method) the MCP adapter runs it itself, because its refusals
-differ from the proxy's: a missing or invalid token answers 401 with the
-`WWW-Authenticate` challenge MCP clients start their OAuth flow from, and a
-token without the agent claim (`agent-token.ts`) answers 403
-`AGENT_TOKEN_REQUIRED`; the evaluator itself refuses an agent token on every
-other `/api` route (403 `AGENT_TOKEN_NOT_ALLOWED`). Do not add a proxy exception
-without wrapping and testing the real route export.
+differ from the proxy's and so does its token: it takes only the app's own
+opaque agent token (`mbat_…`, admitted by one hash lookup in
+`agent-oauth-admission.ts`), and a missing or invalid token, or any JWT,
+answers 401 with the `WWW-Authenticate` challenge MCP clients start their OAuth
+flow from. The evaluator itself refuses a Supabase agent JWT (one carrying a
+`client_id` claim, `agent-token.ts`) on every `/api` route (403
+`AGENT_TOKEN_NOT_ALLOWED`). Do not add a proxy exception without wrapping and
+testing the real route export.

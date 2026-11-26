@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(95);
+select plan(92);
 
 -- ---------------------------------------------------------------------------------------------
 -- Privileges
@@ -65,8 +65,8 @@ select is(
   (select count(*)::int from pg_proc as fn
     where fn.pronamespace = 'public'::regnamespace and fn.proname like 'agent_oauth_%'
       and has_function_privilege('service_role', fn.oid, 'EXECUTE')),
-  12,
-  'the service role can execute all twelve: the nine that change state and the three pure checks of 20261126151150'
+  11,
+  'the service role can execute all eleven: the eight that change state and the three pure checks of 20261126151150'
 );
 select is(
   (select count(*)::int from pg_proc as fn
@@ -364,63 +364,9 @@ select is(
 );
 
 -- ---------------------------------------------------------------------------------------------
--- The cutover's import, against Supabase Auth's own table where the stack has one (a Postgres-only
--- replay, as CI's, has no GoTrue and so no auth.oauth_clients: the function then says so).
+-- The cutover's one-time import of Supabase Auth's clients is gone (20261126173053).
 
--- "Present" means the table in the shape GoTrue v2.186 gives it, which the fixture rows need.
-create temporary table import_fixture on commit drop as
-  select to_regclass('auth.oauth_clients') is not null
-     and (select count(*) from information_schema.columns
-           where table_schema = 'auth' and table_name = 'oauth_clients'
-             and column_name in ('id', 'client_secret_hash', 'registration_type', 'redirect_uris', 'grant_types',
-                                 'client_name', 'client_uri', 'client_type', 'token_endpoint_auth_method', 'deleted_at')) = 10
-     as present;
-do $fixture$
-begin
-  if (select present from import_fixture) then
-    execute $sql$
-      insert into auth.oauth_clients
-        (id, client_secret_hash, registration_type, redirect_uris, grant_types, client_name, client_uri, client_type, token_endpoint_auth_method)
-      values
-        ('af100000-0000-4000-8000-000000000001', null, 'manual', 'http://localhost:8976/callback', 'authorization_code,refresh_token', 'Imported public', 'https://claude.com/claude-code', 'public', 'none'),
-        ('af200000-0000-4000-8000-000000000002', repeat('s', 43), 'manual', 'https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback', 'authorization_code,refresh_token', 'Imported directory', null, 'confidential', 'client_secret_post'),
-        ('af300000-0000-4000-8000-000000000003', '$2a$10$notTheFormThisServerKeeps', 'manual', 'https://x.test/cb', 'authorization_code,refresh_token', 'Imported other hash', null, 'confidential', 'client_secret_post')
-    $sql$;
-  end if;
-end;
-$fixture$;
-
-create temporary table import_result on commit drop as
-  select public.agent_oauth_import_supabase_clients(array['af200000-0000-4000-8000-000000000002']) as answer;
-
-select is(
-  (select answer ->> 'source' from import_result),
-  case when to_regclass('auth.oauth_clients') is null then 'absent' else 'supabase' end,
-  'the import reads Supabase''s clients where there are any, and says so where there is no such table'
-);
-select case when (select present from import_fixture) then
-  is(
-    (select row(client_name, client_uri, redirect_uris, token_endpoint_auth_method, client_secret_hash, surface)::text
-       from public.agent_oauth_clients where client_id = 'af100000-0000-4000-8000-000000000001'),
-    row('Imported public'::text, 'https://claude.com/claude-code'::text, array['http://localhost:8976/callback'], 'none'::text, null::text, 'full'::text)::text,
-    'a public client comes across with its id, name, site and redirect URI, and no secret'
-  )
-  else skip('no auth.oauth_clients on this stack', 1) end;
-select case when (select present from import_fixture) then
-  is(
-    (select row(redirect_uris, token_endpoint_auth_method, client_secret_hash, surface)::text
-       from public.agent_oauth_clients where client_id = 'af200000-0000-4000-8000-000000000002'),
-    row(array['https://claude.ai/api/mcp/auth_callback', 'https://claude.com/api/mcp/auth_callback'], 'client_secret_post'::text, repeat('s', 43), 'posts'::text)::text,
-    'a confidential client keeps both redirect URIs and its secret''s hash, and is posting-only where named'
-  )
-  else skip('no auth.oauth_clients on this stack', 1) end;
-select case when (select present from import_fixture) then
-  ok(
-    not exists (select 1 from public.agent_oauth_clients where client_id = 'af300000-0000-4000-8000-000000000003')
-    and (select answer -> 'skipped' @> '[{"client_id": "af300000-0000-4000-8000-000000000003", "reason": "secret_hash_unusable"}]'::jsonb from import_result),
-    'a client whose secret is stored in another form is skipped and named'
-  )
-  else skip('no auth.oauth_clients on this stack', 1) end;
+select hasnt_function('public', 'agent_oauth_import_supabase_clients', 'the cutover''s import of Supabase''s clients is gone');
 
 -- ---------------------------------------------------------------------------------------------
 -- Housekeeping, and the account's end

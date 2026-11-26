@@ -182,28 +182,19 @@ describe('/api/mobile/notifications/unregister route', () => {
     expect(updateCalls).toEqual([]);
   });
   // "Sign out everywhere" asks for the whole account here first, and the route ends the apps
-  // connected through the app's own authorization server with it, whatever
-  // MCP_AUTHORIZATION_SERVER says: a grant made while that server was on must not outlive a
-  // sign-out made during a rollback (docs/plans/agent-token-broker-plan-2026-11-26.md).
-  it('ends the account\'s connected apps with the account-wide request, whatever the authorization-server flag says', async () => {
+  // connected through the app's own authorization server with it.
+  it('ends the account\'s connected apps with the account-wide request', async () => {
     const revoke = ['agent_oauth_revoke_grants', { p_user_id: 'user-1', p_client_id: null, p_reason: 'user' }];
-    for (const flag of [undefined, 'supabase', 'both', 'app']) {
-      vi.resetModules();
-      rateLimitRpcMock.mockClear();
-      if (flag === undefined) vi.stubEnv('MCP_AUTHORIZATION_SERVER', '');
-      else vi.stubEnv('MCP_AUTHORIZATION_SERVER', flag);
-      const { POST } = await import('@/app/api/mobile/notifications/unregister/route');
-      const response = await POST(new Request('http://localhost/api/mobile/notifications/unregister', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'account' }),
-      }) as never);
-      expect(response.status, String(flag)).toBe(200);
-      expect(rateLimitRpcMock.mock.calls, String(flag)).toContainEqual(revoke);
-      // Before the limit is counted.
-      expect(rateLimitRpcMock.mock.calls[0]).toEqual(revoke);
-    }
-    vi.unstubAllEnvs();
+    const { POST } = await import('@/app/api/mobile/notifications/unregister/route');
+    const response = await POST(new Request('http://localhost/api/mobile/notifications/unregister', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'account' }),
+    }) as never);
+    expect(response.status).toBe(200);
+    expect(rateLimitRpcMock.mock.calls).toContainEqual(revoke);
+    // Before the limit is counted.
+    expect(rateLimitRpcMock.mock.calls[0]).toEqual(revoke);
   });
 
   it('ends no connected app for one device\'s sign-out', async () => {

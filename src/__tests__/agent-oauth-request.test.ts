@@ -68,7 +68,7 @@ async function expectOAuthError(run: () => unknown, error: string, status = 400)
   throw new Error(`expected ${error}`);
 }
 
-// What the app's authorization server accepts (docs/plans/agent-token-broker-plan-2026-11-26.md).
+// What the app's authorization server accepts (docs/archive/agent-token-broker-plan-2026-11-26.md).
 describe('agent OAuth request rules', () => {
   it('refuses a parameter sent more than once', async () => {
     const params = new URLSearchParams('a=1&a=2&b=3&c=');

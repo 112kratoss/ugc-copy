@@ -1,42 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   AGENT_ACCESS,
-  CONSENT_DECISION_FAILED_MESSAGE,
-  CONSENT_UNAVAILABLE_MESSAGE,
   POSTING_AGENT_ACCESS,
-  agentAccessFor,
+  agentAccessForSurface,
   buildConsentPath,
   buildConsentSignInHref,
-  decideConsent,
   describeRedirectTarget,
   gateConsentRequest,
-  loadConsentView,
   normalizeAuthorizationId,
-  type OAuthConsentClient,
 } from '@/lib/oauth-consent-service';
 import { getSafeAuthNextPath } from '@/lib/auth-onboarding';
-import { MCP_CLIENT_IDS, MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-directory';
 import { getPromptEnhancementCost } from '@/lib/prompt-enhancer';
 
-const AUTHORIZATION_ID = 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6';
-
-const DETAILS = {
-  authorization_id: AUTHORIZATION_ID,
-  redirect_uri: 'http://localhost:8976/callback',
-  client: { id: 'client-1', name: 'Claude Code', uri: 'https://claude.com/claude-code', logo_uri: '' },
-  user: { id: 'user-1', email: 'creator@example.com' },
-  scope: 'email',
-};
-
-function client(overrides: Partial<Record<keyof OAuthConsentClient, unknown>> = {}): OAuthConsentClient & Record<keyof OAuthConsentClient, ReturnType<typeof vi.fn>> {
-  return {
-    getAuthorizationDetails: vi.fn(async () => ({ data: DETAILS, error: null })),
-    approveAuthorization: vi.fn(async () => ({ data: { redirect_url: 'http://localhost:8976/callback?code=abc&state=xyz' }, error: null })),
-    denyAuthorization: vi.fn(async () => ({ data: { redirect_url: 'http://localhost:8976/callback?error=access_denied&state=xyz' }, error: null })),
-    ...overrides,
-  } as OAuthConsentClient & Record<keyof OAuthConsentClient, ReturnType<typeof vi.fn>>;
-}
+const AUTHORIZATION_ID = `mbar_${'a'.repeat(43)}`;
 
 describe('consent gate', () => {
   it('takes only a well-formed authorization id', () => {
@@ -88,16 +65,9 @@ describe('consent gate', () => {
     expect(AGENT_ACCESS[0].detail).toContain(`except prompt enhancement, a fixed ${getPromptEnhancementCost()} credit`);
   });
 
-  it('shows a posting-only client the posting-only list: every posting tool, no run, no charge', async () => {
-    const postingClientId = MCP_POSTING_ONLY_CLIENT_IDS.claudeDirectory;
-    for (const id of Object.values(MCP_POSTING_ONLY_CLIENT_IDS)) {
-      expect(agentAccessFor(id), id).toBe(POSTING_AGENT_ACCESS);
-      expect(agentAccessFor(id.toUpperCase()), id).toBe(POSTING_AGENT_ACCESS);
-    }
-    // Every other client, a missing id included, is shown the full list: never less than it can do.
-    for (const clientId of [...Object.values(MCP_CLIENT_IDS), 'client-1', '', null, undefined]) {
-      expect(agentAccessFor(clientId), String(clientId)).toBe(AGENT_ACCESS);
-    }
+  it('shows a grant for the posting server the posting-only list: every posting tool, no run, no charge', () => {
+    expect(agentAccessForSurface('posts')).toBe(POSTING_AGENT_ACCESS);
+    expect(agentAccessForSurface('full')).toBe(AGENT_ACCESS);
     expect(POSTING_AGENT_ACCESS.map((item) => item.title)).toEqual([
       'Publish posts as you',
       'Change and delete your posts',
@@ -112,21 +82,8 @@ describe('consent gate', () => {
     // What a post may carry and where a sale goes is said here as on the full list.
     expect(POSTING_AGENT_ACCESS[0].detail).toContain('free or at a price you approve');
     expect(POSTING_AGENT_ACCESS[0].detail).toContain('in the Marketplace');
-    // What it has no tool for, said as that: the token is still the account's session (agent-token.ts).
+    // What it has no tool for, said as that.
     expect(POSTING_AGENT_ACCESS[3].detail).toBe('It is given no way to create media, enhance a prompt or use your balance.');
-
-    // The page gets the list with the details, chosen by the client GoTrue names.
-    const fake = client({
-      getAuthorizationDetails: vi.fn(async () => ({
-        data: { ...DETAILS, redirect_uri: 'https://claude.ai/api/mcp/auth_callback', client: { ...DETAILS.client, id: postingClientId, name: 'Claude (posting)' } },
-        error: null,
-      })),
-    });
-    const result = await loadConsentView(fake, AUTHORIZATION_ID);
-    expect(result.ok && result.view.kind === 'consent' ? result.view.details : null).toMatchObject({
-      clientName: 'Claude (posting)',
-      access: POSTING_AGENT_ACCESS,
-    });
   });
 });
 
@@ -139,89 +96,5 @@ describe('redirect targets', () => {
     expect(describeRedirectTarget('https://claude.ai/api/mcp/auth_callback')).toEqual({ host: 'claude.ai', loopback: false });
     expect(describeRedirectTarget('https://www.cursor.com/agents/mcp/oauth/callback')).toEqual({ host: 'www.cursor.com', loopback: false });
     expect(describeRedirectTarget('not a url')).toBeNull();
-  });
-});
-
-describe('loading the consent view', () => {
-  it('follows GoTrue\'s redirect when the account already consented to this client', async () => {
-    const fake = client({
-      getAuthorizationDetails: vi.fn(async () => ({ data: { redirect_url: 'http://localhost:8976/callback?code=again' }, error: null })),
-    });
-    await expect(loadConsentView(fake, AUTHORIZATION_ID)).resolves.toEqual({
-      ok: true,
-      view: { kind: 'redirect', redirectUrl: 'http://localhost:8976/callback?code=again' },
-    });
-    expect(fake.getAuthorizationDetails).toHaveBeenCalledWith(AUTHORIZATION_ID);
-  });
-
-  it('shows the client, its site, and where the browser returns, without the scope', async () => {
-    await expect(loadConsentView(client(), AUTHORIZATION_ID)).resolves.toEqual({
-      ok: true,
-      view: {
-        kind: 'consent',
-        details: {
-          authorizationId: AUTHORIZATION_ID,
-          clientName: 'Claude Code',
-          clientUri: 'https://claude.com/claude-code',
-          redirectUri: 'http://localhost:8976/callback',
-          redirect: { host: 'localhost:8976', loopback: true },
-          // Any client but a posting-only one is shown the full list.
-          access: AGENT_ACCESS,
-        },
-      },
-    });
-    const bare = client({
-      getAuthorizationDetails: vi.fn(async () => ({
-        data: { ...DETAILS, client: { ...DETAILS.client, name: '  ', uri: 'javascript:alert(1)' } },
-        error: null,
-      })),
-    });
-    const result = await loadConsentView(bare, AUTHORIZATION_ID);
-    expect(result.ok && result.view.kind === 'consent' ? result.view.details : null).toMatchObject({ clientName: 'An app', clientUri: null });
-  });
-
-  it('answers an expired or unreadable request in words, never with the raw error', async () => {
-    for (const fake of [
-      client({ getAuthorizationDetails: vi.fn(async () => ({ data: null, error: { message: 'authorization not found' } })) }),
-      client({ getAuthorizationDetails: vi.fn(async () => ({ data: null, error: null })) }),
-      client({ getAuthorizationDetails: vi.fn(async () => ({ data: { authorization_id: AUTHORIZATION_ID } as never, error: null })) }),
-      // A redirect the browser must not be sent into: only http(s) is followed.
-      client({ getAuthorizationDetails: vi.fn(async () => ({ data: { redirect_url: 'javascript:alert(1)' }, error: null })) }),
-      client({ getAuthorizationDetails: vi.fn(async () => ({ data: { redirect_url: 'myapp://callback?code=x' }, error: null })) }),
-    ]) {
-      await expect(loadConsentView(fake, AUTHORIZATION_ID)).resolves.toEqual({ ok: false, message: CONSENT_UNAVAILABLE_MESSAGE });
-    }
-  });
-});
-
-describe('deciding', () => {
-  it('approves and denies without GoTrue\'s own redirect, and hands back the URL to follow', async () => {
-    const fake = client();
-    await expect(decideConsent(fake, AUTHORIZATION_ID, 'approve')).resolves.toEqual({
-      ok: true,
-      redirectUrl: 'http://localhost:8976/callback?code=abc&state=xyz',
-    });
-    expect(fake.approveAuthorization).toHaveBeenCalledWith(AUTHORIZATION_ID, { skipBrowserRedirect: true });
-    expect(fake.denyAuthorization).not.toHaveBeenCalled();
-
-    await expect(decideConsent(fake, AUTHORIZATION_ID, 'deny')).resolves.toEqual({
-      ok: true,
-      redirectUrl: 'http://localhost:8976/callback?error=access_denied&state=xyz',
-    });
-    expect(fake.denyAuthorization).toHaveBeenCalledWith(AUTHORIZATION_ID, { skipBrowserRedirect: true });
-  });
-
-  it('says so when the answer did not go through, or came back with a redirect that is not http(s)', async () => {
-    const failing = client({
-      approveAuthorization: vi.fn(async () => ({ data: null, error: { message: 'network' } })),
-      denyAuthorization: vi.fn(async () => ({ data: { not_a_redirect: true } as never, error: null })),
-    });
-    await expect(decideConsent(failing, AUTHORIZATION_ID, 'approve')).resolves.toEqual({ ok: false, message: CONSENT_DECISION_FAILED_MESSAGE });
-    await expect(decideConsent(failing, AUTHORIZATION_ID, 'deny')).resolves.toEqual({ ok: false, message: CONSENT_DECISION_FAILED_MESSAGE });
-
-    const unsafe = client({
-      approveAuthorization: vi.fn(async () => ({ data: { redirect_url: 'javascript:alert(1)' }, error: null })),
-    });
-    await expect(decideConsent(unsafe, AUTHORIZATION_ID, 'approve')).resolves.toEqual({ ok: false, message: CONSENT_DECISION_FAILED_MESSAGE });
   });
 });
