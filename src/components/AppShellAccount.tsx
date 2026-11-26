@@ -20,6 +20,7 @@ import { removeSupabaseAuthCookies } from '@/lib/supabase-auth-cookie';
 import { endWelcomePromise } from '@/lib/welcome-promise';
 
 import AppShellAccountFallback from './AppShellAccountFallback';
+
 import AppShellAccountPending, {
   APP_SHELL_ACCOUNT_BUTTON_CLASS,
   APP_SHELL_AVATAR_FRAME_CLASS,
@@ -30,6 +31,17 @@ import { OptimizedPreviewImage } from './OptimizedPreviewImage';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
 import { APP_NAV_ITEMS, getActiveAppNavItem, type AppNavClickHandler } from './app-shell-nav';
 import { pushToast, requestConfirmation } from './feedback-state';
+
+/**
+ * The account-wide push-token request's code for "your connected apps are still connected"
+ * (`AGENT_ACCESS_NOT_ENDED_CODE` in `mobile-push-unregister-service.ts`, a server module the shell
+ * does not load; `app-shell-account.test.tsx` holds the two equal).
+ */
+const AGENT_ACCESS_NOT_ENDED = 'AGENT_ACCESS_NOT_ENDED';
+
+/** Said after a sign-out everywhere that could not confirm the account's connected apps were ended. */
+export const AGENT_ACCESS_MAY_REMAIN_MESSAGE =
+  'You’re signed out everywhere, but your connected apps may still be connected. Sign in and disconnect them under Connected apps in your profile settings.';
 
 type ProfileSummary = {
   display_name: string | null;
@@ -491,25 +503,41 @@ export default function AppShellAccount({
    * cannot retire its own push token afterwards, so the account's tokens go
    * first, while this session can still ask. Best effort, as the app's: a
    * failure here does not stop the sign-out.
+   *
+   * The same request ends the apps the account connected through the app's own
+   * authorization server, which are not sessions and so outlive the sign-out
+   * itself (`mobile-push-unregister-service.ts`). The server ends them before
+   * anything else and marks every answer where it could not, so an answer
+   * without the mark means they are ended. When the answer carries the mark,
+   * or there is no answer (cut short, offline), the request is made once
+   * more; if that is no better, the person is told after the sign-out, rather
+   * than left believing an agent is gone that may not be.
    */
-  const retireAccountPushTokens = async () => {
+  const retireAccountPushTokens = async (): Promise<{ agentAccessMayRemain: boolean }> => {
     const { data } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
     const accessToken = data.session?.access_token;
-    if (!accessToken) return;
-    const deadline = new AbortController();
-    const timeoutId = window.setTimeout(() => deadline.abort(), 5000);
-    try {
-      await fetch('/api/mobile/notifications/unregister', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope: 'account' }),
-        signal: deadline.signal,
-      });
-    } catch {
-      // Offline or cut short: the sign-out still runs.
-    } finally {
-      window.clearTimeout(timeoutId);
-    }
+    if (!accessToken) return { agentAccessMayRemain: false };
+    const ask = async (): Promise<boolean> => {
+      const deadline = new AbortController();
+      const timeoutId = window.setTimeout(() => deadline.abort(), 5000);
+      try {
+        const response = await fetch('/api/mobile/notifications/unregister', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ scope: 'account' }),
+          signal: deadline.signal,
+        });
+        if (response.ok) return false;
+        const body: unknown = await response.json().catch(() => null);
+        return Boolean(body) && typeof body === 'object' && (body as { code?: unknown }).code === AGENT_ACCESS_NOT_ENDED;
+      } catch {
+        // Offline or cut short: the sign-out still runs, and whether the apps were ended is not known.
+        return true;
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    };
+    return { agentAccessMayRemain: (await ask()) && (await ask()) };
   };
 
   /**
@@ -532,7 +560,7 @@ export default function AppShellAccount({
     const userId = session?.user?.id;
     // While this session can still send them.
     if (userId) await releaseFeedEventsForSignOut(userId);
-    await retireAccountPushTokens();
+    const { agentAccessMayRemain } = await retireAccountPushTokens();
     markBrowserSignOut(...await sessionsEnding());
     const { error } = await supabase.auth.signOut({ scope: 'global' })
       .catch((thrown: unknown) => ({ error: thrown }));
@@ -555,6 +583,15 @@ export default function AppShellAccount({
       await clearCreatorDataForSignOut(userId);
     }
     setIsSigningOutEverywhere(false);
+    if (agentAccessMayRemain) {
+      // Every device is signed out; an app connected to the account may not be. Kept on screen
+      // long enough to read across the move to the sign-in page.
+      pushToast({
+        tone: 'error',
+        message: AGENT_ACCESS_MAY_REMAIN_MESSAGE,
+        durationMs: 20_000,
+      });
+    }
     leaveSignedOut();
   };
 

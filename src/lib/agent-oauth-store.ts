@@ -281,7 +281,9 @@ export async function issueAgentOAuthGrant(
 export type RotatedRefreshToken =
   | ({ outcome: 'rotated' } & IssuedGrant)
   | { outcome: 'invalid' }
-  | { outcome: 'reuse_detected'; grantId: string; userId: string };
+  | { outcome: 'reuse_detected'; grantId: string; userId: string }
+  /** The grant has been refreshed as often as it may be this hour; nothing changed. */
+  | { outcome: 'rate_limited'; grantId: string; userId: string };
 
 export async function rotateAgentOAuthRefreshToken(
   admin: SupabaseClient,
@@ -307,8 +309,8 @@ export async function rotateAgentOAuthRefreshToken(
   if (error) throw error;
   if (!isRecord(data)) throw new Error('agent_oauth_rotate_refresh_token answered nothing');
   if (data.outcome === 'rotated') return { outcome: 'rotated', ...toIssuedGrant(data) };
-  if (data.outcome === 'reuse_detected') {
-    return { outcome: 'reuse_detected', grantId: String(data.grant_id), userId: String(data.user_id) };
+  if (data.outcome === 'reuse_detected' || data.outcome === 'rate_limited') {
+    return { outcome: data.outcome, grantId: String(data.grant_id), userId: String(data.user_id) };
   }
   return { outcome: 'invalid' };
 }

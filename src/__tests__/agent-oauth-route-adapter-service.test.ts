@@ -196,6 +196,15 @@ describe('POST /oauth/token', () => {
     expect(JSON.stringify(logs.warning.mock.calls)).not.toContain('mbac_leaky');
   });
 
+  it('tells a client refreshing too often to wait, with how long', async () => {
+    service.exchangeAgentToken.mockRejectedValue(new AgentOAuthError('temporarily_unavailable', 'This connection is refreshing too often. Wait before trying again.', 429));
+    const response = await createAgentOAuthTokenHandlers(harness().dependencies).POST(form('/oauth/token', { grant_type: 'refresh_token' }));
+    expect(response.status).toBe(429);
+    expect(response.headers.get('retry-after')).toBe('300');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    await expect(response.json()).resolves.toMatchObject({ error: 'temporarily_unavailable' });
+  });
+
   it('challenges with Basic only a client that tried Basic', async () => {
     service.exchangeAgentToken.mockRejectedValue(new AgentOAuthError('invalid_client', 'The client is unknown or its credentials are wrong.', 401));
     const handlers = createAgentOAuthTokenHandlers(harness().dependencies);

@@ -10,6 +10,9 @@ import {
 
 type RouteBody = Record<string, unknown>;
 
+/** The account-wide request retired the push tokens but could not end the account's connected apps. */
+export const AGENT_ACCESS_NOT_ENDED_CODE = 'AGENT_ACCESS_NOT_ENDED';
+
 export type MobilePushUnregisterRouteResult =
   | { ok: true; body: { success: true } }
   | {
@@ -89,6 +92,24 @@ export async function unregisterMobilePushTokenForRoute(
       };
     }
 
+    // The account-wide request is what the web and the app send just before "Sign out everywhere"
+    // (it is how installed apps already say so), and that sign-out ends sessions only. An app
+    // connected through the app's own authorization server is not a session, so it is ended here:
+    // signing out of every device still ends what acts as the account, as the consent page says.
+    // Before the limit below, which every phone's ordinary sign-out counts against: a person at
+    // that limit must still be able to end their agents, and ending them again changes nothing.
+    // Every refusal after this point says so if they were not ended.
+    let agentAccessEnded = true;
+    if (accountWide && input.endAgentAccess) {
+      try {
+        await input.endAgentAccess(user.id);
+      } catch (error) {
+        agentAccessEnded = false;
+        logBackendError('agent_access_sign_out_everywhere_failed', { userId: user.id, error });
+      }
+    }
+    const notEnded: RouteBody = agentAccessEnded ? {} : { code: AGENT_ACCESS_NOT_ENDED_CODE };
+
     try {
       await enforceBackendRateLimit(input.getAdminSupabase() as AdminSupabaseClient, {
         ...MOBILE_PUSH_TOKEN_UNREGISTER_RATE_LIMIT,
@@ -98,33 +119,19 @@ export async function unregisterMobilePushTokenForRoute(
       if (error instanceof BackendRateLimitError) {
         return {
           ok: false,
-          body: { error: error.message },
+          body: { error: error.message, ...notEnded },
           status: error.status,
-          rateLimitError: error,
+          // The limiter's own response carries no code: without one the answer is built here.
+          ...(agentAccessEnded ? { rateLimitError: error } : {}),
         };
       }
 
       logBackendError('mobile_push_token_unregister_rate_limit_check_failed', { error: error });
       return {
         ok: false,
-        body: { error: 'Failed to check mobile push token limits.' },
+        body: { error: 'Failed to check mobile push token limits.', ...notEnded },
         status: 500,
       };
-    }
-
-    // The account-wide request is what the web and the app send just before "Sign out everywhere"
-    // (it is how installed apps already say so), and that sign-out ends sessions only. An app
-    // connected through the app's own authorization server is not a session, so it is ended here:
-    // signing out of every device still ends what acts as the account, as the consent page says.
-    // A failure is answered as one, after the push tokens are retired all the same.
-    let agentAccessEnded = true;
-    if (accountWide && input.endAgentAccess) {
-      try {
-        await input.endAgentAccess(user.id);
-      } catch (error) {
-        agentAccessEnded = false;
-        logBackendError('agent_access_sign_out_everywhere_failed', { userId: user.id, error });
-      }
     }
 
     let query = userSupabase
@@ -148,7 +155,7 @@ export async function unregisterMobilePushTokenForRoute(
     if (error) {
       return {
         ok: false,
-        body: { error: 'Failed to unregister mobile push token.' },
+        body: { error: 'Failed to unregister mobile push token.', ...notEnded },
         status: 500,
       };
     }
@@ -156,7 +163,9 @@ export async function unregisterMobilePushTokenForRoute(
     if (!agentAccessEnded) {
       return {
         ok: false,
-        body: { error: 'Failed to disconnect the account\'s connected apps.' },
+        // The code is what the web reads to tell the person, after the sign-out, that their
+        // connected apps are still connected (`AppShellAccount.tsx`).
+        body: { error: 'Failed to disconnect the account\'s connected apps.', code: AGENT_ACCESS_NOT_ENDED_CODE },
         status: 500,
       };
     }

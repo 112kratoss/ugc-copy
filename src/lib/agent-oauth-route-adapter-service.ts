@@ -102,10 +102,20 @@ function notFound(headers: Record<string, string> = {}): NextResponse {
   return NextResponse.json({ error: 'not_found' }, { status: 404, headers: { ...NO_STORE_HEADERS, ...headers } });
 }
 
+/** How long a client told to wait is asked to: a grant's refresh limit is counted over an hour. */
+const OAUTH_RETRY_AFTER_SECONDS = 300;
+
 function oauthErrorResponse(error: AgentOAuthError, headers: Record<string, string> = {}): NextResponse {
   return NextResponse.json(
     { error: error.error, error_description: error.description },
-    { status: error.status, headers: { ...NO_STORE_HEADERS, ...headers } },
+    {
+      status: error.status,
+      headers: {
+        ...NO_STORE_HEADERS,
+        ...headers,
+        ...(error.status === 429 ? { 'Retry-After': String(OAUTH_RETRY_AFTER_SECONDS) } : {}),
+      },
+    },
   );
 }
 

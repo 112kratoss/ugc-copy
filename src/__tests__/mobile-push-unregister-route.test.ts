@@ -181,4 +181,55 @@ describe('/api/mobile/notifications/unregister route', () => {
     });
     expect(updateCalls).toEqual([]);
   });
+  // "Sign out everywhere" asks for the whole account here first, and the route ends the apps
+  // connected through the app's own authorization server with it, whatever
+  // MCP_AUTHORIZATION_SERVER says: a grant made while that server was on must not outlive a
+  // sign-out made during a rollback (docs/plans/agent-token-broker-plan-2026-11-26.md).
+  it('ends the account\'s connected apps with the account-wide request, whatever the authorization-server flag says', async () => {
+    const revoke = ['agent_oauth_revoke_grants', { p_user_id: 'user-1', p_client_id: null, p_reason: 'user' }];
+    for (const flag of [undefined, 'supabase', 'both', 'app']) {
+      vi.resetModules();
+      rateLimitRpcMock.mockClear();
+      if (flag === undefined) vi.stubEnv('MCP_AUTHORIZATION_SERVER', '');
+      else vi.stubEnv('MCP_AUTHORIZATION_SERVER', flag);
+      const { POST } = await import('@/app/api/mobile/notifications/unregister/route');
+      const response = await POST(new Request('http://localhost/api/mobile/notifications/unregister', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'account' }),
+      }) as never);
+      expect(response.status, String(flag)).toBe(200);
+      expect(rateLimitRpcMock.mock.calls, String(flag)).toContainEqual(revoke);
+      // Before the limit is counted.
+      expect(rateLimitRpcMock.mock.calls[0]).toEqual(revoke);
+    }
+    vi.unstubAllEnvs();
+  });
+
+  it('ends no connected app for one device\'s sign-out', async () => {
+    const { POST } = await import('@/app/api/mobile/notifications/unregister/route');
+    await POST(new Request('http://localhost/api/mobile/notifications/unregister', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId: 'device-1' }),
+    }) as never);
+    expect(rateLimitRpcMock.mock.calls.map(([name]) => name)).toEqual(['check_backend_rate_limit']);
+  });
+
+  it('marks the answer when the apps could not be ended, and still retires the push tokens', async () => {
+    rateLimitRpcMock.mockImplementation(async (name: string) => (
+      name === 'agent_oauth_revoke_grants'
+        ? { data: null, error: { message: 'db down' } }
+        : { data: { allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-06-22T06:30:00.000Z' }, error: null }
+    ));
+    const { POST } = await import('@/app/api/mobile/notifications/unregister/route');
+    const response = await POST(new Request('http://localhost/api/mobile/notifications/unregister', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: 'account' }),
+    }) as never);
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({ code: 'AGENT_ACCESS_NOT_ENDED' });
+    expect(updateCalls).toHaveLength(1);
+  });
 });

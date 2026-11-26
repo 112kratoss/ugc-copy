@@ -1,14 +1,15 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import AppShellAccount from '@/components/AppShellAccount';
+import AppShellAccount, { AGENT_ACCESS_MAY_REMAIN_MESSAGE } from '@/components/AppShellAccount';
 import AppShellAccountFallback from '@/components/AppShellAccountFallback';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
-import { resetFeedbackState } from '@/components/feedback-state';
+import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { APP_SHELL_CREDITS_DIGITS_STORAGE_KEY } from '@/lib/app-shell-account-restore';
 import { OWN_PROFILE_COLUMNS } from '@/lib/browser-account-reads';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import { AGENT_ACCESS_NOT_ENDED_CODE } from '@/lib/mobile-push-unregister-service';
 import { resetShowcaseFeedEventQueueForTests, sendShowcaseFeedEvent } from '@/app/showcase/ShowcaseFeedInteraction';
 import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
@@ -924,6 +925,68 @@ describe('AppShellAccount', () => {
         expect(order.indexOf('retire')).toBeLessThan(order.indexOf('signOut'));
       } finally {
         vi.unstubAllGlobals();
+      }
+    });
+
+    // The same request ends the apps connected through the app's own authorization server, which
+    // are not sessions (mobile-push-unregister-service.ts). The server marks every answer where
+    // it could not end them; with that mark, or with no answer at all, the shell asks once more,
+    // signs out all the same, and says what may be left.
+    const notEnded = () => new Response(JSON.stringify({ error: 'Failed to disconnect the account\'s connected apps.', code: AGENT_ACCESS_NOT_ENDED_CODE }), { status: 500 });
+    const ended = () => new Response(JSON.stringify({ success: true }), { status: 200 });
+    const agentToasts = () => readFeedbackSnapshot().toasts.filter(({ message }) => message === AGENT_ACCESS_MAY_REMAIN_MESSAGE);
+
+    async function signOutEverywhereWith(answers: Array<() => Response | Promise<Response>>) {
+      const queue = [...answers];
+      const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => (queue.shift() ?? ended)());
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const dialog = await chooseSignOutEverywhere();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+        await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+        return fetchMock.mock.calls.filter(([url]) => url === '/api/mobile/notifications/unregister').length;
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+
+    it('says so after the sign-out when the account\'s connected apps could not be disconnected', async () => {
+      // Asked twice, then the sign-out ran: every device is out, and the person knows what may not be.
+      expect(await signOutEverywhereWith([notEnded, notEnded])).toBe(2);
+      expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(agentToasts()).toHaveLength(1);
+      // An instruction to act, held long enough to read across the move to the sign-in page.
+      expect(agentToasts()[0]).toMatchObject({ tone: 'error', durationMs: 20_000 });
+      expect(AGENT_ACCESS_MAY_REMAIN_MESSAGE).toContain('Connected apps');
+    });
+
+    it('says so too when the request got no answer either time: not known is not ended', async () => {
+      const cutShort = () => Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+      expect(await signOutEverywhereWith([cutShort, cutShort])).toBe(2);
+      expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(agentToasts()).toHaveLength(1);
+    });
+
+    it('says nothing of connected apps once an answer shows them ended', async () => {
+      const cutShort = () => Promise.reject(new TypeError('Failed to fetch'));
+      const otherFailure = () => new Response(JSON.stringify({ error: 'Failed to unregister mobile push token.' }), { status: 500 });
+      const limited = () => new Response(JSON.stringify({ error: 'Too many requests.' }), { status: 429 });
+      const cases: Array<[Array<() => Response | Promise<Response>>, number]> = [
+        [[ended], 1],
+        // The second ask ended them.
+        [[notEnded, ended], 2],
+        [[cutShort, ended], 2],
+        // A refusal without the mark: the server ends the apps before anything it can refuse for.
+        [[otherFailure], 1],
+        [[limited], 1],
+        [[notEnded, limited], 2],
+      ];
+      for (const [answers, asks] of cases) {
+        resetFeedbackState();
+        mocks.router.push.mockReset();
+        expect(await signOutEverywhereWith(answers)).toBe(asks);
+        expect(agentToasts()).toEqual([]);
+        cleanup();
       }
     });
 

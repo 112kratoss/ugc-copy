@@ -130,10 +130,22 @@ holds it. A new redirect URI for an existing client (ChatGPT's per-account callb
 - One client for everyone: `disable --client-id <id> --apply`.
 - One creator, every app: "Sign out everywhere", on the web or in the app. Both send the
   account-wide `POST /api/mobile/notifications/unregister` (`scope: 'account'`) first, and the
-  server ends the account's grants there. Best effort, like the push tokens it retires: a failure
-  logs `agent_access_sign_out_everywhere_failed` and the sign-out goes on.
+  server ends the account's grants there, before that request's own rate limit and whatever the
+  flag says. A failure logs `agent_access_sign_out_everywhere_failed` and every answer after it
+  carries `code: AGENT_ACCESS_NOT_ENDED`; with that code, or with no answer, the web asks once
+  more, signs out all the same, and tells the person their connected apps may still be
+  connected. An installed phone app logs it and goes on.
 - A Disconnect or a sign-out everywhere also closes any request of that account not yet
   exchanged for a grant, so an Allow pressed a moment earlier produces nothing.
+- A password change or reset ends every app connected under the old password, at the app's next
+  call or refresh (`revoked_reason = 'credentials_changed'`): the account-recovery answer, and it
+  needs nothing from any client. Accounts with no password (Google, Apple) are unaffected.
+- Limits a client can meet: a grant is given at most twelve refresh tokens in any hour (the
+  request past that is 429 with `Retry-After: 300`, logged as `agent_oauth_refresh_rate_limited`,
+  and changes nothing), and an account holds twenty live grants per client (one more ends the
+  oldest, `superseded`) and keeps twenty ended ones.
+- A redirect URI is https, or http on `localhost`, `127.0.0.1` or `[::1]`, in lower case, with no
+  fragment and no `user@`; the tables refuse any other, and `create --app` says so first.
 - Everyone: the kill switch. To end every grant without switching the server off:
   `select public.agent_oauth_revoke_grant(id, 'operator') from public.agent_oauth_grants where revoked_at is null;`
 

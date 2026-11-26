@@ -1,6 +1,9 @@
 # The app's own OAuth server for MCP (2026-11-26)
 
-Status: built on `feat/agent-token-broker`, behind `MCP_AUTHORIZATION_SERVER`. Not cut over.
+Status: merged (#935, 2026-11-26) and live on production with `MCP_AUTHORIZATION_SERVER=both`
+since the same day: the seven clients are imported, new connections get the app's tokens, and
+Supabase's are still taken. Not yet `app`: that waits for the fixes under "After the security
+review" and the owner's word.
 Owner's decision, 2026-11-26: "our own token exchange".
 
 ## Why
@@ -76,7 +79,8 @@ the posting-only list when the grant is for the posting server). It is rendered 
 account, which binds the request to that account and mints a one-time consent token into the
 page. The answer is a same-origin `POST` carrying the web session's bearer token, the
 `authorization_id` and the consent token; the adapter also checks `Origin` and `Sec-Fetch-Site`.
-`X-Frame-Options: DENY` and `frame-ancestors 'none'` are the site-wide headers, unchanged.
+`X-Frame-Options: DENY` is the site-wide header that keeps the page out of a frame, unchanged
+(the CSP's `frame-ancestors 'none'` is sent report-only today, so it reports and does not block).
 
 MCP admission (`agent-oauth-admission.ts`): hash the bearer token, one `agent_oauth_token_admission`
 round trip, then the same answers the proxy's evaluator gives: unknown, expired or revoked 401
@@ -235,11 +239,46 @@ assertions) on a full replay, and `tests/e2e/oauth-consent.spec.ts` draws the co
 the app's own requests. The run's record is kept outside the repository, with the security
 review it belongs to.
 
+## After the security review
+
+A second review, of the merged code (2026-11-26), found nothing critical or high. Its findings
+and what became of them (migration `20261126151150_agent_oauth_hardening.sql`):
+
+1. **Token rows could be grown without end** by an account refreshing its own grant in a loop.
+   Now a grant is given at most twelve refresh tokens in any hour, the one issued with it
+   included: the request past that is answered 429 with `Retry-After` and changes nothing. An
+   account holds twenty live grants per client, one more ending the oldest (`superseded`), and
+   keeps twenty ended ones; ended grants are purged after thirty days. A grant driven as hard as
+   it can be holds about 26,000 small rows over the ninety days a used token is kept. The same
+   count bounds how many pairs the reuse grace can hand out.
+2. **A grant outlived account recovery.** A grant now carries a digest of the account's stored
+   password hash and ends at its next use once that has changed (`credentials_changed`): a
+   password change or reset ends every app connected under the old one, with no client's help.
+   An account with no password (Google, Apple) is unaffected. "Sign out everywhere" ends grants
+   whatever the flag says, so a grant made under `both` does not outlive a sign-out made during
+   a rollback. The server ends them before the request's own rate limit and marks every answer
+   where it could not; with that mark, or with no answer at all, the web asks once more, signs
+   out all the same, and tells the person their connected apps may still be connected.
+3. **The import trusted Supabase's redirect URIs.** The tables now hold every redirect URI to
+   https, or http on a loopback host, in lower case, with no fragment and no userinfo, and the
+   import skips and names a client that fails it (`redirect_uris_unusable`). `create --app`
+   applies the same rule in words (`isStorableRedirectUri`). The page already followed only an
+   http(s) redirect; `buildAuthorizationResponseUrl` now builds no other.
+
+A third review, of these fixes, found nothing critical or high and is answered in the same
+change: the ordering against the rate limit above, the migration's table order (the order the
+functions lock in, so it waits for a token exchange in flight), the count of ended grants, and
+the rule's TypeScript twin.
+
+Left as they are, on purpose: the first account to render a request binds it (the consent page
+is what keeps that from being silent), and a confidential client may send its secret in the body
+or a Basic header whichever it registered with.
+
 ## Known limits
 
 - A used refresh token's hash is kept until it expires (90 days) so a late reuse is recognised:
-  a grant refreshed hourly holds about 2,000 small rows. `agent_oauth_tokens` has a row budget in
-  `operational-table-growth.ts`.
+  a grant refreshed hourly holds about 2,000 small rows, and one at its limit of twelve an hour
+  about 26,000. `agent_oauth_tokens` has a row budget in `operational-table-growth.ts`.
 - The flag defaults to `supabase`, so a deployment that loses the variable reverts to the old
   server; after step 7 that means every agent call is 401, which is loud. The follow-up removes
   the default.
@@ -247,5 +286,12 @@ review it belongs to.
 - `import`'s dry run reads Supabase's clients through the admin API, which shows no secret hash,
   so only `--apply` can say that a confidential client's hash is in another form
   (`secret_hash_unusable`). It changes nothing for that client; read its output.
-- Sign out everywhere ends the app's grants through the account-wide push-token request, best
-  effort (above). A phone build older than that request (before 2026-10-17) does not send it.
+- A grant ends when the account's stored password hash changes, which is a password change or
+  reset. Supabase Auth also rewrites that hash at sign-in for a hash it wants to upgrade (an
+  imported argon2 or scrypt hash, a bcrypt cost other than its default): such an account's apps
+  would be asked to connect again once. On 2026-11-26 production had none: 75 accounts with no
+  password and 8 with a bcrypt hash at the default cost.
+- Sign out everywhere ends the app's grants through the account-wide push-token request. The web
+  says so when that failed; an installed phone app only logs it, and a build older than that
+  request (before 2026-10-17) does not send it. A password change is the certain way to end
+  every app at once, and Connected apps the way to end one.
