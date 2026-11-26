@@ -188,7 +188,7 @@ describe.skipIf(!configPath || !connectionString)('referral account deletion thr
     expect(await balances()).toEqual([{ credits: 525, promotional_credits: 25 }]);
   });
 
-  it.each(['app_store', 'play_store'] as const)('reconciles %s refund and restoration after the buyer deletes without allowing another receipt owner', async provider => {
+  it.each(['app_store', 'play_store'] as const)('reconciles %s refund and restoration after the buyer deletes, settling another receipt owner\'s events on the buyer', async provider => {
     await db.query('delete from public.transactions where id=$1', [transaction]);
     await db.query('update public.profiles set credits=0,promotional_credits=0 where id=any($1::uuid[])', [[inviter, invitee]]);
     const storeId = 'audit-deleted-' + randomUUID(), external = 'mobile_' + provider + '_' + storeId;
@@ -199,7 +199,6 @@ describe.skipIf(!configPath || !connectionString)('referral account deletion thr
     await settleReferralPurchaseRewards(admin, transaction);
     await executeInitialAccountDeletion({ admin, userId: invitee });
     const adjust = (userId: string, action: string, time: number, event = action + storeId) => admin.rpc('reconcile_mobile_purchase_adjustment', { p_external_order_id: external, p_user_id: userId, p_product_id: 'magicbooklet.credits.starter', p_event_id: event, p_event_timestamp_ms: time, p_action: action });
-    expect((await adjust(inviter, 'refund', 1000)).data).toMatchObject({ status: 'identity_mismatch' });
     const webhook = async (action: 'refund' | 'restore', time: number) => {
       const response = await postRevenueCatWebhookRouteResponse({
         request: new Request('http://audit.local/api/mobile/commerce/revenuecat-webhook', {
@@ -210,13 +209,18 @@ describe.skipIf(!configPath || !connectionString)('referral account deletion thr
       });
       expect(response.status).toBe(200); return response.json();
     };
-    expect(await webhook('refund', 1000)).toMatchObject({ result: 'refunded' });
+    // An event RevenueCat names under another app user (the receipt moved) settles on the receipt's
+    // owner, the deleted buyer here, and never on that user (security audit, 2026-11-27: it
+    // answered identity_mismatch, which the webhook acknowledges, and the refund was lost).
+    expect((await adjust(inviter, 'refund', 1000)).data).toMatchObject({ status: 'refunded', event_user_is_owner: false });
+    expect(await balances()).toEqual([{ credits: 0, promotional_credits: 0 }]);
+    expect(await webhook('refund', 1000)).toMatchObject({ result: 'duplicate_event' });
     expect(await balances()).toEqual([{ credits: 0, promotional_credits: 0 }]);
     expect((await adjust(invitee, 'refund', 1000)).data).toMatchObject({ status: 'duplicate_event' });
     expect(await webhook('restore', 2000)).toMatchObject({ result: 'restored' });
     expect(await balances()).toEqual([{ credits: 25, promotional_credits: 25 }]);
     expect((await db.query('select id from auth.users where id=$1', [invitee])).rows).toEqual([]);
-    expect((await adjust(inviter, 'restore', 3000, 'other-owner-' + storeId)).data).toMatchObject({ status: 'identity_mismatch' });
+    expect((await adjust(inviter, 'restore', 3000, 'other-owner-' + storeId)).data).toMatchObject({ status: 'already_active', event_user_is_owner: false });
     const stolen = await admin.rpc('complete_mobile_purchase', { p_user_id: inviter, p_purchase_intent_id: null, p_product_id: 'magicbooklet.credits.starter', p_provider: provider, p_store_transaction_id: storeId, p_external_order_id: external, p_payment_id: storeId });
     expect(stolen.error).toBeNull(); expect(stolen.data).toMatchObject({ status: 'transaction_conflict' });
     expect(await balances()).toEqual([{ credits: 25, promotional_credits: 25 }]);
