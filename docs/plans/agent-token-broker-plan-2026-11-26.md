@@ -120,6 +120,10 @@ there would let anyone lock a client out. No token, code, secret or consent toke
 - `connected-apps.ts`, `ConnectedApps.tsx`: list and revoke the app's grants through
   `/api/oauth/grants`, merged with Supabase's until its server is off.
 - `route-identity-policy.ts`: `/api/oauth/consent` and `/api/oauth/grants` are `registered`.
+- `AppShellAccount.tsx`, `agent-access-sign-out.ts`: "Sign out everywhere" ends every grant of
+  the account on the app's server first (`DELETE /api/oauth/grants` with `all: true`): an app's
+  access is no longer one of the account's sessions, and the consent page says signing out
+  everywhere ends it.
 - `scripts/ops/oauth-clients.ts`: `--app` turns `list` and `create` to `agent_oauth_clients`, and
   `import`, `disable`, `enable` and `rotate-secret` exist only there; without the switch `list`
   and `create` are still Supabase's, until the follow-up.
@@ -200,21 +204,23 @@ grants are untouched until then.
 
 ## Proof
 
-On a throwaway local stack (GoTrue v2.186.0, CLI 2.75.0, never production), 2026-11-26:
+On a throwaway local stack (GoTrue v2.186.0, CLI 2.75.0, never production), 2026-11-26, with the
+flag `app` and the real route handlers:
 
-- Before: with a token Supabase's OAuth server issued, the audit's probe changed the account's
-  password and signed in with it, approved a grant for another client, and enrolled an MFA
-  factor.
-- After, flag `app`, the real route handlers against the same stack: authorize → consent →
-  token issues `mbat_`/`mbrt_` tokens; `tools/list`, `list_creations` and a private
-  `publish_post` work and write `agent_tool_calls` rows under the client's id; the same token is
-  answered 403 by GoTrue (`/user`, `PUT /user`, the consent endpoint, `/factors`), 401 by
-  PostgREST and 400 by Storage, and the refresh token 400 by GoTrue's token endpoint; a Supabase
-  session JWT and a Supabase agent JWT are both answered 401 at `/api/mcp`; a posting-only
-  client is refused the full server at authorize and at the route; a replayed code, a reused
-  refresh token, Disconnect, `/oauth/revoke` and a ban each end access at once.
-- The migration's rules are held by `supabase/tests/database/agent_oauth_server.test.sql` (81
-  assertions) on a full replay.
+- authorize → consent → token issues `mbat_`/`mbrt_` tokens; `tools/list`, `list_creations` and a
+  private `publish_post` work and write `agent_tool_calls` rows under the client's id;
+- the access token is refused by every Supabase endpoint tried (Auth 403, PostgREST 401, Storage
+  400) and the refresh token by Supabase's token endpoint (400): neither is a Supabase credential;
+- a Supabase session JWT and a Supabase agent JWT are both answered 401 at `/api/mcp`, and an
+  agent's token of either kind cannot answer `/api/oauth/consent`;
+- a posting-only client is refused the full server at authorize and at the route;
+- a replayed code, a reused refresh token, Disconnect, `/oauth/revoke` and a ban each end access
+  at once.
+
+The migration's rules are held by `supabase/tests/database/agent_oauth_server.test.sql` (84
+assertions) on a full replay, and `tests/e2e/oauth-consent.spec.ts` draws the consent page for
+the app's own requests. The run's record is kept outside the repository, with the security
+review it belongs to.
 
 ## Known limits
 
