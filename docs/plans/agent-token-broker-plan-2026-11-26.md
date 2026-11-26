@@ -1,9 +1,9 @@
 # The app's own OAuth server for MCP (2026-11-26)
 
-Status: merged (#935, 2026-11-26) and live on production with `MCP_AUTHORIZATION_SERVER=both`
-since the same day: the seven clients are imported, new connections get the app's tokens, and
-Supabase's are still taken. Not yet `app`: that waits for the fixes under "After the security
-review" and the owner's word.
+Status: cut over on 2026-11-26. Production runs `MCP_AUTHORIZATION_SERVER=app`: the app is the
+only authorization server for the MCP routes, Supabase Auth's OAuth server is switched off, and
+the sessions and consents it had issued are ended ("Cutover, as done"). Left: the follow-up that
+removes the Supabase path from the code, after which this plan moves to `docs/archive/`.
 Owner's decision, 2026-11-26: "our own token exchange".
 
 ## Why
@@ -218,6 +218,35 @@ owner's to approve.
 
 Rollback before step 6: set the flag back to `supabase` and redeploy; Supabase's clients and
 grants are untouched until then.
+
+## Cutover, as done (2026-11-26, on the owner's word)
+
+1. #935 merged and released with #934 as `2e37141bb`; the migration applied.
+2. The seven clients imported on production, none skipped, the two posting-only ones as `posts`;
+   redirect URIs and the directory client's secret hash equal to Supabase's.
+3. `both` set in Vercel Production and released by the manual Production release run
+   (`expected_abandoned_reclaim_effective=true`).
+4. Hardening from the security review merged and released (#936, `960e702be`).
+5. Proved with the owner's account, the consent answered in the owner's browser: an opaque token,
+   twelve tools, `list_models` and `list_creations`; the token refused at another API route and
+   by Supabase (Auth 403, PostgREST 401, its refresh endpoint 400); a refresh rotated;
+   `/oauth/revoke` ended it at once.
+6. `app` set and released: every JWT is answered 401 at the MCP routes, and a connector holding
+   a Supabase-issued token was told to sign in again.
+7. What Supabase's server had issued was ended in SQL: 7 sessions with an OAuth client (their
+   163 refresh tokens with them), 3 consents, 4 pending requests. The seven rows of
+   `auth.oauth_clients` were left: with the server off they are inert, and deleting them was
+   not needed to end anything. Ordinary sign-in sessions were not touched.
+8. Supabase dashboard → Authentication → OAuth Server: switched off and saved (the switch alone
+   does not save). Its metadata, authorize and token endpoints answer 404; Auth is healthy.
+9. Checked at 16:57 UTC: no session with an OAuth client, no consent; the app's metadata 200, a
+   request from a registered client goes to the consent page, `/api/mcp` and `/api/mcp/posts`
+   challenge with 401. An access JWT Supabase issued before step 7 had at most the rest of its
+   hour to run, and nothing behind it.
+
+Not done by the cutover: reconnecting each client. Every creator's agents sign in again on their
+next call (two accounts, both the owner's). The Claude connectors-directory listing and ChatGPT
+keep their client id (and the directory its secret); one reconnect from each confirms it.
 
 ## Proof
 

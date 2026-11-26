@@ -55,9 +55,15 @@ describes Supabase's server and holds until the cutover's step 5.
 
 ## The app's own authorization server
 
+Since 2026-11-26 this is the only authorization server on production
+(`MCP_AUTHORIZATION_SERVER=app`): Supabase Auth's OAuth server is switched off, and the sections
+that describe it ("How a connection works" above, "Enabling the OAuth server", "Registering a
+client", the Supabase half of "Revoking") are the record of how it was, kept until the follow-up
+that removes that path from the code.
+
 Plan and decisions: `docs/plans/agent-token-broker-plan-2026-11-26.md`. Code:
-`src/lib/agent-oauth-*.ts`, `src/lib/oauth-authorization-server-metadata.ts`, migration
-`20261126121704_agent_oauth_server.sql`.
+`src/lib/agent-oauth-*.ts`, `src/lib/oauth-authorization-server-metadata.ts`, migrations
+`20261126121704_agent_oauth_server.sql` and `20261126151150_agent_oauth_hardening.sql`.
 
 The app is the OAuth 2.1 authorization server for both MCP routes. An agent's access token is
 `mbat_` and 256 random bits, its refresh token `mbrt_` and the same: rows of hashes in this
@@ -165,6 +171,12 @@ Rate limits: authorize 30 a minute per network address; token 600 a minute per n
 revoke 30; the consent answer and Disconnect 20 a minute per account.
 
 ### Cutover
+
+Done on production on 2026-11-26; the plan's "Cutover, as done" is the record. Two things it
+taught: the Supabase dashboard's OAuth Server switch asks to confirm and then still needs **Save
+changes**, and ending what Supabase issued needs only its sessions and consents
+(`delete from auth.sessions where oauth_client_id is not null; delete from auth.oauth_consents;`),
+not its apps. The steps stay below for another environment.
 
 Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a creator sees.
 
