@@ -14,15 +14,16 @@ import {
  *
  * The proxy strips every incoming assertion and timing header and defers only these; every
  * other API path keeps central proxy admission. Each entry must be wrapped at its actual route
- * export, with `withRouteOwnedIdentityAdmission` or an admission of its own built from the same
- * evaluator (the MCP adapter's): a path listed here and not wrapped is open. Keep the list short.
+ * export, with `withRouteOwnedIdentityAdmission` or an admission of its own (the MCP adapter's):
+ * a path listed here and not wrapped is open. Keep the list short.
  *
  * - The showcase feed's reads run admission next to the database, in the API function's
  *   Mumbai region, so the lifecycle round trip is a local one, and count a signed-in read
  *   against its read limit beside that round trip (`besideLifecycle`).
  * - The MCP server, at both its paths, answers an agent's missing or invalid token with the
  *   `WWW-Authenticate` challenge MCP clients need, which the proxy's 401 does not carry, and
- *   requires the agent-token claim the proxy refuses everywhere else (`agent-token.ts`).
+ *   takes only the app's own opaque agent token, admitted by one hash lookup
+ *   (`agent-oauth-admission.ts`), never a JWT.
  */
 const ROUTE_OWNED_ADMISSION: ReadonlyArray<{
   pathname: string;

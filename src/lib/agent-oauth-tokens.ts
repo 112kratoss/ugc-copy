@@ -3,13 +3,14 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { APP_AGENT_ACCESS_TOKEN_PREFIX } from './agent-token';
 
 /**
- * The secrets of the app's own authorization server (`docs/plans/agent-token-broker-plan-2026-11-26.md`):
+ * The secrets of the app's own authorization server (`docs/archive/agent-token-broker-plan-2026-11-26.md`):
  * how each is made, how it is stored, how two are compared, and how long each lasts.
  *
  * Every secret is 256 random bits behind a prefix that says what it is. Only its hash is stored,
  * base64url(SHA-256(value)): the values carry their full entropy, so a plain fast hash is the
  * right one (a slow password hash guards a guessable secret, which these are not), and it is the
- * form Supabase Auth keeps a client secret in, so an imported client's secret keeps working.
+ * form Supabase Auth keeps a client secret in, so the clients copied from it at the cutover kept
+ * their secrets.
  */
 
 export const AGENT_ACCESS_TOKEN_PREFIX = APP_AGENT_ACCESS_TOKEN_PREFIX;

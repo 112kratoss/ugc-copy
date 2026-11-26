@@ -1,10 +1,15 @@
 # The app's own OAuth server for MCP (2026-11-26)
 
-Status: cut over on 2026-11-26. Production runs `MCP_AUTHORIZATION_SERVER=app`: the app is the
-only authorization server for the MCP routes, Supabase Auth's OAuth server is switched off, and
-the sessions and consents it had issued are ended ("Cutover, as done"). Left: the follow-up that
-removes the Supabase path from the code, after which this plan moves to `docs/archive/`.
-Owner's decision, 2026-11-26: "our own token exchange".
+Status: **shipped 2026-11-26, archived the same day.** Built in #935 and hardened in #936 (live as
+`960e702be`), cut over on production that day (`MCP_AUTHORIZATION_SERVER=app`, Supabase Auth's
+OAuth server switched off, the sessions and consents it had issued ended: "Cutover, as done"),
+and then the follow-up removed the Supabase path, the flag and the client import from the code,
+so the app's server is the only behaviour. This file is the record of the design, the proof and
+the cutover, not a plan still open; "the flag", "the follow-up" and the Supabase path below
+describe the code before that. Operating the server: `docs/mcp-server-operations.md`, "The app's
+own authorization server". It moved here from `docs/plans/`, the path migrations
+`20261126121704` and `20261126151150` still name. Owner's decision, 2026-11-26: "our own token
+exchange".
 
 ## Why
 

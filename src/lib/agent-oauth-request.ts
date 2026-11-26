@@ -4,7 +4,7 @@ import { MCP_SURFACE_ROUTE_PATHS, type McpSurface } from '@/lib/mcp-surfaces';
 
 /**
  * What the app's authorization server accepts in a request, with no database and no HTTP in it
- * (`docs/plans/agent-token-broker-plan-2026-11-26.md`, "Endpoints"). OAuth 2.1 for MCP:
+ * (`docs/archive/agent-token-broker-plan-2026-11-26.md`, "Endpoints"). OAuth 2.1 for MCP:
  * authorization code with PKCE S256, pre-registered clients, exact redirect URIs, and a `resource`
  * (RFC 8707) that binds a grant to one of the two MCP servers.
  */

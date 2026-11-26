@@ -8,7 +8,6 @@ import { pushToast } from '@/components/feedback-state';
 import { useConfirmation } from '@/components/useConfirmation';
 import {
   CONNECTED_APPS_COPY,
-  combineConnectedAppsClients,
   connectedAppAccess,
   createAppGrantsClient,
   disconnectApp,
@@ -26,27 +25,20 @@ type ListState =
   | { status: 'failed'; message: string }
   | { status: 'ready'; apps: ConnectedApp[] };
 
-/**
- * The page's own grants API: the app's authorization server, through `/api/oauth/grants` with the
- * session's token, together with Supabase Auth's grants API until its OAuth server is switched
- * off (`connected-apps.ts`). Built once: it remembers which of the two listed each app.
- */
+/** The page's own grants API: `/api/oauth/grants` with the session's token (`connected-apps.ts`). */
 let pageGrantsApi: ConnectedAppsClient | null = null;
 
 function grantsApiOfThePage(): ConnectedAppsClient {
-  pageGrantsApi ??= combineConnectedAppsClients([
-    createAppGrantsClient({
-      getAccessToken: async () => (await supabase.auth.getSession()).data.session?.access_token,
-    }),
-    supabase.auth.oauth,
-  ]);
+  pageGrantsApi ??= createAppGrantsClient({
+    getAccessToken: async () => (await supabase.auth.getSession()).data.session?.access_token,
+  });
   return pageGrantsApi;
 }
 
 /**
  * The agents this account has approved through the MCP server's consent screen, with a way to
  * end each one's access (`connected-apps.ts`). It reads and revokes with the browser's own
- * session, at the app's authorization server and at Supabase Auth's while that one is still on.
+ * session.
  * Disconnect asks first and the row leaves at the answer, as Blocked users' Unblock does: a button
  * that waits on the network reads as a press that did not land; a refusal draws the row again and
  * says why in a toast.

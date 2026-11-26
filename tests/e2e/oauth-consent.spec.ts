@@ -5,9 +5,9 @@ import consentRequests from './fixtures/oauth-consent-requests.json';
 /**
  * The consent page's gate, offline (.claude/rules/e2e.md): a request with no authorization id
  * is told the link is incomplete; a signed-out visitor is sent to sign in with a `next` that
- * keeps the id; a signed-in account (the E2E bypass user) is handed the request, whose read
- * against the placeholder project then fails in words. The approve and deny answers need
- * GoTrue and are covered by the service's unit tests and the spike.
+ * keeps the id; a signed-in account (the E2E bypass user) given an id of another shape, such as
+ * one Supabase's OAuth server issued before 2026-11-26, is told in words that it cannot be
+ * answered.
  */
 
 const AUTHORIZATION_ID = 'e2e1e2e1e2e1e2e1e2e1e2e1e2e1e2e1';
@@ -28,11 +28,10 @@ test('a request with no authorization id is told the link is incomplete', async 
   await expect(page.getByRole('button', { name: 'Allow' })).toHaveCount(0);
 });
 
-test('a signed-in account is handed the request, and an unreadable one is answered in words', async ({ page, context }) => {
+test('a signed-in account given a request of no server the app runs is answered in words', async ({ page, context }) => {
   await context.addCookies([{ name: 'e2e-auth', value: 'workflow-user', url: 'http://127.0.0.1:3100' }]);
   await page.goto(CONSENT_PATH, { waitUntil: 'commit' });
-  // The page's script reads the request with the session; against the placeholder project the
-  // read fails, and the page says so without exposing the error.
+  // Not an `mbar_` id, so nothing is read for it: the page says so without asking anyone.
   await expect(page.getByRole('heading', { level: 1, name: 'This connection could not be made' })).toBeVisible(COLD_PAGE);
   await expect(page.getByText('Go back to the app that asked and connect again.', { exact: false })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Allow' })).toHaveCount(0);
@@ -41,7 +40,7 @@ test('a signed-in account is handed the request, and an unreadable one is answer
 
 /**
  * A request of the app's own authorization server (`mbar_…`,
- * docs/plans/agent-token-broker-plan-2026-11-26.md): the page reads it on the server for the
+ * docs/archive/agent-token-broker-plan-2026-11-26.md): the page reads it on the server for the
  * signed-in account (the dev server answers those two reads, supabase-server-stub.cjs) and
  * arrives with the request drawn: who asks, what the grant's server allows, where the browser
  * goes back to, and the two answers. The answer itself needs a real session and is covered by

@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(51);
+select plan(49);
 
 -- ---------------------------------------------------------------------------------------------
 -- Redirect URIs
@@ -236,47 +236,6 @@ select is(
   'and twenty live ones'
 );
 select has_index('public', 'agent_oauth_grants', 'agent_oauth_grants_revoked_idx', 'the purge reads ended grants by an index');
-
--- ---------------------------------------------------------------------------------------------
--- The import refuses a client whose redirect URI is not a web address (where the stack has
--- Supabase Auth's table in the shape GoTrue v2.186 gives it; a Postgres-only replay has none).
-
-create temporary table import_fixture on commit drop as
-  select to_regclass('auth.oauth_clients') is not null
-     and (select count(*) from information_schema.columns
-           where table_schema = 'auth' and table_name = 'oauth_clients'
-             and column_name in ('id', 'client_secret_hash', 'registration_type', 'redirect_uris', 'grant_types',
-                                 'client_name', 'client_uri', 'client_type', 'token_endpoint_auth_method', 'deleted_at')) = 10
-     as present;
-do $fixture$
-begin
-  if (select present from import_fixture) then
-    execute $sql$
-      insert into auth.oauth_clients
-        (id, client_secret_hash, registration_type, redirect_uris, grant_types, client_name, client_type, token_endpoint_auth_method)
-      values
-        ('bf100000-0000-4000-8000-000000000001', null, 'manual', 'javascript:alert(1)', 'authorization_code,refresh_token', 'Imported script', 'public', 'none'),
-        ('bf200000-0000-4000-8000-000000000002', null, 'manual', 'https://ok.test/cb,http://example.com/cb', 'authorization_code,refresh_token', 'Imported mixed', 'public', 'none'),
-        ('bf300000-0000-4000-8000-000000000003', null, 'manual', 'https://ok.test/cb', 'authorization_code,refresh_token', 'Imported good', 'public', 'none')
-    $sql$;
-  end if;
-end;
-$fixture$;
-create temporary table import_result on commit drop as
-  select public.agent_oauth_import_supabase_clients() as answer;
-
-select case when (select present from import_fixture) then
-  ok(
-    (select answer -> 'skipped' @> '[{"client_id": "bf100000-0000-4000-8000-000000000001", "reason": "redirect_uris_unusable"},
-                                     {"client_id": "bf200000-0000-4000-8000-000000000002", "reason": "redirect_uris_unusable"}]'::jsonb
-       from import_result)
-    and not exists (select 1 from public.agent_oauth_clients where client_id in ('bf100000-0000-4000-8000-000000000001', 'bf200000-0000-4000-8000-000000000002')),
-    'the import skips and names a client with a redirect URI that is not a web address'
-  )
-  else skip('no auth.oauth_clients on this stack', 1) end;
-select case when (select present from import_fixture) then
-  ok(exists (select 1 from public.agent_oauth_clients where client_id = 'bf300000-0000-4000-8000-000000000003'), 'and still imports the one beside them')
-  else skip('no auth.oauth_clients on this stack', 1) end;
 
 select * from finish();
 rollback;

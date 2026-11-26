@@ -2,7 +2,6 @@ import { LogIn } from 'lucide-react';
 import { redirect } from 'next/navigation';
 
 import { Button, Kicker, StatusCallout, Surface, Text } from '@/components/DesignSystem';
-import { areSupabaseAgentTokensAccepted, isAppAuthorizationServerEnabled } from '@/lib/agent-oauth-mode';
 import { isAgentAuthorizationId, loadAgentConsent, type LoadedAgentConsent } from '@/lib/agent-oauth-server-service';
 import { logBackendError } from '@/lib/backend-logger';
 import { CONSENT_UNAVAILABLE_MESSAGE, gateConsentRequest } from '@/lib/oauth-consent-service';
@@ -20,40 +19,26 @@ function firstParam(value: string | string[] | undefined) {
 }
 
 /**
- * What the page shows a signed-in account for a request, by whose request it is
- * (`MCP_AUTHORIZATION_SERVER`, `agent-oauth-mode.ts`):
- *
- * - the app's own (`mbar_…`): read here, on the server, for this account. Reading binds the
- *   request to the account and mints the consent token the answer must carry
- *   (`loadAgentConsent`), so the page a different account opens later cannot answer it;
- * - Supabase Auth's (any other id), until its server is off: read by the browser's session in
- *   `ConsentClient`, as before.
+ * The request a signed-in account is shown, read here, on the server, for this account. Reading
+ * binds the request to the account and mints the consent token the answer must carry
+ * (`loadAgentConsent`), so the page a different account opens later cannot answer it. Null for
+ * anything that is not a live request of the app's own server (`mbar_…`).
  */
-async function readRequest(authorizationId: string, userId: string): Promise<
-  | { kind: 'app'; request: LoadedAgentConsent }
-  | { kind: 'supabase' }
-  | { kind: 'unavailable' }
-> {
-  if (!isAgentAuthorizationId(authorizationId)) {
-    return areSupabaseAgentTokensAccepted() ? { kind: 'supabase' } : { kind: 'unavailable' };
-  }
-  if (!isAppAuthorizationServerEnabled()) return { kind: 'unavailable' };
+async function readRequest(authorizationId: string, userId: string): Promise<LoadedAgentConsent | null> {
+  if (!isAgentAuthorizationId(authorizationId)) return null;
   try {
-    const request = await loadAgentConsent({ authorizationId, userId }, { admin: createServiceClient() });
-    return request ? { kind: 'app', request } : { kind: 'unavailable' };
+    return await loadAgentConsent({ authorizationId, userId }, { admin: createServiceClient() });
   } catch (error) {
     logBackendError('agent_oauth_consent_load_failed', { userId, error });
-    return { kind: 'unavailable' };
+    return null;
   }
 }
 
 /**
- * `/oauth/consent?authorization_id=…`: where an authorization server sends the person when an
- * agent asks to act as them: the app's own `/oauth/authorize`
- * (`docs/plans/agent-token-broker-plan-2026-11-26.md`) or, until the cutover, Supabase Auth's
- * (`docs/plans/agent-mcp-server-plan-2026-11-09.md`). The session decides who answers: a
- * signed-out visitor signs in and comes back, a guest is shown the wall, and an account decides
- * in `ConsentClient`.
+ * `/oauth/consent?authorization_id=…`: where the app's own `/oauth/authorize` sends the person
+ * when an agent asks to act as them (`docs/archive/agent-token-broker-plan-2026-11-26.md`). The
+ * session decides who answers: a signed-out visitor signs in and comes back, a guest is shown the
+ * wall, and an account decides in `ConsentClient`.
  */
 export default async function OAuthConsentPage({ searchParams }: ConsentPageProps) {
   const params = searchParams ? await searchParams : {};
@@ -89,14 +74,12 @@ export default async function OAuthConsentPage({ searchParams }: ConsentPageProp
             </Text>
             <Button href={gate.href} variant="primary" icon={LogIn}>Sign in or create an account</Button>
           </Surface>
-        ) : read?.kind === 'app' ? (
+        ) : gate.kind === 'account' && read ? (
           <ConsentClient
             authorizationId={gate.authorizationId}
             email={gate.email}
-            appRequest={{ details: read.request.details, consentToken: read.request.consentToken }}
+            request={{ details: read.details, consentToken: read.consentToken }}
           />
-        ) : read?.kind === 'supabase' ? (
-          <ConsentClient authorizationId={gate.authorizationId} email={gate.email} />
         ) : (
           <Surface as="section" padding="lg" className="space-y-4" data-consent-state="error">
             <Kicker>Connect an app</Kicker>

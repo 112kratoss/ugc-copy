@@ -15,9 +15,9 @@ import type { McpSurface } from '@/lib/mcp-surfaces';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
 // The MCP routes behind the app's own authorization server
-// (docs/plans/agent-token-broker-plan-2026-11-26.md): which tokens are read under each value of
-// MCP_AUTHORIZATION_SERVER, and what the tools are given once an opaque token is admitted. The
-// Supabase path's own cases stay in mcp-route-adapter-service.test.ts.
+// (docs/archive/agent-token-broker-plan-2026-11-26.md): which tokens are read, and what the tools
+// are given once an opaque token is admitted. The rest of the route's cases (kill switch, refusals,
+// the record) are in mcp-route-adapter-service.test.ts.
 
 const SITE = 'https://magicbooklet.test';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -37,9 +37,6 @@ const ADMITTED = {
   banned: false,
 };
 
-const AGENT_CLAIMS = { sub: USER_ID, aud: 'authenticated', role: 'authenticated', is_anonymous: false, client_id: 'client-claude' };
-const ACTIVE = { state: 'active', session_valid: true, banned: false, created_at: '2026-11-09T00:00:00Z' };
-
 function rpc(method: string, params?: Record<string, unknown>, options: { token?: string; path?: string } = {}) {
   return new NextRequest(`${SITE}${options.path ?? '/api/mcp'}`, {
     method: 'POST',
@@ -54,7 +51,7 @@ function rpc(method: string, params?: Record<string, unknown>, options: { token?
   });
 }
 
-function harness(overrides: { mode?: string; admission?: unknown; admissionError?: unknown; surface?: McpSurface } = {}) {
+function harness(overrides: { admission?: unknown; admissionError?: unknown; surface?: McpSurface } = {}) {
   const insert = vi.fn(async () => ({ error: null }));
   const admissionRpc = vi.fn(async () => (
     overrides.admissionError ? { data: null, error: overrides.admissionError } : { data: overrides.admission === undefined ? ADMITTED : overrides.admission, error: null }
@@ -73,11 +70,6 @@ function harness(overrides: { mode?: string; admission?: unknown; admissionError
     requestClients.push(client);
     return client as unknown as SupabaseClient;
   });
-  const supabaseIdentity = {
-    auth: { getClaims: vi.fn(async () => ({ data: { claims: AGENT_CLAIMS }, error: null })) },
-    rpc: vi.fn(async () => ({ data: ACTIVE, error: null })),
-  };
-  const createUserClient = vi.fn(() => ({ auth: { getUser: vi.fn() } }) as unknown as SupabaseClient);
   // Each takes its one argument by name so a test can read what the tool handed it.
   const listOwnerGenerationsForRoute = vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ generations: [], pagination: { limit: 20, hasMore: false, nextCursor: null } }));
   const enhancePromptForUser = vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ ok: true as const, enhancedPrompt: 'better', cost: 1, remainingCredits: 9 }));
@@ -85,15 +77,13 @@ function harness(overrides: { mode?: string; admission?: unknown; admissionError
   const deferred: Array<Promise<unknown>> = [];
   const dependencies: McpRouteDependencies = {
     ...(overrides.surface ? { surface: overrides.surface } : {}),
-    identity: { createUserClient: () => supabaseIdentity },
-    createUserClient: createUserClient as never,
     createServiceClient: () => admin,
     createRequestServiceClient: createRequestServiceClient as never,
     siteUrl: SITE,
     kieApiKey: 'kie-test-key',
     log,
     runAfterResponse: (task) => { deferred.push(task()); },
-    env: overrides.mode === undefined ? { MCP_AUTHORIZATION_SERVER: 'app' } : { MCP_AUTHORIZATION_SERVER: overrides.mode },
+    env: {},
     services: {
       listOwnerGenerationsForRoute: listOwnerGenerationsForRoute as unknown as McpToolServices['listOwnerGenerationsForRoute'],
       enhancePromptForUser: enhancePromptForUser as unknown as McpToolServices['enhancePromptForUser'],
@@ -106,8 +96,6 @@ function harness(overrides: { mode?: string; admission?: unknown; admissionError
     admissionRpc,
     insert,
     log,
-    supabaseIdentity,
-    createUserClient,
     createRequestServiceClient,
     requestClients,
     listOwnerGenerationsForRoute,
@@ -117,50 +105,27 @@ function harness(overrides: { mode?: string; admission?: unknown; admissionError
 }
 
 describe('MCP routes: which token is read', () => {
-  it('reads no app token while Supabase is the authorization server', async () => {
-    for (const mode of ['supabase', '']) {
-      const { handlers, admissionRpc, supabaseIdentity } = harness({ mode });
-      const response = await handlers.POST(rpc('tools/list'));
-      expect(response.status).toBe(401);
+  it('reads no JWT: an agent\'s or a session\'s is refused before anything looks at it', async () => {
+    const { handlers, admissionRpc, createRequestServiceClient } = harness();
+    for (const path of ['/api/mcp', '/api/mcp/posts']) {
+      const response = await handlers.POST(rpc('tools/list', undefined, { token: JWT, path }));
+      expect(response.status, path).toBe(401);
       expect(response.headers.get('www-authenticate')).toContain(`Bearer resource_metadata="${METADATA_URL}", error="invalid_token"`);
-      expect(admissionRpc).not.toHaveBeenCalled();
-      expect(supabaseIdentity.auth.getClaims).not.toHaveBeenCalled();
+      await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
     }
-  });
-
-  it('reads no JWT once the app is the authorization server: an agent\'s or a session\'s', async () => {
-    const { handlers, admissionRpc, supabaseIdentity, createUserClient } = harness({ mode: 'app' });
-    const response = await handlers.POST(rpc('tools/list', undefined, { token: JWT }));
-    expect(response.status).toBe(401);
-    expect(response.headers.get('www-authenticate')).toContain(`Bearer resource_metadata="${METADATA_URL}", error="invalid_token"`);
-    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized', code: 'UNAUTHORIZED' });
-    // Refused before anything read it: no signature check, no lifecycle call, no token lookup.
-    expect(supabaseIdentity.auth.getClaims).not.toHaveBeenCalled();
-    expect(supabaseIdentity.rpc).not.toHaveBeenCalled();
+    // No token lookup, and no client is built for the tools.
     expect(admissionRpc).not.toHaveBeenCalled();
-    expect(createUserClient).not.toHaveBeenCalled();
+    expect(createRequestServiceClient).not.toHaveBeenCalled();
   });
 
-  it('takes both during the proving stage, each by its own path', async () => {
-    const app = harness({ mode: 'both' });
-    expect((await app.handlers.POST(rpc('tools/list'))).status).toBe(200);
-    expect(app.admissionRpc).toHaveBeenCalledTimes(1);
-    expect(app.supabaseIdentity.auth.getClaims).not.toHaveBeenCalled();
-
-    const supabase = harness({ mode: 'both' });
-    expect((await supabase.handlers.POST(rpc('tools/list', undefined, { token: JWT }))).status).toBe(200);
-    expect(supabase.supabaseIdentity.auth.getClaims).toHaveBeenCalledTimes(1);
-    expect(supabase.admissionRpc).not.toHaveBeenCalled();
-  });
-
-  it('refuses a malformed Authorization header the same way in every mode', async () => {
-    for (const mode of ['supabase', 'both', 'app']) {
-      const { handlers, admissionRpc } = harness({ mode });
-      const request = new NextRequest(`${SITE}/api/mcp`, { method: 'POST', headers: { authorization: `Token ${APP_TOKEN}`, 'content-type': 'application/json' }, body: '{}' });
+  it('refuses a malformed Authorization header, and a token of the app\'s other kinds', async () => {
+    const { handlers, admissionRpc } = harness();
+    for (const authorization of [`Token ${APP_TOKEN}`, `Bearer ${APP_TOKEN} extra`, `Bearer mbrt_${'t'.repeat(43)}`, 'Bearer']) {
+      const request = new NextRequest(`${SITE}/api/mcp`, { method: 'POST', headers: { authorization, 'content-type': 'application/json' }, body: '{}' });
       const response = await handlers.POST(request);
-      expect(response.status).toBe(401);
-      expect(admissionRpc).not.toHaveBeenCalled();
+      expect(response.status, authorization).toBe(401);
     }
+    expect(admissionRpc).not.toHaveBeenCalled();
   });
 });
 
@@ -175,7 +140,7 @@ describe('MCP routes: an admitted app token', () => {
   });
 
   it('runs a tool as the account, on a client of the request\'s own that knows who was admitted', async () => {
-    const { handlers, admin, listOwnerGenerationsForRoute, requestClients, createRequestServiceClient, createUserClient, insert, settled } = harness();
+    const { handlers, admin, listOwnerGenerationsForRoute, requestClients, createRequestServiceClient, insert, settled } = harness();
     const response = await handlers.POST(rpc('tools/call', { name: 'list_creations', arguments: {} }));
     expect(response.status).toBe(200);
     expect((await response.json()).result.isError).not.toBe(true);
@@ -186,8 +151,6 @@ describe('MCP routes: an admitted app token', () => {
     expect(call.supabase).not.toBe(admin);
     expect(call.supabase).toBe(requestClients[0]);
     expect(createRequestServiceClient).toHaveBeenCalledTimes(1);
-    // No JWT client is built: there is no JWT.
-    expect(createUserClient).not.toHaveBeenCalled();
 
     // What the services ask of it: the admitted account, with no call to Auth.
     const { data, error } = await getVerifiedAuthUserResult(call.supabase);
@@ -308,7 +271,7 @@ describe('MCP routes: a refused app token', () => {
   });
 
   it('still answers the kill switch first', async () => {
-    const handlers = createMcpRouteHandlers({ env: { MCP_AUTHORIZATION_SERVER: 'app', MCP_SERVER_DISABLED: '1' } });
+    const handlers = createMcpRouteHandlers({ env: { MCP_SERVER_DISABLED: '1' } });
     const response = await handlers.POST(rpc('tools/list'));
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({ code: 'MCP_SERVER_DISABLED' });

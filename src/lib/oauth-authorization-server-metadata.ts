@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 
-import { isAppAuthorizationServerEnabled } from '@/lib/agent-oauth-mode';
 import {
   AGENT_OAUTH_AUTHORIZE_PATH,
   AGENT_OAUTH_REVOKE_PATH,
@@ -12,7 +11,7 @@ import { protectedResourceCorsHeaders, resolveMcpSiteOrigin } from '@/lib/oauth-
 
 /**
  * OAuth 2.0 Authorization Server Metadata (RFC 8414) for the app's own authorization server
- * (`docs/plans/agent-token-broker-plan-2026-11-26.md`).
+ * (`docs/archive/agent-token-broker-plan-2026-11-26.md`).
  *
  * The issuer is the site's origin, so the document is at the origin's root well-known URL, where
  * an MCP client looks after reading `authorization_servers` from the protected-resource metadata
@@ -40,15 +39,11 @@ export type OAuthAuthorizationServerMetadata = {
   service_documentation: string;
 };
 
-type Environment = Record<string, string | undefined>;
-
-/** The document, or null where the app's server is off or the site URL is not configured. */
+/** The document, or null where the site URL is not configured. */
 export function buildOAuthAuthorizationServerMetadata(
-  options: { siteUrl?: string; env?: Environment } = {},
+  options: { siteUrl?: string } = {},
 ): OAuthAuthorizationServerMetadata | null {
-  const env = options.env ?? process.env;
-  if (!isAppAuthorizationServerEnabled(env)) return null;
-  const issuer = resolveMcpSiteOrigin(options.siteUrl ?? env.NEXT_PUBLIC_SITE_URL);
+  const issuer = resolveMcpSiteOrigin(options.siteUrl ?? process.env.NEXT_PUBLIC_SITE_URL);
   if (!issuer) return null;
   return {
     issuer,
@@ -66,19 +61,16 @@ export function buildOAuthAuthorizationServerMetadata(
   };
 }
 
-/**
- * Cached briefly, not for a day as the protected-resource document is: this one appears and
- * changes with the cutover flag, and a client must not keep reading "no such server" after it.
- */
+/** Cached for five minutes, as the protected-resource document is. */
 const METADATA_CACHE_CONTROL = 'public, max-age=300, s-maxage=300';
 
 export function createAuthorizationServerMetadataResponse(
-  options: { siteUrl?: string; env?: Environment } = {},
+  options: { siteUrl?: string } = {},
 ): NextResponse {
   const metadata = buildOAuthAuthorizationServerMetadata(options);
   if (!metadata) {
     return NextResponse.json(
-      { error: 'This deployment has no authorization server of its own.', code: 'AUTHORIZATION_SERVER_NOT_ENABLED' },
+      { error: 'The MCP server is not configured on this deployment.', code: 'MCP_NOT_CONFIGURED' },
       { status: 404, headers: { ...protectedResourceCorsHeaders(), 'Cache-Control': 'no-store' } },
     );
   }

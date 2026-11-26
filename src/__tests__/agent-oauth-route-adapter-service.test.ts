@@ -34,7 +34,6 @@ const {
 
 const SITE = 'https://magicbooklet.test';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
-const ON = { MCP_AUTHORIZATION_SERVER: 'app' };
 const admin = { marker: 'admin' } as unknown as SupabaseClient;
 
 function jwt(claims: Record<string, unknown>) {
@@ -46,7 +45,6 @@ const WEB_SESSION = jwt({ sub: USER_ID, role: 'authenticated' });
 const AGENT_JWT = jwt({ sub: USER_ID, role: 'authenticated', client_id: 'client-claude' });
 
 function harness(overrides: {
-  env?: Record<string, string | undefined>;
   user?: Partial<User> | null;
   rateLimit?: () => Promise<unknown>;
 } = {}) {
@@ -55,7 +53,6 @@ function harness(overrides: {
   const createUserClient = vi.fn(() => ({ auth: { getUser } }) as unknown as SupabaseClient);
   const enforceBackendRateLimit = vi.fn(overrides.rateLimit ?? (async () => ({ allowed: true })));
   const dependencies = {
-    env: overrides.env ?? ON,
     siteUrl: SITE,
     createServiceClient: () => admin,
     createUserClient,
@@ -82,38 +79,6 @@ const ANSWER = { authorizationId: `mbar_${'a'.repeat(43)}`, decision: 'approve',
 
 beforeEach(() => {
   for (const mock of [...Object.values(service), ...Object.values(logs)]) mock.mockReset();
-});
-
-describe('the switch', () => {
-  it('answers 404 on every endpoint until the app\'s server is switched on', async () => {
-    for (const env of [{}, { MCP_AUTHORIZATION_SERVER: 'supabase' }]) {
-      const { dependencies, enforceBackendRateLimit } = harness({ env });
-      const answers = await Promise.all([
-        createAgentOAuthAuthorizeHandlers(dependencies).GET(new Request(`${SITE}/oauth/authorize?client_id=x`)),
-        createAgentOAuthTokenHandlers(dependencies).POST(form('/oauth/token', { grant_type: 'refresh_token' })),
-        createAgentOAuthRevokeHandlers(dependencies).POST(form('/oauth/revoke', { token: 'x' })),
-        createAgentOAuthConsentHandlers(dependencies).POST(consentRequest(ANSWER)),
-      ]);
-      expect(answers.map((answer) => answer.status)).toEqual([404, 404, 404, 404]);
-      expect(enforceBackendRateLimit).not.toHaveBeenCalled();
-    }
-    expect(Object.values(service).some((mock) => mock.mock.calls.length > 0)).toBe(false);
-  });
-
-  it('lists no grants, and ends none, while the server is off', async () => {
-    const { dependencies } = harness({ env: {} });
-    const grants = createAgentOAuthGrantsHandlers(dependencies);
-    const list = await grants.GET(new Request(`${SITE}/api/oauth/grants`, { headers: { authorization: `Bearer ${WEB_SESSION}` } }));
-    await expect(list.json()).resolves.toEqual({ grants: [] });
-    const revoke = await grants.DELETE(new Request(`${SITE}/api/oauth/grants`, {
-      method: 'DELETE',
-      headers: { 'content-type': 'application/json', origin: SITE, authorization: `Bearer ${WEB_SESSION}` },
-      body: JSON.stringify({ clientId: 'client-claude' }),
-    }));
-    await expect(revoke.json()).resolves.toEqual({ revoked: 0 });
-    expect(service.listAgentGrants).not.toHaveBeenCalled();
-    expect(service.disconnectAgentClient).not.toHaveBeenCalled();
-  });
 });
 
 describe('GET /oauth/authorize', () => {

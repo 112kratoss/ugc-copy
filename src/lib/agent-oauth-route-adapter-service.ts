@@ -4,7 +4,6 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { NextResponse } from 'next/server';
 
 import { isGuestUser } from '@/lib/account-identity';
-import { isAppAuthorizationServerEnabled } from '@/lib/agent-oauth-mode';
 import { AgentOAuthError, isClientId } from '@/lib/agent-oauth-request';
 import {
   decideAgentConsent,
@@ -23,7 +22,7 @@ import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
 /**
- * HTTP for the app's own authorization server (`docs/plans/agent-token-broker-plan-2026-11-26.md`):
+ * HTTP for the app's own authorization server (`docs/archive/agent-token-broker-plan-2026-11-26.md`):
  *
  * - `GET /oauth/authorize`, `POST /oauth/token`, `POST /oauth/revoke`: what an OAuth client calls.
  *   They sit outside `/api`, so the proxy's bearer admission does not run for them and they take
@@ -31,19 +30,15 @@ import { createServiceClient, createUserClient } from '@/lib/server-helpers';
  * - `POST /api/oauth/consent`, `GET` and `DELETE /api/oauth/grants`: what this app's own pages
  *   call with the web session's token, registered accounts only (`route-identity-policy.ts`).
  *
- * All of it answers 404 until `MCP_AUTHORIZATION_SERVER` switches the server on
- * (`agent-oauth-mode.ts`), except the grants list, which is then empty. Every answer is
- * `no-store`. Nothing here logs a parameter's value: a refusal is logged by its error code.
+ * Every answer is `no-store`. Nothing here logs a parameter's value: a refusal is logged by its
+ * error code.
  */
-
-type Environment = Record<string, string | undefined>;
 
 export type AgentOAuthRouteDependencies = {
   createServiceClient?: () => SupabaseClient;
   createUserClient?: (request: Request) => SupabaseClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   siteUrl?: string;
-  env?: Environment;
   now?: () => Date;
 };
 
@@ -86,7 +81,6 @@ function resolve(dependencies: AgentOAuthRouteDependencies) {
     admin: dependencies.createServiceClient ?? createServiceClient,
     userClient: dependencies.createUserClient ?? createUserClient,
     rateLimit: dependencies.enforceBackendRateLimit ?? enforceBackendRateLimit,
-    env: dependencies.env ?? process.env,
     now: dependencies.now,
     siteUrl: dependencies.siteUrl,
   };
@@ -96,10 +90,6 @@ type Resolved = ReturnType<typeof resolve>;
 
 function siteOriginFor(request: Request, resolved: Resolved): string {
   return resolveMcpSiteOrigin(resolved.siteUrl) ?? new URL(request.url).origin;
-}
-
-function notFound(headers: Record<string, string> = {}): NextResponse {
-  return NextResponse.json({ error: 'not_found' }, { status: 404, headers: { ...NO_STORE_HEADERS, ...headers } });
 }
 
 /** How long a client told to wait is asked to: a grant's refresh limit is counted over an hour. */
@@ -150,7 +140,6 @@ function plainPage(status: number, message: string): NextResponse {
 
 async function handleAuthorize(request: Request, dependencies: AgentOAuthRouteDependencies): Promise<NextResponse> {
   const resolved = resolve(dependencies);
-  if (!isAppAuthorizationServerEnabled(resolved.env)) return notFound();
   const admin = resolved.admin();
   try {
     await resolved.rateLimit(admin, { ...AGENT_OAUTH_AUTHORIZE_RATE_LIMIT, key: getClientNetworkKey(request.headers) });
@@ -204,7 +193,6 @@ async function handleClientCall(
 ): Promise<NextResponse> {
   const cors = tokenCorsHeaders();
   const resolved = resolve(dependencies);
-  if (!isAppAuthorizationServerEnabled(resolved.env)) return notFound(cors);
   const authorizationHeader = request.headers.get('authorization');
   try {
     const admin = resolved.admin();
@@ -279,8 +267,8 @@ function bearerClaims(request: Request): Record<string, unknown> | null {
 
 /**
  * The registered account behind the web session's token, or the refusal. The proxy has already
- * admitted the request (`registered`, and it refuses an agent's token on every route but the MCP
- * ones); these routes decide what agents may do, so the agent-token refusal is repeated here on
+ * admitted the request (`registered`, and it refuses a Supabase agent JWT on every route,
+ * `agent-token.ts`); these routes decide what agents may do, so that refusal is repeated here on
  * the token itself, whose signature the lookup below has verified, in case the route is ever
  * reached without the proxy.
  */
@@ -328,7 +316,6 @@ const CONSENT_UNAVAILABLE = () => json({
 
 async function handleConsent(request: Request, dependencies: AgentOAuthRouteDependencies): Promise<NextResponse> {
   const resolved = resolve(dependencies);
-  if (!isAppAuthorizationServerEnabled(resolved.env)) return json({ error: 'Not found', code: 'NOT_FOUND' }, 404);
   if (!isSameOriginCall(request, resolved)) return json({ error: 'Forbidden', code: 'CROSS_ORIGIN_REFUSED' }, 403);
   const user = await requireWebAccount(request, resolved);
   if (user instanceof NextResponse) return user;
@@ -367,8 +354,6 @@ async function handleGrantsList(request: Request, dependencies: AgentOAuthRouteD
   const resolved = resolve(dependencies);
   const user = await requireWebAccount(request, resolved);
   if (user instanceof NextResponse) return user;
-  // With the server off there is nothing it could have granted.
-  if (!isAppAuthorizationServerEnabled(resolved.env)) return json({ grants: [] });
   try {
     const grants = await listAgentGrants(resolved.admin(), user.id);
     return json({
@@ -392,7 +377,6 @@ async function handleGrantsRevoke(request: Request, dependencies: AgentOAuthRout
   const body = await readJsonBody(request);
   const clientId = body?.clientId;
   if (!isClientId(clientId)) return json({ error: 'clientId is required.', code: 'INVALID_REQUEST' }, 400);
-  if (!isAppAuthorizationServerEnabled(resolved.env)) return json({ revoked: 0 });
   try {
     const admin = resolved.admin();
     await resolved.rateLimit(admin, { ...AGENT_OAUTH_CONSENT_RATE_LIMIT, key: user.id });

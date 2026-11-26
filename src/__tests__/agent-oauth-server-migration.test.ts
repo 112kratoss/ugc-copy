@@ -17,7 +17,7 @@ const FUNCTIONS = [
   'agent_oauth_import_supabase_clients(text[])',
 ] as const;
 
-// The app's own authorization server for MCP (docs/plans/agent-token-broker-plan-2026-11-26.md):
+// The app's own authorization server for MCP (docs/archive/agent-token-broker-plan-2026-11-26.md):
 // what the migration creates, and who may touch it.
 describe('agent_oauth_server migration', () => {
   it('creates the four tables', () => {

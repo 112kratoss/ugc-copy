@@ -3,11 +3,6 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
-  areSupabaseAgentTokensAccepted,
-  isAppAuthorizationServerEnabled,
-  resolveMcpAuthorizationServer,
-} from '@/lib/agent-oauth-mode';
-import {
   AGENT_ACCESS_TOKEN_PREFIX,
   AGENT_ACCESS_TOKEN_TTL_SECONDS,
   AGENT_AUTHORIZATION_CODE_TTL_SECONDS,
@@ -25,7 +20,7 @@ import {
 } from '@/lib/agent-oauth-tokens';
 import { isAppAgentAccessToken } from '@/lib/agent-token';
 
-// The secrets of the app's own authorization server (docs/plans/agent-token-broker-plan-2026-11-26.md).
+// The secrets of the app's own authorization server (docs/archive/agent-token-broker-plan-2026-11-26.md).
 describe('agent OAuth secrets', () => {
   it('mints 256 random bits behind a prefix, different every time', () => {
     const first = mintAgentSecret(AGENT_ACCESS_TOKEN_PREFIX);
@@ -99,30 +94,5 @@ describe('agent OAuth secrets', () => {
     expect(AGENT_REFRESH_TOKEN_TTL_SECONDS).toBe(90 * 86_400);
     expect(AGENT_AUTHORIZATION_CODE_TTL_SECONDS).toBe(120);
     expect(AGENT_REFRESH_REUSE_GRACE_SECONDS).toBe(10);
-  });
-});
-
-describe('MCP_AUTHORIZATION_SERVER', () => {
-  it('is Supabase until it says otherwise, so deploying the code changes nothing', () => {
-    for (const value of [undefined, '', 'supabase', 'SUPABASE', 'yes', '1', 'ap']) {
-      const env = { MCP_AUTHORIZATION_SERVER: value };
-      expect(resolveMcpAuthorizationServer(env), String(value)).toBe('supabase');
-      expect(isAppAuthorizationServerEnabled(env)).toBe(false);
-      expect(areSupabaseAgentTokensAccepted(env)).toBe(true);
-    }
-  });
-
-  it('runs both servers side by side for the proving stage', () => {
-    const env = { MCP_AUTHORIZATION_SERVER: ' Both ' };
-    expect(resolveMcpAuthorizationServer(env)).toBe('both');
-    expect(isAppAuthorizationServerEnabled(env)).toBe(true);
-    expect(areSupabaseAgentTokensAccepted(env)).toBe(true);
-  });
-
-  it('takes no Supabase token once it is the app alone', () => {
-    const env = { MCP_AUTHORIZATION_SERVER: 'app' };
-    expect(resolveMcpAuthorizationServer(env)).toBe('app');
-    expect(isAppAuthorizationServerEnabled(env)).toBe(true);
-    expect(areSupabaseAgentTokensAccepted(env)).toBe(false);
   });
 });

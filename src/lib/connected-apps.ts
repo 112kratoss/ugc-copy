@@ -1,19 +1,12 @@
 /**
  * Connected apps: the agents a creator has let act as them through the MCP server (the plan,
- * `docs/plans/agent-mcp-server-plan-2026-11-09.md`, phase 2). The grants are read and revoked in
- * two places while the cutover lasts (`docs/plans/agent-token-broker-plan-2026-11-26.md`):
+ * `docs/plans/agent-mcp-server-plan-2026-11-09.md`, phase 2). The grants are the app's own
+ * authorization server's (`docs/archive/agent-token-broker-plan-2026-11-26.md`), read and revoked
+ * through `/api/oauth/grants` with the web session's token (`createAppGrantsClient`): revoking
+ * deletes the grant's tokens, so the agent's next call and its next refresh are both refused.
  *
- * - the app's own authorization server, through `/api/oauth/grants` with the web session's token
- *   (`createAppGrantsClient`): revoking deletes the grant's tokens, so the agent's next call and
- *   its next refresh are both refused;
- * - Supabase Auth's OAuth grants API, from the web session (`supabase.auth.oauth.listGrants()`,
- *   `revokeGrant({ clientId })`; the spike, `docs/research/mcp-oauth-spike-2026-11-09.md`, check 3:
- *   camelCase, and a revoked grant deletes the client's sessions), which reads as no grants once
- *   its server is switched off.
- *
- * `combineConnectedAppsClients` makes one list of the two. The component on `/profile/edit` draws
- * what this module decides; nothing here is React or Supabase, so the decisions are tested on
- * their own.
+ * The component on `/profile/edit` draws what this module decides; nothing here is React or
+ * Supabase, so the decisions are tested on their own.
  */
 
 import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
@@ -24,7 +17,7 @@ export type ConnectedApp = {
   /** The client's own site, where it gave one. */
   uri: string | null;
   grantedAt: string | null;
-  /** True when every grant of this app is for the posting server alone (the app's own server says). */
+  /** True when every grant of this app is for the posting server alone (the grant says). */
   postingOnly?: boolean;
 };
 
@@ -86,15 +79,14 @@ export function toConnectedApps(grants: unknown): ConnectedApp[] {
   for (const entry of grants) {
     const grant = record(entry);
     const client = record(grant?.client);
-    const clientId = text(client?.id) ?? text(client?.client_id);
+    const clientId = text(client?.id);
     if (!clientId) continue;
     const grantedAt = text(grant?.granted_at);
-    // Only the app's own server says which server a grant is for; Supabase's never did.
     const postingOnly = grant?.surface === 'posts';
     const app: ConnectedApp = {
       clientId,
-      name: text(client?.name) ?? text(client?.client_name) ?? clientId,
-      uri: text(client?.client_uri) ?? text(client?.uri),
+      name: text(client?.name) ?? clientId,
+      uri: text(client?.uri),
       grantedAt: grantedAt && !Number.isNaN(Date.parse(grantedAt)) ? grantedAt : null,
       ...(postingOnly ? { postingOnly } : {}),
     };
@@ -125,32 +117,21 @@ export function formatConnectedDate(value: string | null): string | null {
     : `Connected ${date.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}`;
 }
 
-/** The slice of the browser client's OAuth API this module reads and writes. */
+/** The grants API this module reads and writes: `createAppGrantsClient`, or a test's fake. */
 export type ConnectedAppsClient = {
-  listGrants(): Promise<{ data: unknown; error: { code?: string; status?: number; message?: string } | null }>;
+  listGrants(): Promise<{ data: unknown; error: { status?: number; message?: string } | null }>;
   revokeGrant(params: { clientId: string }): Promise<{ error: { message?: string } | null }>;
 };
 
-/**
- * Supabase Auth's answer where its OAuth server is switched off (the local stack as shipped, a
- * preview project): there can be no grants, so the list is empty rather than failed. The code is
- * GoTrue's `feature_disabled`; a route the gateway does not know answers 404; the message says
- * the server is off.
- */
-export function isOAuthServerDisabledError(error: { code?: string; status?: number; message?: string } | null | undefined): boolean {
-  if (!error) return false;
-  if (error.code === 'feature_disabled' || error.status === 404) return true;
-  return /feature[_ ]disabled|oauth.*?(disabled|not enabled)/iu.test(error.message ?? '');
-}
 
-/** Where Connected apps reads and ends the grants of the app's own authorization server. */
+/** Where Connected apps reads and ends the grants. */
 export const APP_GRANTS_API_PATH = '/api/oauth/grants';
 
 type GrantsFetch = (input: string, init: RequestInit) => Promise<Pick<Response, 'ok' | 'status' | 'json'>>;
 
 /**
- * The app's own authorization server's grants, in the shape the rest of this module reads. Each
- * call carries the web session's token; with none there is no account to list for, which reads
+ * The grants, in the shape the rest of this module reads. Each call carries the web session's
+ * token; with none there is no account to list for, which reads
  * as a failure, never as an empty list.
  */
 export function createAppGrantsClient(options: {
@@ -195,50 +176,9 @@ export function createAppGrantsClient(options: {
   };
 }
 
-/**
- * Several grant sources as one. The list is every source's grants together (a source whose OAuth
- * server is switched off has none); a failure of any source is the list's failure, since a list
- * missing a live grant would read as "nothing is connected". A disconnect goes to each source
- * that listed the app, and fails if any of them refuses: the row comes back, and the app is not
- * said to be disconnected while one of its grants lives.
- */
-export function combineConnectedAppsClients(sources: readonly ConnectedAppsClient[]): ConnectedAppsClient {
-  const listedBy = new Map<string, Set<number>>();
-  return {
-    async listGrants() {
-      const answers = await Promise.all(sources.map((source) => source.listGrants()));
-      listedBy.clear();
-      const grants: unknown[] = [];
-      for (const [index, answer] of answers.entries()) {
-        if (answer.error) {
-          if (isOAuthServerDisabledError(answer.error)) continue;
-          return { data: null, error: answer.error };
-        }
-        const list = Array.isArray(answer.data) ? answer.data : [];
-        for (const app of toConnectedApps(list)) {
-          const sourcesOfApp = listedBy.get(app.clientId) ?? new Set<number>();
-          sourcesOfApp.add(index);
-          listedBy.set(app.clientId, sourcesOfApp);
-        }
-        grants.push(...list);
-      }
-      return { data: grants, error: null };
-    },
-    async revokeGrant(params) {
-      // An app no list named (the list was never read) is ended everywhere.
-      const targets = listedBy.get(params.clientId) ?? new Set(sources.keys());
-      const answers = await Promise.all([...targets].map((index) => sources[index].revokeGrant(params)));
-      return { error: answers.find((answer) => answer.error)?.error ?? null };
-    },
-  };
-}
-
 export async function listConnectedApps(client: ConnectedAppsClient): Promise<ConnectedApp[]> {
   const { data, error } = await client.listGrants();
-  if (error) {
-    if (isOAuthServerDisabledError(error)) return [];
-    throw new Error(error.message || 'The connected apps could not be read.');
-  }
+  if (error) throw new Error(error.message || 'The connected apps could not be read.');
   return toConnectedApps(data);
 }
 

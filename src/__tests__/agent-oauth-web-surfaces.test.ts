@@ -5,13 +5,11 @@ import {
   APP_GRANTS_API_PATH,
   CONNECTED_APP_ACCESS,
   POSTING_CONNECTED_APP_ACCESS,
-  combineConnectedAppsClients,
   connectedAppAccess,
   createAppGrantsClient,
   disconnectApp,
   listConnectedApps,
   toConnectedApps,
-  type ConnectedAppsClient,
 } from '@/lib/connected-apps';
 import { getVerifiedIdentityAdmission, registerAdmittedIdentity } from '@/lib/identity-admission-assertion';
 import {
@@ -30,9 +28,9 @@ import { buildOAuthProtectedResourceMetadata } from '@/lib/oauth-protected-resou
 import { routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
 
-// What this app's own pages and documents do once the app is its own authorization server
-// (docs/plans/agent-token-broker-plan-2026-11-26.md): the consent page's answer, Connected apps
-// over both servers, the protected-resource document, and the identity a route may register.
+// What this app's own pages and documents do with the app's own authorization server
+// (docs/archive/agent-token-broker-plan-2026-11-26.md): the consent page's answer, Connected apps,
+// the protected-resource document, and the identity a route may register.
 
 const AUTHORIZATION_ID = `mbar_${'a'.repeat(43)}`;
 const ANSWER = { authorizationId: AUTHORIZATION_ID, decision: 'approve' as const, consentToken: `mbct_${'c'.repeat(43)}` };
@@ -94,7 +92,6 @@ describe('the consent page and the app\'s own requests', () => {
 describe('Connected apps over the app\'s own grants', () => {
   const APP_GRANT = { client: { id: 'client-claude', name: 'Claude Code', uri: 'https://claude.com/claude-code' }, granted_at: '2026-11-26T12:00:00.000Z', surface: 'full' };
   const POSTS_GRANT = { client: { id: 'client-posting', name: 'Claude (posting)', uri: null }, granted_at: '2026-11-25T12:00:00.000Z', surface: 'posts' };
-  const SUPABASE_GRANT = { client: { id: 'client-codex', name: 'Codex' }, granted_at: '2026-11-08T09:00:00.000Z' };
 
   it('reads the grants with the session\'s token, and a failure as a failure', async () => {
     const send = answerOf(200, { grants: [APP_GRANT, POSTS_GRANT] });
@@ -139,78 +136,21 @@ describe('Connected apps over the app\'s own grants', () => {
     expect(onlyPosts[0]).toMatchObject({ postingOnly: true, grantedAt: '2026-11-20T00:00:00.000Z' });
   });
 
-  function source(grants: unknown[] | { error: { code?: string; status?: number; message?: string } }) {
-    return {
-      listGrants: vi.fn(async () => (Array.isArray(grants) ? { data: grants, error: null } : { data: null, error: grants.error })),
-      revokeGrant: vi.fn(async () => ({ error: null as { message?: string } | null })),
-    } satisfies ConnectedAppsClient;
-  }
-
-  it('lists both servers\' grants as one, and reads a switched-off Supabase server as none', async () => {
-    const app = source([APP_GRANT]);
-    const supabase = source([SUPABASE_GRANT]);
-    await expect(listConnectedApps(combineConnectedAppsClients([app, supabase]))).resolves.toMatchObject([
-      { clientId: 'client-claude' },
-      { clientId: 'client-codex' },
-    ]);
-    const off = source({ error: { code: 'feature_disabled' } });
-    await expect(listConnectedApps(combineConnectedAppsClients([app, off]))).resolves.toMatchObject([{ clientId: 'client-claude' }]);
-  });
-
-  it('fails the whole list when one server cannot be read: a missing grant must not read as disconnected', async () => {
-    const app = source([APP_GRANT]);
-    const broken = source({ error: { status: 500, message: 'Auth is unavailable.' } });
-    await expect(listConnectedApps(combineConnectedAppsClients([app, broken]))).rejects.toThrow('Auth is unavailable.');
-  });
-
-  it('disconnects at each server that listed the app, and only there', async () => {
-    const app = source([APP_GRANT, SUPABASE_GRANT]);
-    const supabase = source([SUPABASE_GRANT]);
-    const combined = combineConnectedAppsClients([app, supabase]);
-    await listConnectedApps(combined);
-    await combined.revokeGrant({ clientId: 'client-claude' });
-    expect(app.revokeGrant).toHaveBeenCalledWith({ clientId: 'client-claude' });
-    expect(supabase.revokeGrant).not.toHaveBeenCalled();
-    await combined.revokeGrant({ clientId: 'client-codex' });
-    expect(app.revokeGrant).toHaveBeenCalledTimes(2);
-    expect(supabase.revokeGrant).toHaveBeenCalledWith({ clientId: 'client-codex' });
-  });
-
-  it('says a disconnect failed when either server refused, and ends an app no list named everywhere', async () => {
-    const app = source([SUPABASE_GRANT]);
-    const supabase = source([SUPABASE_GRANT]);
-    supabase.revokeGrant.mockResolvedValue({ error: { message: 'still connected' } });
-    const combined = combineConnectedAppsClients([app, supabase]);
-    await listConnectedApps(combined);
-    await expect(combined.revokeGrant({ clientId: 'client-codex' })).resolves.toEqual({ error: { message: 'still connected' } });
-
-    const fresh = [source([]), source([])];
-    await combineConnectedAppsClients(fresh).revokeGrant({ clientId: 'client-unlisted' });
-    expect(fresh[0].revokeGrant).toHaveBeenCalledTimes(1);
-    expect(fresh[1].revokeGrant).toHaveBeenCalledTimes(1);
+  it('leaves out a grant without a client id', () => {
+    expect(toConnectedApps([{ client: { client_id: 'client-codex', name: 'Codex' }, granted_at: '2026-11-08T09:00:00.000Z' }, APP_GRANT]))
+      .toMatchObject([{ clientId: 'client-claude' }]);
+    expect(toConnectedApps(null)).toEqual([]);
   });
 });
 
-describe('the protected-resource document and the flag', () => {
-  const base = { siteUrl: 'https://magicbooklet.com/', supabaseUrl: 'https://abcdefgh.supabase.co' };
-
-  it('names Supabase until the flag says otherwise, then the app, never both', () => {
-    expect(buildOAuthProtectedResourceMetadata({ ...base, env: {} })?.authorization_servers).toEqual(['https://abcdefgh.supabase.co/auth/v1']);
-    expect(buildOAuthProtectedResourceMetadata({ ...base, env: { MCP_AUTHORIZATION_SERVER: 'supabase' } })?.authorization_servers).toEqual(['https://abcdefgh.supabase.co/auth/v1']);
-    for (const mode of ['both', 'app']) {
-      for (const surface of ['full', 'posts'] as const) {
-        expect(buildOAuthProtectedResourceMetadata({ ...base, surface, env: { MCP_AUTHORIZATION_SERVER: mode } })?.authorization_servers).toEqual(['https://magicbooklet.com']);
-      }
+describe('the protected-resource document', () => {
+  it('names the app as the authorization server, for both servers, and needs no Supabase URL', () => {
+    for (const surface of ['full', 'posts'] as const) {
+      const metadata = buildOAuthProtectedResourceMetadata({ siteUrl: 'https://magicbooklet.com/', surface });
+      expect(metadata?.authorization_servers).toEqual(['https://magicbooklet.com']);
+      expect(JSON.stringify(metadata)).not.toMatch(/supabase|auth\/v1/u);
     }
-  });
-
-  it('needs no Supabase URL once the app is the authorization server', () => {
-    expect(buildOAuthProtectedResourceMetadata({ siteUrl: base.siteUrl, supabaseUrl: '', env: { MCP_AUTHORIZATION_SERVER: 'app' } })).toMatchObject({
-      resource: 'https://magicbooklet.com/api/mcp',
-      authorization_servers: ['https://magicbooklet.com'],
-    });
-    expect(buildOAuthProtectedResourceMetadata({ siteUrl: base.siteUrl, supabaseUrl: '', env: {} })).toBeNull();
-    expect(buildOAuthProtectedResourceMetadata({ siteUrl: '', supabaseUrl: base.supabaseUrl, env: { MCP_AUTHORIZATION_SERVER: 'app' } })).toBeNull();
+    expect(buildOAuthProtectedResourceMetadata({ siteUrl: '' })).toBeNull();
   });
 });
 

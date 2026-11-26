@@ -3,15 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   AGENT_TOKEN_CLAIM,
   MCP_POSTS_ROUTE_PATH,
-  MCP_ROUTE_PATHS,
   MCP_ROUTE_PATH,
   agentTokenClientId,
   isAgentToken,
-  routeAcceptsAgentToken,
+  isAppAgentAccessToken,
 } from '@/lib/agent-token';
 
 describe('agent tokens', () => {
-  it('is the client_id claim an OAuth-issued token carries, and nothing an app session has', () => {
+  it('knows a Supabase agent JWT by the client_id claim, which no app session has', () => {
     expect(AGENT_TOKEN_CLAIM).toBe('client_id');
     expect(agentTokenClientId({ sub: 'u', client_id: ' client-claude ' })).toBe('client-claude');
     expect(isAgentToken({ client_id: 'client-claude' })).toBe(true);
@@ -29,14 +28,23 @@ describe('agent tokens', () => {
     }
   });
 
-  it('is admitted to the MCP routes, the full server and its posting-only form, and to no other path', () => {
+  it('knows the app\'s own access token by its shape alone, and never a JWT', () => {
+    expect(isAppAgentAccessToken(`mbat_${'A'.repeat(43)}`)).toBe(true);
+    for (const token of [
+      `mbat_${'A'.repeat(42)}`,
+      `mbrt_${'A'.repeat(43)}`,
+      `mbat_${'A'.repeat(42)}=`,
+      'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln',
+      '',
+      null,
+      undefined,
+    ]) {
+      expect(isAppAgentAccessToken(token), String(token)).toBe(false);
+    }
+  });
+
+  it('names the MCP routes, the full server and its posting-only form', () => {
     expect(MCP_ROUTE_PATH).toBe('/api/mcp');
     expect(MCP_POSTS_ROUTE_PATH).toBe('/api/mcp/posts');
-    expect(MCP_ROUTE_PATHS).toEqual(['/api/mcp', '/api/mcp/posts']);
-    expect(routeAcceptsAgentToken('/api/mcp')).toBe(true);
-    expect(routeAcceptsAgentToken('/api/mcp/posts')).toBe(true);
-    for (const pathname of ['/api/mcp/', '/api/mcp/other', '/api/mcp/posts/', '/api/mcp/posts/x', '/api/posts', '/api/generations', '/api/showcase/feed', '/api', '/']) {
-      expect(routeAcceptsAgentToken(pathname), pathname).toBe(false);
-    }
   });
 });

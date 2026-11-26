@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 
-import { isAppAuthorizationServerEnabled } from '@/lib/agent-oauth-mode';
 import { MCP_DEVELOPERS_PAGE_PATH, MCP_POSTS_PAGE_PATH } from '@/lib/mcp-client-directory';
 import { MCP_SURFACE_ROUTE_PATHS, type McpSurface } from '@/lib/mcp-surfaces';
 
@@ -9,11 +8,8 @@ import { MCP_SURFACE_ROUTE_PATHS, type McpSurface } from '@/lib/mcp-surfaces';
  *
  * An MCP client that is answered 401 reads the `resource_metadata` URL from the
  * `WWW-Authenticate` header (`mcp-route-adapter-service.ts`), fetches this document, and takes
- * the authorization server from it. Which one is `MCP_AUTHORIZATION_SERVER`
- * (`agent-oauth-mode.ts`): the app's own, whose issuer is the site's origin
- * (`oauth-authorization-server-metadata.ts`), once the flag is `both` or `app`; until then
- * Supabase Auth's OAuth 2.1 server, whose issuer is the project's `/auth/v1`. Never both: a client
- * takes the first it is given. The same document is served at the path-aware well-known URL for the
+ * the authorization server from it: the app's own, whose issuer is the site's origin
+ * (`oauth-authorization-server-metadata.ts`). The same document is served at the path-aware well-known URL for the
  * MCP route and at the origin's root well-known URL, because clients differ in which one they
  * try first, and both name the MCP route as the resource.
  *
@@ -36,11 +32,8 @@ export type OAuthProtectedResourceMetadata = {
 
 export type OAuthProtectedResourceEnvironment = {
   siteUrl?: string;
-  supabaseUrl?: string;
   /** Which server the document describes; the full one unless said. */
   surface?: McpSurface;
-  /** Where the cutover flag is read from; the process environment unless said. */
-  env?: Record<string, string | undefined>;
 };
 
 const RESOURCE_NAMES: Readonly<Record<McpSurface, string>> = {
@@ -81,32 +74,19 @@ export function protectedResourceMetadataUrl(siteOrigin: string, surface: McpSur
 }
 
 /**
- * The document, or null when the site URL is not configured, or the Supabase URL while Supabase
- * is still the authorization server (a checkout that cannot name an authorization server must
- * not invent one).
+ * The document, or null when the site URL is not configured (a checkout that cannot name its
+ * own origin must not invent one).
  */
 export function buildOAuthProtectedResourceMetadata({
   siteUrl = process.env.NEXT_PUBLIC_SITE_URL,
-  supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL,
   surface = 'full',
-  env = process.env,
 }: OAuthProtectedResourceEnvironment = {}): OAuthProtectedResourceMetadata | null {
   const siteOrigin = origin(siteUrl);
   if (!siteOrigin) return null;
-  let authorizationServer: string;
-  if (isAppAuthorizationServerEnabled(env)) {
-    // The app's own server: its issuer is the origin, its RFC 8414 document at the root.
-    authorizationServer = siteOrigin;
-  } else {
-    const supabaseOrigin = origin(supabaseUrl);
-    if (!supabaseOrigin) return null;
-    // Supabase Auth's OAuth server issuer. Its RFC 8414 metadata is served under the issuer
-    // path, which the client resolves from this value.
-    authorizationServer = `${supabaseOrigin}/auth/v1`;
-  }
   return {
     resource: mcpResourceUrl(siteOrigin, surface),
-    authorization_servers: [authorizationServer],
+    // The app's own server: its issuer is the origin, its RFC 8414 document at the root.
+    authorization_servers: [siteOrigin],
     bearer_methods_supported: ['header'],
     resource_name: RESOURCE_NAMES[surface],
     resource_documentation: `${siteOrigin}${RESOURCE_DOCUMENTATION_PATHS[surface]}`,
@@ -114,9 +94,8 @@ export function buildOAuthProtectedResourceMetadata({
 }
 
 /**
- * Public and cacheable: the document holds no secret. Five minutes, not the day it had: the
- * authorization server it names changes with the cutover flag, and a client must not go on
- * reading the old one for a day after it.
+ * Public and cacheable: the document holds no secret. Five minutes, so a change to it reaches
+ * every client within the hour it ships.
  */
 const METADATA_CACHE_CONTROL = 'public, max-age=300, s-maxage=300';
 

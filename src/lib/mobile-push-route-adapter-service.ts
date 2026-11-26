@@ -58,9 +58,7 @@ async function handleMobilePushUnregisterPOST(
 ) {
   return toJsonResponse(await dependencies.unregisterMobilePushTokenForRoute({
     // "Sign out everywhere" asks for the whole account here first, and that also ends the apps
-    // connected through the app's own authorization server. Whatever MCP_AUTHORIZATION_SERVER
-    // says: a grant made while that server was on must not outlive a sign-out made while it is
-    // rolled back, and come to life again when it is switched back on.
+    // connected through the app's own authorization server.
     endAgentAccess: (userId: string) => disconnectEveryAgentClient(dependencies.createServiceClient(), { userId }),
     getAdminSupabase: dependencies.createServiceClient,
     readRequestBody: () => request.json(),

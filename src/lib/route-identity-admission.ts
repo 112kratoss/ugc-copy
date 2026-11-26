@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, isAuthRetryableFetchError, type User } from '@supabase/supabase-js';
-import { isAgentToken, routeAcceptsAgentToken } from '@/lib/agent-token';
+import { isAgentToken } from '@/lib/agent-token';
 import { routeIdentityPolicyForRequest } from '@/lib/route-identity-policy';
 import {
   IDENTITY_ADMISSION_HEADER,
@@ -185,12 +185,11 @@ export async function evaluateUserFacingRouteIdentity(
     }
     verifiedClaims = claims;
 
-    // An agent's token (issued by Supabase Auth's OAuth server to an MCP client, and carrying
-    // that client's id) drives only the MCP server, whose own admission requires the claim.
-    // Refused before the lifecycle round trip. This keeps the token off this app's other API
-    // routes; against Supabase directly it stays the creator's session under RLS, like any user
-    // token, so a leak is answered by revoking the grant (agent-token.ts).
-    if (isAgentToken(claims) && !routeAcceptsAgentToken(request.nextUrl.pathname)) {
+    // A Supabase agent JWT (one carrying an OAuth client's id, agent-token.ts) drives no route of
+    // this app: agents sign in through the app's own authorization server, whose opaque token is
+    // no JWT, and the MCP routes own their admission and refuse every JWT. Refused before the
+    // lifecycle round trip.
+    if (isAgentToken(claims)) {
       return result(identityRejection(
         403,
         'AGENT_TOKEN_NOT_ALLOWED',

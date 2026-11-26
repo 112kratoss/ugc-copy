@@ -217,7 +217,7 @@ describe('mobile push token unregister service', () => {
 
   // That same request is how both clients say "Sign out everywhere" to this app, and the sign-out
   // itself ends sessions only. An app connected through the app's own authorization server is not
-  // a session, so the account's are ended here (docs/plans/agent-token-broker-plan-2026-11-26.md).
+  // a session, so the account's are ended here (docs/archive/agent-token-broker-plan-2026-11-26.md).
   it('ends the account\'s connected apps with a sign-out everywhere, and with nothing less', async () => {
     const endAgentAccess = vi.fn(async () => 2);
     const everywhere = createUserClient();

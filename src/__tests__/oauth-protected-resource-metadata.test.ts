@@ -14,14 +14,13 @@ import {
 describe('OAuth protected resource metadata (RFC 9728)', () => {
   beforeEach(() => {
     vi.stubEnv('NEXT_PUBLIC_SITE_URL', 'https://magicbooklet.com/');
-    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://abcdefgh.supabase.co');
   });
   afterEach(() => vi.unstubAllEnvs());
 
-  it('names the MCP route as the resource, Supabase Auth as its authorization server, and the setup page', () => {
+  it('names the MCP route as the resource, the app itself as its authorization server, and the setup page', () => {
     expect(buildOAuthProtectedResourceMetadata()).toEqual({
       resource: 'https://magicbooklet.com/api/mcp',
-      authorization_servers: ['https://abcdefgh.supabase.co/auth/v1'],
+      authorization_servers: ['https://magicbooklet.com'],
       bearer_methods_supported: ['header'],
       resource_name: 'Magicbooklet MCP server',
       resource_documentation: 'https://magicbooklet.com/developers/mcp',
@@ -32,7 +31,7 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
     // Claude takes a document only when its resource equals the URL the person connected, path included.
     expect(buildOAuthProtectedResourceMetadata({ surface: 'posts' })).toEqual({
       resource: 'https://magicbooklet.com/api/mcp/posts',
-      authorization_servers: ['https://abcdefgh.supabase.co/auth/v1'],
+      authorization_servers: ['https://magicbooklet.com'],
       bearer_methods_supported: ['header'],
       resource_name: 'Magicbooklet posting server',
       resource_documentation: 'https://magicbooklet.com/developers/mcp/posting',
@@ -52,23 +51,18 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
   });
 
   it('links the documentation on the origin it serves, as it does the resource', () => {
-    expect(buildOAuthProtectedResourceMetadata({
-      siteUrl: 'http://127.0.0.1:3100',
-      supabaseUrl: 'https://example.supabase.co',
-    })?.resource_documentation).toBe('http://127.0.0.1:3100/developers/mcp');
+    expect(buildOAuthProtectedResourceMetadata({ siteUrl: 'http://127.0.0.1:3100' })?.resource_documentation)
+      .toBe('http://127.0.0.1:3100/developers/mcp');
   });
 
-  it('builds from the values given, and from nothing when either URL is missing or malformed', () => {
-    expect(buildOAuthProtectedResourceMetadata({
-      siteUrl: 'http://127.0.0.1:3100',
-      supabaseUrl: 'https://example.supabase.co/',
-    })).toMatchObject({
+  it('builds from the site URL given, and from nothing when it is missing or malformed', () => {
+    expect(buildOAuthProtectedResourceMetadata({ siteUrl: 'http://127.0.0.1:3100/some/path' })).toMatchObject({
       resource: 'http://127.0.0.1:3100/api/mcp',
-      authorization_servers: ['https://example.supabase.co/auth/v1'],
+      authorization_servers: ['http://127.0.0.1:3100'],
     });
-    expect(buildOAuthProtectedResourceMetadata({ siteUrl: '', supabaseUrl: 'https://x.supabase.co' })).toBeNull();
-    expect(buildOAuthProtectedResourceMetadata({ siteUrl: 'https://magicbooklet.com', supabaseUrl: 'not a url' })).toBeNull();
-    expect(buildOAuthProtectedResourceMetadata({ siteUrl: 'ftp://magicbooklet.com', supabaseUrl: 'https://x.supabase.co' })).toBeNull();
+    expect(buildOAuthProtectedResourceMetadata({ siteUrl: '' })).toBeNull();
+    expect(buildOAuthProtectedResourceMetadata({ siteUrl: 'not a url' })).toBeNull();
+    expect(buildOAuthProtectedResourceMetadata({ siteUrl: 'ftp://magicbooklet.com' })).toBeNull();
   });
 
   it('derives the challenge URL and the resource from the site origin alone', () => {
@@ -84,7 +78,7 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
       const response = handler();
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('application/json');
-      // Five minutes: the authorization server it names changes with the cutover flag.
+      // Five minutes: a change to it reaches every client within the hour it ships.
       expect(response.headers.get('cache-control')).toBe('public, max-age=300, s-maxage=300');
       expect(response.headers.get('access-control-allow-origin')).toBe('*');
       expect(response.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
@@ -99,7 +93,7 @@ describe('OAuth protected resource metadata (RFC 9728)', () => {
   });
 
   it('answers 404 and nothing cacheable when the deployment is not configured for it', async () => {
-    const response = createProtectedResourceMetadataResponse({ siteUrl: '', supabaseUrl: '' });
+    const response = createProtectedResourceMetadataResponse({ siteUrl: '' });
     expect(response.status).toBe(404);
     expect(response.headers.get('cache-control')).toBe('no-store');
     await expect(response.json()).resolves.toMatchObject({ code: 'MCP_NOT_CONFIGURED' });

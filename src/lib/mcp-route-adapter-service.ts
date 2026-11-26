@@ -9,13 +9,11 @@ import {
 import { after, NextRequest, NextResponse } from 'next/server';
 
 import { admitAgentAccessToken } from '@/lib/agent-oauth-admission';
-import { resolveMcpAuthorizationServer } from '@/lib/agent-oauth-mode';
-import { agentTokenClientId, isAppAgentAccessToken } from '@/lib/agent-token';
+import { isAppAgentAccessToken } from '@/lib/agent-token';
 import { buildAgentToolCallRow, recordAgentToolCall } from '@/lib/agent-tool-calls';
 import { getApiRequestId } from '@/lib/api-cache';
 import { logBackendEvent, logBackendInfo, logBackendWarning } from '@/lib/backend-logger';
 import type { RunAfterResponse } from '@/lib/deferrable-notification';
-import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
 import {
   createMcpServer,
   defaultMcpToolServices,
@@ -34,12 +32,7 @@ import {
   IDENTITY_PROXY_TIMING_HEADER,
   registerAdmittedIdentity,
 } from '@/lib/identity-admission-assertion';
-import {
-  evaluateUserFacingRouteIdentity,
-  type ProxyIdentityDependencies,
-} from '@/lib/route-identity-admission';
-import { rebuildAdmittedRequest } from '@/lib/route-owned-identity-admission';
-import { createRequestServiceClient, createServiceClient, createUserClient } from '@/lib/server-helpers';
+import { createRequestServiceClient, createServiceClient } from '@/lib/server-helpers';
 
 /**
  * HTTP for the MCP server at /api/mcp and its posting-only form at /api/mcp/posts
@@ -64,21 +57,13 @@ import { createRequestServiceClient, createServiceClient, createUserClient } fro
  * Admission. The proxy leaves this route to itself (`route-owned-identity-admission.ts`) so the
  * refusals can carry what MCP clients need: a missing or invalid token answers 401 with a
  * `WWW-Authenticate` challenge naming the protected-resource metadata (RFC 9728), which starts
- * the client's OAuth flow. Which tokens are taken is `MCP_AUTHORIZATION_SERVER`
- * (`agent-oauth-mode.ts`), and the token's shape picks the path:
- *
- * - The app's own opaque token (`mbat_…`, `agent-oauth-admission.ts`), unless the flag is
- *   `supabase`: one database round trip answers the token, its grant and the account's lifecycle.
- *   The tools then run on a service-role client made for the request and told who the admitted
- *   account is; the agent's token is taken off the request the services see, so it goes nowhere.
- * - A Supabase JWT, unless the flag is `app`: the proxy's own evaluator, so revocation, ban and
- *   lifecycle are checked afresh on every call; a guest's token answers 403 REGISTRATION_REQUIRED
- *   as the proxy would, and a token without the agent claim answers 403 AGENT_TOKEN_REQUIRED
- *   (`agent-token.ts`), so a copied app session cannot drive the server. The admitted request
- *   carries the same trusted assertion the services see behind the proxy.
- *
- * Once the flag is `app`, no JWT is taken at all, an agent's or a first-party session's: it is
- * answered 401 before anything reads it.
+ * the client's OAuth flow at the app's own authorization server. The only token taken is that
+ * server's opaque access token (`mbat_…`): one database round trip answers the token, its grant
+ * and the account's lifecycle, in the proxy's order (`agent-oauth-admission.ts`). The tools then
+ * run on a service-role client made for the request and told who the admitted account is; the
+ * agent's token is taken off the request the services see, so it goes nowhere. A JWT of any
+ * kind, an agent's or a first-party session's, is answered 401 before anything reads it, so a
+ * copied app session cannot drive the server.
  *
  * The record. Every tool call writes one log line (`mcp_tool_call`, below) and one row of
  * `public.agent_tool_calls` (`agent-tool-calls.ts`), the audit table moderation reads to list
@@ -94,11 +79,9 @@ type Environment = Record<string, string | undefined>;
 export type McpRouteDependencies = {
   /** Which server the route is: the full one unless said (`mcp-surfaces.ts`). */
   surface?: McpSurface;
-  identity?: ProxyIdentityDependencies;
   services?: Partial<McpToolServices>;
-  createUserClient?: typeof createUserClient;
   createServiceClient?: typeof createServiceClient;
-  /** The per-request service client the tools get behind an app token; its own, never the shared one. */
+  /** The per-request service client the tools run on; its own, never the shared one. */
   createRequestServiceClient?: typeof createRequestServiceClient;
   kieApiKey?: string;
   siteUrl?: string;
@@ -156,10 +139,6 @@ function unauthorizedResponse(siteOrigin: string, description: string, surface: 
   );
 }
 
-function forbiddenResponse(code: string, error: string): NextResponse {
-  return NextResponse.json({ error, code }, { status: 403, headers: { 'Cache-Control': NO_STORE } });
-}
-
 function siteOriginFor(request: NextRequest, dependencies: McpRouteDependencies): string {
   return resolveMcpSiteOrigin(dependencies.siteUrl) ?? new URL(request.url).origin;
 }
@@ -179,10 +158,10 @@ const modernHandler = createMcpHandler(
 );
 
 /**
- * The request the services see behind an app token: the caller's, without its Authorization
- * header (the opaque token means nothing downstream and must not travel) and without any
- * assertion or timing header the caller sent. The body is read once, as `rebuildAdmittedRequest`
- * does and for the same reason.
+ * The request the services see: the caller's, without its Authorization header (the opaque token
+ * means nothing downstream and must not travel) and without any assertion or timing header the
+ * caller sent. The body is read once, as `rebuildAdmittedRequest` does
+ * (`route-owned-identity-admission.ts`) and for the same reason.
  */
 async function rebuildRequestWithoutCredentials(request: NextRequest): Promise<NextRequest> {
   const headers = new Headers(request.headers);
@@ -197,16 +176,16 @@ async function rebuildRequestWithoutCredentials(request: NextRequest): Promise<N
   });
 }
 
-/** What the SDK is given as the token behind an app token: a marker, never the secret. */
+/** What the SDK is given as the token: a marker, never the secret. */
 const APP_TOKEN_MARKER = 'app-agent-token';
 
 function bearerTokenOf(authorization: string): string | null {
   return authorization.match(/^Bearer\s+(\S+)$/iu)?.[1] ?? null;
 }
 
-async function serveMcp(admitted: NextRequest, context: McpToolContext, bearerToken: string): Promise<Response> {
+async function serveMcp(admitted: NextRequest, context: McpToolContext): Promise<Response> {
   const authInfo: AuthInfo = {
-    token: bearerToken,
+    token: APP_TOKEN_MARKER,
     clientId: context.clientId,
     scopes: [],
     extra: { userId: context.userId, mcpContext: context },
@@ -301,13 +280,11 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
     return unauthorizedResponse(siteOrigin, 'Sign in to Magicbooklet to use this server.', surface);
   }
 
-  const mode = resolveMcpAuthorizationServer(env);
   const bearer = bearerTokenOf(authorization);
-  const appToken = isAppAgentAccessToken(bearer);
-  // The flag decides which kind of token is read at all: an app token while the app's server is
-  // off, or any JWT once the app's server is the only one, is refused before anything looks at it.
-  if (!bearer || (appToken ? mode === 'supabase' : mode === 'app')) {
-    logBackendWarning('mcp_request_refused', { status: 401, reason: 'token_kind', mode, surface });
+  // Only the app's own opaque token is read at all: a JWT of any kind, an agent's or a
+  // first-party session's, is refused here before anything looks at it.
+  if (!isAppAgentAccessToken(bearer)) {
+    logBackendWarning('mcp_request_refused', { status: 401, reason: 'token_kind', surface });
     return unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.', surface);
   }
 
@@ -319,76 +296,28 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
     return admin;
   };
 
-  let userId: string;
-  let clientId: string;
-  let admitted: NextRequest;
-  let createUserSupabase: McpToolContext['createUserSupabase'];
-  let sdkToken: string;
-
-  if (appToken) {
-    const admission = await admitAgentAccessToken(bearer, { admin: createAdminSupabase(), surface });
-    if (!admission.ok) {
-      logBackendWarning('mcp_request_refused', { status: admission.status, code: admission.code, surface });
-      return admission.status === 401
-        ? unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.', surface)
-        : NextResponse.json(
-            { error: admission.error, code: admission.code },
-            { status: admission.status, headers: { 'Cache-Control': NO_STORE } },
-          );
-    }
-    userId = admission.userId;
-    clientId = admission.clientId;
-    admitted = await rebuildRequestWithoutCredentials(request);
-    const makeRequestClient = dependencies.createRequestServiceClient ?? createRequestServiceClient;
-    let requestClient: ReturnType<typeof createRequestServiceClient> | null = null;
-    createUserSupabase = () => {
-      if (!requestClient) {
-        requestClient = makeRequestClient();
-        // The services ask this client who the caller is (`getVerifiedAuthUserResult`).
-        registerAdmittedIdentity(requestClient, admission.user);
-      }
-      return requestClient;
-    };
-    sdkToken = APP_TOKEN_MARKER;
-  } else {
-    const admission = await evaluateUserFacingRouteIdentity(request, dependencies.identity);
-    if (admission.rejection) {
-      const code = typeof admission.claims?.sub === 'string' ? 'identity' : 'token';
-      logBackendWarning('mcp_request_refused', { status: admission.rejection.status, reason: code, surface });
-      return admission.rejection.status === 401
-        ? unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.', surface)
-        : admission.rejection;
-    }
-    const claimedClientId = agentTokenClientId(admission.claims);
-    const claimedUserId = typeof admission.claims?.sub === 'string' ? admission.claims.sub : null;
-    if (!claimedUserId) {
-      logBackendWarning('mcp_request_refused', { code: 'UNAUTHORIZED', reason: 'no_claims', surface });
-      return unauthorizedResponse(siteOrigin, 'The access token could not be verified. Sign in again.', surface);
-    }
-    if (!claimedClientId) {
-      logBackendWarning('mcp_request_refused', { code: 'AGENT_TOKEN_REQUIRED', userId: claimedUserId, surface });
-      return forbiddenResponse(
-        'AGENT_TOKEN_REQUIRED',
-        'Only a token issued to an agent through the Magicbooklet OAuth server can use the MCP server.',
-      );
-    }
-
-    if (surface === 'full' && isPostingOnlyClientId(claimedClientId)) {
-      // The consent page showed this client the posting-only list (`oauth-consent-service.ts`).
-      logBackendWarning('mcp_request_refused', { code: 'AGENT_SURFACE_NOT_ALLOWED', userId: claimedUserId, clientId: claimedClientId, surface });
-      return forbiddenResponse(
-        'AGENT_SURFACE_NOT_ALLOWED',
-        'This app was connected for posting only. It can use the Magicbooklet posting server, not this one.',
-      );
-    }
-    userId = claimedUserId;
-    clientId = claimedClientId;
-    const admittedRequest = await rebuildAdmittedRequest(request, admission);
-    admitted = admittedRequest;
-    const makeUserClient = dependencies.createUserClient ?? createUserClient;
-    createUserSupabase = () => makeUserClient(admittedRequest);
-    sdkToken = bearer;
+  const admission = await admitAgentAccessToken(bearer, { admin: createAdminSupabase(), surface });
+  if (!admission.ok) {
+    logBackendWarning('mcp_request_refused', { status: admission.status, code: admission.code, surface });
+    return admission.status === 401
+      ? unauthorizedResponse(siteOrigin, 'The access token is invalid or has expired. Sign in again.', surface)
+      : NextResponse.json(
+          { error: admission.error, code: admission.code },
+          { status: admission.status, headers: { 'Cache-Control': NO_STORE } },
+        );
   }
+  const { userId, clientId } = admission;
+  const admitted = await rebuildRequestWithoutCredentials(request);
+  const makeRequestClient = dependencies.createRequestServiceClient ?? createRequestServiceClient;
+  let requestClient: ReturnType<typeof createRequestServiceClient> | null = null;
+  const createUserSupabase: McpToolContext['createUserSupabase'] = () => {
+    if (!requestClient) {
+      requestClient = makeRequestClient();
+      // The services ask this client who the caller is (`getVerifiedAuthUserResult`).
+      registerAdmittedIdentity(requestClient, admission.user);
+    }
+    return requestClient;
+  };
 
   const identity = { clientId, userId, surface };
   const context: McpToolContext = {
@@ -407,7 +336,7 @@ async function handleMcpPost(request: NextRequest, dependencies: McpRouteDepende
     },
     runAfterResponse,
   };
-  return withProviderFetchRequestId(getApiRequestId(request), () => serveMcp(admitted, context, sdkToken));
+  return withProviderFetchRequestId(getApiRequestId(request), () => serveMcp(admitted, context));
 }
 
 function handleMcpOther(dependencies: McpRouteDependencies): Response {

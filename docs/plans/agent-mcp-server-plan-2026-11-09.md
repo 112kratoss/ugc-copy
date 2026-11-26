@@ -1,5 +1,10 @@
 # Magicbooklet MCP server — build plan
 
+Note, 2026-11-26: the OAuth server is now the app's own, not Supabase Auth's
+(`docs/archive/agent-token-broker-plan-2026-11-26.md`). What this plan says of Supabase's OAuth
+server, the `client_id` claim the routes required and Supabase's grants API behind Connected apps
+is how phases 0 to 4 were built, not how the server signs agents in today.
+
 Status, 2026-11-10: phases 0 to 4 are shipped and live. Phase 1 is PR #747, phase 2 PR #749 and
 phase 3 PR #748; their last release reached production on 2026-11-09 at 20:24 UTC, the tools, the
 setup page and Connected apps were checked there the same hour (runbook, "Production switch-on

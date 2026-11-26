@@ -10,7 +10,7 @@ import type { McpSurface } from '@/lib/mcp-surfaces';
 
 /**
  * Admission of the app's own agent access token at the MCP routes
- * (`docs/plans/agent-token-broker-plan-2026-11-26.md`, "MCP admission").
+ * (`docs/archive/agent-token-broker-plan-2026-11-26.md`, "MCP admission").
  *
  * The token is an opaque string: there is no signature to check and nothing to decode. It is
  * hashed and looked up, in one round trip that also answers everything the proxy's evaluator
@@ -85,8 +85,8 @@ export async function admitAgentAccessToken(
   if (row.isAnonymous) {
     return { ok: false, status: 403, code: 'REGISTRATION_REQUIRED', error: 'Create an account to use this feature.' };
   }
-  // The grant says which server it is for; the code's own posting-only list is asked as well, as
-  // the JWT path asks it, so a grant that should never have been `full` is still held to posting.
+  // The grant says which server it is for; the code's own posting-only list is asked as well, so
+  // a grant that should never have been `full` is still held to posting.
   if (options.surface === 'full' && (row.surface !== 'full' || isPostingOnlyClientId(row.clientId))) {
     return {
       ok: false,

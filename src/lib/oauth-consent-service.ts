@@ -1,28 +1,24 @@
-import type { OAuthAuthorizationDetails, OAuthRedirect, User } from '@supabase/supabase-js';
-
-import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
+import type { User } from '@supabase/supabase-js';
 
 import { PROMPT_ENHANCEMENT_COST_CREDITS } from '../../ugc-mobile/lib/model-catalog/protocol';
 
 /**
- * The consent page's decisions (`/oauth/consent`, Supabase Auth's `authorization_url_path`).
+ * The consent page's decisions (`/oauth/consent`).
  *
- * Supabase's OAuth server sends the person's browser here with an `authorization_id` when an
- * agent (Claude, ChatGPT, Codex, Cursor) asks to act as them. The page decides who may answer
- * and what it shows; GoTrue decides nothing about the account: it would let a guest session read
- * and approve an authorization (the phase 0 spike, `docs/research/mcp-oauth-spike-2026-11-09.md`,
- * check 8), so the guest refusal is this page's, and it comes before any call with the session.
+ * The app's own authorization server (`/oauth/authorize`, `agent-oauth-server-service.ts`) sends
+ * the person's browser here with an `authorization_id` when an agent (Claude, ChatGPT, Codex,
+ * Cursor) asks to act as them. The page decides who may answer: never a guest, whose refusal
+ * comes before the request is read.
  *
- * The token an approval issues carries no permissions of its own (`scope` is `openid email`
- * class, never shown here as permissions), so the page shows the fixed list of what an agent
- * may do, and the server authorizes per tool as the signed-in creator.
+ * The token an approval issues carries no permissions finer than its one scope (`mcp`, never
+ * shown here as a permission), so the page shows the fixed list of what an agent may do on the
+ * server the grant is for, and the server authorizes per tool as the signed-in creator.
  */
 
 export const OAUTH_CONSENT_PATH = '/oauth/consent';
 
 /**
- * What an agent may do once connected, in the page's words. The token carries no scopes. The one
- * charge with no price step, prompt enhancement, is named with its fixed cost (the catalog's
+ * What an agent may do once connected, in the page's words. The one charge with no price step, prompt enhancement, is named with its fixed cost (the catalog's
  * constant, which the tool's own description also states).
  */
 export const AGENT_ACCESS = [
@@ -41,10 +37,9 @@ export const AGENT_ACCESS = [
 ] as const;
 
 /**
- * What a posting-only client may do (`MCP_POSTING_ONLY_CLIENT_IDS`, `mcp-surfaces.ts`): each of
- * the posting server's tools, said in a person's words, and what it is given no tool for. The
- * route refuses its token at the full server, so the last line holds on Magicbooklet's own
- * routes; like any agent's sign-in it is still the account's session (`agent-token.ts`).
+ * What a grant for the posting server may do (`mcp-surfaces.ts`): each of the posting server's
+ * tools, said in a person's words, and what it is given no tool for. The full server refuses its
+ * token (`agent-oauth-admission.ts`), and the token is nothing at Supabase, so the last line holds.
  */
 export const POSTING_AGENT_ACCESS = [
   {
@@ -67,13 +62,8 @@ export const POSTING_AGENT_ACCESS = [
 
 export type AgentAccessItem = { readonly title: string; readonly detail: string };
 
-/** The access list the consent page shows for a client: the posting-only one for a posting-only client. */
-export function agentAccessFor(clientId: string | null | undefined): ReadonlyArray<AgentAccessItem> {
-  return isPostingOnlyClientId(clientId) ? POSTING_AGENT_ACCESS : AGENT_ACCESS;
-}
-
 /**
- * The access list for a grant of the app's own authorization server, which is for one server
+ * The access list for a grant, which is for one server
  * (`agent-oauth-request.ts`): the posting list when the grant is for the posting server, whoever
  * the client is, so the page lists what that grant can reach and nothing wider.
  */
@@ -82,9 +72,10 @@ export function agentAccessForSurface(surface: 'full' | 'posts'): ReadonlyArray<
 }
 
 /**
- * The id of an authorization request: the app's own (`mbar_` and 43 characters,
- * `agent-oauth-tokens.ts`) or, until Supabase's OAuth server is off, GoTrue's (URL-safe
- * characters, 32 on the stacks seen); bounded either way.
+ * The shape the page takes an `authorization_id` in: URL-safe characters, bounded. Looser than
+ * the app's own (`mbar_` and 43 characters, `isAgentAuthorizationId`) on purpose, so a link of
+ * another shape, such as one Supabase's OAuth server issued before 2026-11-26, is told the request
+ * cannot be answered rather than that the link is incomplete.
  */
 const AUTHORIZATION_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
@@ -160,21 +151,8 @@ export type ConsentDetails = {
   clientUri: string | null;
   redirectUri: string;
   redirect: RedirectTarget | null;
-  /** What this client may do, as the page lists it (`agentAccessFor`). */
+  /** What this grant may do, as the page lists it (`agentAccessForSurface`). */
   access: ReadonlyArray<AgentAccessItem>;
-};
-
-export type ConsentView =
-  | { kind: 'redirect'; redirectUrl: string }
-  | { kind: 'consent'; details: ConsentDetails };
-
-type ClientResult<T> = { data: T | null; error: { message: string } | null };
-
-/** The slice of `supabase.auth.oauth` the page uses, so a test can hand it a fake. */
-export type OAuthConsentClient = {
-  getAuthorizationDetails(authorizationId: string): Promise<ClientResult<OAuthAuthorizationDetails | OAuthRedirect>>;
-  approveAuthorization(authorizationId: string, options: { skipBrowserRedirect: true }): Promise<ClientResult<OAuthRedirect>>;
-  denyAuthorization(authorizationId: string, options: { skipBrowserRedirect: true }): Promise<ClientResult<OAuthRedirect>>;
 };
 
 export const CONSENT_UNAVAILABLE_MESSAGE =
@@ -193,53 +171,13 @@ export function httpUrlOrNull(value: unknown): string | null {
 }
 
 /**
- * The URL GoTrue says to send the browser to, and only when it is an http(s) one: a registered
- * redirect URI is https or loopback http today, and a client edited into another scheme (or
- * registered dynamically, once that is on) must not be followed into it.
+ * The URL the server says to send the browser to, and only when it is an http(s) one: a stored
+ * redirect URI is https or loopback http (the tables' own check), and the page must not be led
+ * into another scheme whatever an answer says.
  */
 function redirectUrlOf(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null;
   return httpUrlOrNull((value as { redirect_url?: unknown }).redirect_url);
-}
-
-/**
- * What the page shows for an authorization: the client's redirect when the account has already
- * consented to this client (GoTrue answers an `OAuthRedirect`, and the page follows it without a
- * click), or the details to decide on.
- */
-export async function loadConsentView(
-  client: OAuthConsentClient,
-  authorizationId: string,
-): Promise<{ ok: true; view: ConsentView } | { ok: false; message: string }> {
-  const { data, error } = await client.getAuthorizationDetails(authorizationId);
-  if (error || !data) return { ok: false, message: CONSENT_UNAVAILABLE_MESSAGE };
-  if ('redirect_url' in data) {
-    const redirectUrl = redirectUrlOf(data);
-    return redirectUrl
-      ? { ok: true, view: { kind: 'redirect', redirectUrl } }
-      : { ok: false, message: CONSENT_UNAVAILABLE_MESSAGE };
-  }
-  const details = data as OAuthAuthorizationDetails;
-  if (typeof details.redirect_uri !== 'string' || !details.client) {
-    return { ok: false, message: CONSENT_UNAVAILABLE_MESSAGE };
-  }
-  const clientName = typeof details.client.name === 'string' && details.client.name.trim()
-    ? details.client.name.trim()
-    : 'An app';
-  return {
-    ok: true,
-    view: {
-      kind: 'consent',
-      details: {
-        authorizationId,
-        clientName,
-        clientUri: httpUrlOrNull(details.client.uri),
-        redirectUri: details.redirect_uri,
-        redirect: describeRedirectTarget(details.redirect_uri),
-        access: agentAccessFor(details.client.id),
-      },
-    },
-  };
 }
 
 export type ConsentDecision = 'approve' | 'deny';
@@ -284,22 +222,4 @@ export async function sendAgentConsentAnswer(
   } catch {
     return { ok: false, message: CONSENT_DECISION_FAILED_MESSAGE };
   }
-}
-
-/**
- * The account's answer, sent to GoTrue without its own browser redirect so the page can follow
- * the returned `redirect_url` itself (a denial's carries `error=access_denied`).
- */
-export async function decideConsent(
-  client: OAuthConsentClient,
-  authorizationId: string,
-  decision: ConsentDecision,
-): Promise<{ ok: true; redirectUrl: string } | { ok: false; message: string }> {
-  const { data, error } = decision === 'approve'
-    ? await client.approveAuthorization(authorizationId, { skipBrowserRedirect: true })
-    : await client.denyAuthorization(authorizationId, { skipBrowserRedirect: true });
-  const redirectUrl = error ? null : redirectUrlOf(data);
-  return redirectUrl
-    ? { ok: true, redirectUrl }
-    : { ok: false, message: CONSENT_DECISION_FAILED_MESSAGE };
 }

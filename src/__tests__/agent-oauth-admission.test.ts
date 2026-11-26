@@ -34,7 +34,7 @@ const admit = (row: unknown, surface: 'full' | 'posts' = 'full', token = TOKEN) 
   return admitAgentAccessToken(token, { admin: client, surface }).then((admission) => ({ admission, rpc }));
 };
 
-// MCP admission of the app's own token (docs/plans/agent-token-broker-plan-2026-11-26.md).
+// MCP admission of the app's own token (docs/archive/agent-token-broker-plan-2026-11-26.md).
 describe('agent access token admission', () => {
   it('admits a live token as its account, looked up by hash in one round trip', async () => {
     const { admission, rpc } = await admit(ROW);
@@ -104,10 +104,10 @@ describe('agent access token admission', () => {
 });
 
 describe('authorization server metadata (RFC 8414)', () => {
-  const env = { MCP_AUTHORIZATION_SERVER: 'app', NEXT_PUBLIC_SITE_URL: 'https://magicbooklet.test/some/path' };
+  const site = { siteUrl: 'https://magicbooklet.test/some/path' };
 
   it('describes the server the app runs, with the site origin as issuer', () => {
-    expect(buildOAuthAuthorizationServerMetadata({ env })).toEqual({
+    expect(buildOAuthAuthorizationServerMetadata(site)).toEqual({
       issuer: 'https://magicbooklet.test',
       authorization_endpoint: 'https://magicbooklet.test/oauth/authorize',
       token_endpoint: 'https://magicbooklet.test/oauth/token',
@@ -121,11 +121,10 @@ describe('authorization server metadata (RFC 8414)', () => {
       scopes_supported: ['mcp'],
       service_documentation: 'https://magicbooklet.test/developers/mcp',
     });
-    expect(buildOAuthAuthorizationServerMetadata({ env: { ...env, MCP_AUTHORIZATION_SERVER: 'both' } })?.issuer).toBe('https://magicbooklet.test');
   });
 
   it('offers no dynamic registration, no implicit flow, no plain PKCE and no iss parameter', () => {
-    const metadata = buildOAuthAuthorizationServerMetadata({ env }) as Record<string, unknown>;
+    const metadata = buildOAuthAuthorizationServerMetadata(site) as Record<string, unknown>;
     expect(metadata.registration_endpoint).toBeUndefined();
     expect(metadata.authorization_response_iss_parameter_supported).toBeUndefined();
     expect(metadata.code_challenge_methods_supported).not.toContain('plain');
@@ -133,18 +132,17 @@ describe('authorization server metadata (RFC 8414)', () => {
     expect(JSON.stringify(metadata)).not.toContain('supabase');
   });
 
-  it('does not exist while Supabase is the authorization server, or without a site URL', async () => {
-    expect(buildOAuthAuthorizationServerMetadata({ env: { NEXT_PUBLIC_SITE_URL: env.NEXT_PUBLIC_SITE_URL } })).toBeNull();
-    expect(buildOAuthAuthorizationServerMetadata({ env: { ...env, MCP_AUTHORIZATION_SERVER: 'supabase' } })).toBeNull();
-    expect(buildOAuthAuthorizationServerMetadata({ env: { MCP_AUTHORIZATION_SERVER: 'app' } })).toBeNull();
-    const off = createAuthorizationServerMetadataResponse({ env: {} });
+  it('does not exist without a site URL: a checkout that cannot name its origin invents none', async () => {
+    expect(buildOAuthAuthorizationServerMetadata({ siteUrl: '' })).toBeNull();
+    expect(buildOAuthAuthorizationServerMetadata({ siteUrl: 'ftp://magicbooklet.test' })).toBeNull();
+    const off = createAuthorizationServerMetadataResponse({ siteUrl: '' });
     expect(off.status).toBe(404);
     expect(off.headers.get('cache-control')).toBe('no-store');
-    await expect(off.json()).resolves.toMatchObject({ code: 'AUTHORIZATION_SERVER_NOT_ENABLED' });
+    await expect(off.json()).resolves.toMatchObject({ code: 'MCP_NOT_CONFIGURED' });
   });
 
-  it('is served cross-origin and cached for minutes, so the cutover is read promptly', async () => {
-    const response = createAuthorizationServerMetadataResponse({ env });
+  it('is served cross-origin and cached for minutes', async () => {
+    const response = createAuthorizationServerMetadataResponse(site);
     expect(response.status).toBe(200);
     expect(response.headers.get('access-control-allow-origin')).toBe('*');
     expect(response.headers.get('cache-control')).toBe('public, max-age=300, s-maxage=300');
