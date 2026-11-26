@@ -1055,9 +1055,16 @@ later one checks whatever its new description claims.
    The login prints an "Expected proof record"; it must match what step 2 fetched.
 4. Publish: `mcp-publisher publish` ("Successfully published", with the version), then check
    `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=com.magicbooklet/mcp"`.
-   It reads `./server.json` unless given a path, so when the checkout is not on `main`'s tip,
-   publish `main`'s own entry instead: `git show origin/main:server.json > <dir>/server.json`,
-   then `mcp-publisher publish <dir>/server.json`.
+   It reads `./server.json` unless given a path. What goes out must be the entry of the build
+   production serves, which can be behind `main` (a version merged but not yet released must not
+   be published), so unless the checkout is on that commit, publish that commit's own file:
+
+   ```bash
+   git fetch -q origin
+   SHA="$(curl -s https://magicbooklet.com/api/app-version | python3 -c 'import json,sys; print(json.load(sys.stdin)["buildId"])')"
+   mkdir -p /tmp/registry-entry && git show "$SHA:server.json" > /tmp/registry-entry/server.json
+   mcp-publisher publish /tmp/registry-entry/server.json
+   ```
 
 Published first on 2026-11-09 at 20:28 UTC: `com.magicbooklet/mcp` 1.1.0, `status: active` and
 `isLatest` in the registry's answer, by the HTTP method above; `mcp-publisher logout` clears the
@@ -1081,8 +1088,9 @@ is a version. 1.2.1 was published on 2026-11-24 at 06:06 UTC by the steps above,
 serving a build that carries it (`bfec35fd9`; the version itself shipped in PR #876) and the
 plugin repository public under that id: the registry answers 1.2.1 `status: active` and
 `isLatest` with the new `repository`, and 1.1.0 and 1.2.0 stay `active`, no longer latest. The
-primary checkout was behind `main` that day, with 1.2.0 still in its `server.json`, so `main`'s
-entry was published from a scratch folder as step 4 describes.
+primary checkout was behind `main` that day, with 1.2.0 still in its `server.json`, so the entry
+of `bfec35fd9`, then both `main`'s tip and the live build, was published from a scratch folder as
+step 4 describes.
 
 The DNS alternative needs no deploy: a TXT record on the apex, `magicbooklet.com`, never under
 a selector such as `_mcp-auth.magicbooklet.com`:
