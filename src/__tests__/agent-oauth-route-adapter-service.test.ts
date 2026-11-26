@@ -11,7 +11,6 @@ const service = vi.hoisted(() => ({
   decideAgentConsent: vi.fn(),
   listAgentGrants: vi.fn(),
   disconnectAgentClient: vi.fn(),
-  disconnectEveryAgentClient: vi.fn(),
 }));
 vi.mock('@/lib/agent-oauth-server-service', () => service);
 
@@ -357,21 +356,11 @@ describe('/api/oauth/grants', () => {
     expect(service.disconnectAgentClient).toHaveBeenCalledWith(admin, { userId: USER_ID, clientId: 'client-claude' });
   });
 
-  it('ends every grant of the account for Sign out everywhere, and takes all or one client, never both', async () => {
-    service.disconnectEveryAgentClient.mockResolvedValue(3);
+  it('ends one named client\'s grants and takes no request for all of them', async () => {
     const handlers = createAgentOAuthGrantsHandlers(harness().dependencies);
-    const response = await handlers.DELETE(disconnect({ all: true }));
-    await expect(response.json()).resolves.toEqual({ revoked: 3 });
-    expect(service.disconnectEveryAgentClient).toHaveBeenCalledWith(admin, { userId: USER_ID });
+    expect((await handlers.DELETE(disconnect({ all: true }))).status).toBe(400);
+    expect((await handlers.DELETE(disconnect({ all: true, clientId: 42 }))).status).toBe(400);
     expect(service.disconnectAgentClient).not.toHaveBeenCalled();
-
-    expect((await handlers.DELETE(disconnect({ all: true, clientId: 'client-claude' }))).status).toBe(400);
-    expect((await handlers.DELETE(disconnect({ all: 'yes' }))).status).toBe(400);
-    expect((await handlers.DELETE(disconnect({ all: false }))).status).toBe(400);
-    expect(service.disconnectEveryAgentClient).toHaveBeenCalledTimes(1);
-    // From this site only, like a single disconnect.
-    expect((await handlers.DELETE(disconnect({ all: true }, { origin: 'https://evil.test' }))).status).toBe(403);
-    expect(service.disconnectEveryAgentClient).toHaveBeenCalledTimes(1);
   });
 
   it('answers only a registered account\'s web session, and a disconnect only from this site', async () => {

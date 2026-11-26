@@ -23,6 +23,12 @@ type UserSupabaseClient = SupabaseClient;
 type AdminSupabaseClient = Parameters<typeof enforceBackendRateLimit>[0] & SupabaseClient;
 
 export interface MobilePushUnregisterRouteInput {
+  /**
+   * Ends every app the account connected through the app's own authorization server
+   * (`agent-oauth-server-service.ts`), for the account-wide request below. Given by the route
+   * while that server is on; without it nothing is ended.
+   */
+  endAgentAccess?: (userId: string) => Promise<unknown>;
   getAdminSupabase: () => unknown;
   now?: () => Date;
   readRequestBody?: () => Promise<unknown>;
@@ -106,6 +112,21 @@ export async function unregisterMobilePushTokenForRoute(
       };
     }
 
+    // The account-wide request is what the web and the app send just before "Sign out everywhere"
+    // (it is how installed apps already say so), and that sign-out ends sessions only. An app
+    // connected through the app's own authorization server is not a session, so it is ended here:
+    // signing out of every device still ends what acts as the account, as the consent page says.
+    // A failure is answered as one, after the push tokens are retired all the same.
+    let agentAccessEnded = true;
+    if (accountWide && input.endAgentAccess) {
+      try {
+        await input.endAgentAccess(user.id);
+      } catch (error) {
+        agentAccessEnded = false;
+        logBackendError('agent_access_sign_out_everywhere_failed', { userId: user.id, error });
+      }
+    }
+
     let query = userSupabase
       .from('mobile_push_tokens')
       .update({
@@ -128,6 +149,14 @@ export async function unregisterMobilePushTokenForRoute(
       return {
         ok: false,
         body: { error: 'Failed to unregister mobile push token.' },
+        status: 500,
+      };
+    }
+
+    if (!agentAccessEnded) {
+      return {
+        ok: false,
+        body: { error: 'Failed to disconnect the account\'s connected apps.' },
         status: 500,
       };
     }

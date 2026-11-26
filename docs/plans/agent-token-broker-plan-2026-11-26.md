@@ -85,8 +85,9 @@ guest 403 `REGISTRATION_REQUIRED`; a posting grant at `/api/mcp` 403 `AGENT_SURF
 The tools then run on a per-request service-role client told who the admitted account is; the
 agent's token is stripped from the request the services see.
 
-Rate limits (`check_backend_rate_limit`): authorize 30 per minute per network address; token 60
-per minute per network address; revoke 30 per minute per network address; the consent answer and
+Rate limits (`check_backend_rate_limit`): authorize 30 per minute per network address; token 600
+per minute per network address (a hosted client makes every creator's exchanges and refreshes
+from a few addresses of its own); revoke 30 per minute per network address; the consent answer and
 Disconnect 20 per minute per account. None is keyed on the client id, which is public: a limit
 there would let anyone lock a client out. No token, code, secret or consent token is logged.
 
@@ -120,10 +121,14 @@ there would let anyone lock a client out. No token, code, secret or consent toke
 - `connected-apps.ts`, `ConnectedApps.tsx`: list and revoke the app's grants through
   `/api/oauth/grants`, merged with Supabase's until its server is off.
 - `route-identity-policy.ts`: `/api/oauth/consent` and `/api/oauth/grants` are `registered`.
-- `AppShellAccount.tsx`, `agent-access-sign-out.ts`: "Sign out everywhere" ends every grant of
-  the account on the app's server first (`DELETE /api/oauth/grants` with `all: true`): an app's
-  access is no longer one of the account's sessions, and the consent page says signing out
-  everywhere ends it.
+- `mobile-push-unregister-service.ts`: "Sign out everywhere" ends every grant of the account on
+  the app's server. Both clients already send `POST /api/mobile/notifications/unregister` with
+  `scope: 'account'` just before a global sign-out, installed phone apps included, so the server
+  ends the grants there (`disconnectEveryAgentClient`) and no client changes. An app's access is
+  no longer one of the account's sessions, and the consent page says signing out everywhere
+  ends it. Like the push tokens it rides with, it is best effort: a failure is logged
+  (`agent_access_sign_out_everywhere_failed`) and answered 500, and the sign-out goes on;
+  Connected apps is the certain way.
 - `scripts/ops/oauth-clients.ts`: `--app` turns `list` and `create` to `agent_oauth_clients`, and
   `import`, `disable`, `enable` and `rotate-secret` exist only there; without the switch `list`
   and `create` are still Supabase's, until the follow-up.
@@ -148,13 +153,18 @@ there would let anyone lock a client out. No token, code, secret or consent toke
    which for a loopback client lets any local program collect a code silently.
 6. **Refresh reuse grace of 10 seconds**: a second use of a rotated token inside 10 seconds gets
    a fresh pair (two Claude Code processes share one stored token and race); after that it
-   revokes the grant. Rejected: zero grace, which disconnects honest clients.
+   revokes the grant. The cost, accepted: whoever copies a refresh token and uses it inside those
+   10 seconds holds a second chain that rotates on its own and that reuse detection never sees;
+   it ends only with the grant (Disconnect, Sign out everywhere, 90 days unused). Rejected: zero
+   grace, which disconnects honest clients, and Supabase's own default is the same 10 seconds.
 7. **Refresh tokens last 90 days unused, with no absolute cap.** Rejected: 30 days (a creator who
    posts monthly would reconnect each time) and non-expiring (an abandoned grant stays live).
 8. **A full grant is accepted at the posting server; a posting grant only there.** The posting
    tools are a subset, and a client that omits `resource` gets its client's default surface.
    Rejected: strict audience equality, which breaks a full client connected to the posting URL
-   and protects nothing.
+   and protects nothing. Posting-only is said twice and either is enough: the client's row
+   (`surface = 'posts'`) and the code's list (`MCP_POSTING_ONLY_CLIENT_IDS`), asked at authorize
+   and at admission, so a row registered `full` by mistake does not widen a listed client.
 9. **No `iss` in the authorization response** (RFC 9207 not advertised): Codex chooses its
    redirect path by that flag, and its registered redirect is the form it sends today.
 10. **Scopes are not permissions.** Any `scope` is accepted and the token response says `mcp`;
@@ -188,8 +198,11 @@ owner's to approve.
 6. In the Supabase dashboard, Authentication → OAuth Server → Apps: delete each app, which
    deletes its consents and sessions, so no old refresh token works.
 7. Same page: switch the OAuth server off.
-8. Check that Supabase's authorization-server metadata no longer answers and that no session
-   with an OAuth client remains.
+8. Wait one hour: an access JWT Supabase issued before step 6 keeps its signature until it
+   expires. Its session is gone, so Auth refuses it and so does every table and bucket behind
+   the `authenticated_identity_active` policy, but the requirement is met in full only once the
+   last one has expired. Then check that Supabase's authorization-server metadata no longer
+   answers and that no session with an OAuth client remains.
 9. Distribution. The Claude Code plugin, the setup page's commands, the MCP registry entry
    (`server.json`) and the directory listings name the MCP URL and a client id, never an
    authorization server, and the import keeps every id and the directory client's secret: nothing
@@ -217,7 +230,7 @@ flag `app` and the real route handlers:
 - a replayed code, a reused refresh token, Disconnect, `/oauth/revoke` and a ban each end access
   at once.
 
-The migration's rules are held by `supabase/tests/database/agent_oauth_server.test.sql` (84
+The migration's rules are held by `supabase/tests/database/agent_oauth_server.test.sql` (95
 assertions) on a full replay, and `tests/e2e/oauth-consent.spec.ts` draws the consent page for
 the app's own requests. The run's record is kept outside the repository, with the security
 review it belongs to.
@@ -231,3 +244,8 @@ review it belongs to.
   server; after step 7 that means every agent call is 401, which is loud. The follow-up removes
   the default.
 - `agent_oauth_clients` has no command to add a redirect URI to an existing client yet.
+- `import`'s dry run reads Supabase's clients through the admin API, which shows no secret hash,
+  so only `--apply` can say that a confidential client's hash is in another form
+  (`secret_hash_unusable`). It changes nothing for that client; read its output.
+- Sign out everywhere ends the app's grants through the account-wide push-token request, best
+  effort (above). A phone build older than that request (before 2026-10-17) does not send it.

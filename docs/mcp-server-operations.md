@@ -112,7 +112,9 @@ npm run ops:oauth-clients -- enable --client-id <id> --apply
 npm run ops:oauth-clients -- rotate-secret --client-id <id> --apply   # new secret to the clipboard
 ```
 
-`import` keeps every id, redirect URI and, for a confidential client, the stored hash of its
+`import` without `--apply` lists Supabase's clients through the admin API, which shows no secret
+hash; only `--apply` reads the table and can report a skip, so read its output. `import` keeps
+every id, redirect URI and, for a confidential client, the stored hash of its
 secret (GoTrue v2.186.0 stores `base64url(SHA-256(secret))`, the form this server uses), so no
 setup command, plugin or directory listing changes. It marks the ids in
 `MCP_POSTING_ONLY_CLIENT_IDS` as `posts`: such a client is never granted `/api/mcp`. It skips a
@@ -126,6 +128,12 @@ holds it. A new redirect URI for an existing client (ChatGPT's per-account callb
 - One creator, one app: Connected apps → Disconnect (`DELETE /api/oauth/grants`). The grant's
   tokens are deleted: the next call is 401 and the refresh fails, at once.
 - One client for everyone: `disable --client-id <id> --apply`.
+- One creator, every app: "Sign out everywhere", on the web or in the app. Both send the
+  account-wide `POST /api/mobile/notifications/unregister` (`scope: 'account'`) first, and the
+  server ends the account's grants there. Best effort, like the push tokens it retires: a failure
+  logs `agent_access_sign_out_everywhere_failed` and the sign-out goes on.
+- A Disconnect or a sign-out everywhere also closes any request of that account not yet
+  exchanged for a grant, so an Allow pressed a moment earlier produces nothing.
 - Everyone: the kill switch. To end every grant without switching the server off:
   `select public.agent_oauth_revoke_grant(id, 'operator') from public.agent_oauth_grants where revoked_at is null;`
 
@@ -140,7 +148,8 @@ the client and, where known, the account and the grant; none carries a token, a 
 or a request parameter. `mcp_request_refused` gains `reason: token_kind` (a token of a kind the
 flag does not take).
 
-Rate limits: authorize 30 a minute per network address; token 60 a minute per network address;
+Rate limits: authorize 30 a minute per network address; token 600 a minute per network address
+(a hosted client makes every creator's exchanges from a few addresses);
 revoke 30; the consent answer and Disconnect 20 a minute per account.
 
 ### Cutover
@@ -165,7 +174,9 @@ Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a cre
    so no old access or refresh token works. The same in the SQL editor, if the dashboard is
    awkward: `delete from auth.oauth_clients;`
 7. Same page: switch the OAuth server off.
-8. Check: `curl -s -o /dev/null -w '%{http_code}' https://<project-ref>.supabase.co/auth/v1/.well-known/oauth-authorization-server`
+8. Wait one hour, the life of an access JWT Supabase issued before step 6 (its session is gone,
+   so Auth and every RLS-guarded table refuse it already; after the hour it does not verify at
+   all). Then check: `curl -s -o /dev/null -w '%{http_code}' https://<project-ref>.supabase.co/auth/v1/.well-known/oauth-authorization-server`
    is not 200, and `select count(*) from auth.sessions where oauth_client_id is not null` is 0.
 9. Distribution. The Claude Code plugin, the setup page's commands and `server.json` name the MCP
    URL and a client id, never an authorization server, and both are unchanged: nothing to

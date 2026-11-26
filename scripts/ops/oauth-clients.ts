@@ -195,13 +195,16 @@ export function buildAppClientRow(flags: Flags, mint: { clientId: () => string; 
   const params = buildCreateParams(flags);
   const confidential = params.token_endpoint_auth_method !== 'none';
   const secret = confidential ? mint.secret() : null;
+  // As typed, once each: this server matches a redirect URI as an exact string, and the URL
+  // parser's own spelling (a slash after a bare origin) is not what the client will send.
+  const redirectUris = [...new Set(listFlag(flags, '--redirect-uri').map((uri) => uri.trim()))];
   return {
     secret,
     row: {
       client_id: mint.clientId(),
       client_name: params.client_name,
       client_uri: params.client_uri ?? null,
-      redirect_uris: params.redirect_uris,
+      redirect_uris: redirectUris,
       token_endpoint_auth_method: params.token_endpoint_auth_method ?? 'none',
       client_secret_hash: secret ? hashAgentSecret(secret) : null,
       surface: flags.get('--posting-only') === true ? 'posts' : 'full',

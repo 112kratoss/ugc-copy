@@ -86,6 +86,7 @@ describe('agent_oauth_server migration', () => {
     const consume = sql.slice(sql.indexOf('create function public.agent_oauth_consume_code'), sql.indexOf('create function public.agent_oauth_issue_grant'));
     expect(consume).toContain('for update');
     expect(consume).toMatch(/if v_authorization\.status = 'consumed' then\s+perform public\.agent_oauth_revoke_grant\(v_authorization\.grant_id, 'code_replay'\)/u);
+    expect(consume).toMatch(/if v_authorization\.grant_id is null then\s+update public\.agent_oauth_authorizations set status = 'denied'/u);
     expect(consume).toContain("v_authorization.code_expires_at <= now()");
     expect(consume).toMatch(/set status = 'consumed', consumed_at = now\(\)/u);
   });
@@ -93,6 +94,9 @@ describe('agent_oauth_server migration', () => {
   it('rotates a refresh token under a lock, and ends the grant on reuse past the grace', () => {
     const rotate = sql.slice(sql.indexOf('create function public.agent_oauth_rotate_refresh_token'), sql.indexOf('create function public.agent_oauth_token_admission'));
     expect(rotate.match(/for update/gu)).toHaveLength(2);
+    // The grant first, then its token: the order the revoke functions lock in.
+    expect(rotate.indexOf('from public.agent_oauth_grants')).toBeLessThan(rotate.lastIndexOf('from public.agent_oauth_tokens'));
+    expect(rotate.slice(0, rotate.indexOf('from public.agent_oauth_grants'))).not.toContain('for update');
     expect(rotate).toContain('v_grant.client_id <> p_client_id');
     expect(rotate).toMatch(/v_token\.used_at < now\(\) - make_interval\(secs => p_reuse_grace_seconds\) then\s+perform public\.agent_oauth_revoke_grant\(v_grant\.id, 'reuse'\)/u);
     expect(rotate).toContain('set used_at = coalesce(used_at, now())');
@@ -123,5 +127,7 @@ describe('agent_oauth_server migration', () => {
   it('ends one client\'s grants or, with no client named, every grant of the account', () => {
     const revokeGrants = sql.slice(sql.indexOf('create function public.agent_oauth_revoke_grants'), sql.indexOf('create function public.agent_oauth_revoke_token'));
     expect(revokeGrants).toMatch(/where user_id = p_user_id\s+and \(p_client_id is null or client_id = p_client_id\)\s+and revoked_at is null/u);
+    // And the requests not yet exchanged for a grant.
+    expect(revokeGrants).toMatch(/update public\.agent_oauth_authorizations\s+set status = 'denied'[^;]*and status in \('pending', 'approved'\)/u);
   });
 });

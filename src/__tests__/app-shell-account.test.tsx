@@ -31,7 +31,6 @@ const mocks = vi.hoisted(() => ({
   eq: vi.fn(),
   maybeSingle: vi.fn(),
   signOut: vi.fn(),
-  endAllAgentAccess: vi.fn(),
   clearPersistedCreatorData: vi.fn(),
   router: { push: vi.fn() },
   pathname: '/' as string | null,
@@ -87,12 +86,6 @@ vi.mock('@/lib/persisted-media', () => ({
   clearPersistedCreatorData: mocks.clearPersistedCreatorData,
 }));
 
-// Sign out everywhere ends the account's connected agents first (agent-access-sign-out.ts, whose
-// own request agent-oauth-web-surfaces.test.ts reads): confirmed here unless a test says otherwise.
-vi.mock('@/lib/agent-access-sign-out', () => ({
-  endAllAgentAccess: mocks.endAllAgentAccess,
-}));
-
 vi.mock('@/lib/supabase', () => ({
   supabase: {
     auth: {
@@ -114,8 +107,6 @@ describe('AppShellAccount', () => {
     mocks.eq.mockReset();
     mocks.maybeSingle.mockReset();
     mocks.signOut.mockReset();
-    mocks.endAllAgentAccess.mockReset();
-    mocks.endAllAgentAccess.mockResolvedValue(true);
     mocks.clearPersistedCreatorData.mockReset();
     mocks.router.push.mockReset();
     mocks.pathname = '/';
@@ -991,40 +982,6 @@ describe('AppShellAccount', () => {
 
       expect(await screen.findByText(SIGN_OUT_EVERYWHERE_FAILED)).toBeInTheDocument();
       expect(wasSignedOutInBrowser(authenticatedSession.access_token)).toBe(true);
-    });
-
-    // An app connected through the app's own authorization server is not one of the account's
-    // sessions, so ending every session would leave it acting as the account.
-    it('ends the account\'s connected agents before it signs out everywhere, with this session\'s token', async () => {
-      const order: string[] = [];
-      mocks.endAllAgentAccess.mockImplementation(async () => {
-        order.push('agents');
-        return true;
-      });
-      mocks.signOut.mockImplementation(async () => {
-        order.push('signOut');
-        return { error: null };
-      });
-      const dialog = await chooseSignOutEverywhere();
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
-
-      await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
-      expect(order).toEqual(['agents', 'signOut']);
-      expect(mocks.endAllAgentAccess).toHaveBeenCalledWith({ accessToken: authenticatedSession.access_token });
-    });
-
-    it('changes nothing, and says so, when the agents could not be confirmed ended', async () => {
-      mocks.endAllAgentAccess.mockResolvedValue(false);
-      const dialog = await chooseSignOutEverywhere();
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
-
-      expect(await screen.findByText(SIGN_OUT_EVERYWHERE_FAILED)).toBeInTheDocument();
-      expect(mocks.signOut).not.toHaveBeenCalled();
-      expect(mocks.clearPersistedCreatorData).not.toHaveBeenCalled();
-      expect(mocks.router.push).not.toHaveBeenCalled();
-      // Nothing of this browser's was touched: no mark, the account still here.
-      expect(wasSignedOutInBrowser(authenticatedSession.access_token)).toBe(false);
-      expect(screen.getByRole('button', { name: 'Open account menu for Test Creator' })).toBeInTheDocument();
     });
 
     it('does nothing when the person cancels', async () => {

@@ -9,7 +9,6 @@ import { AgentOAuthError, isClientId } from '@/lib/agent-oauth-request';
 import {
   decideAgentConsent,
   disconnectAgentClient,
-  disconnectEveryAgentClient,
   exchangeAgentToken,
   listAgentGrants,
   revokeAgentToken,
@@ -50,8 +49,12 @@ export type AgentOAuthRouteDependencies = {
 
 /** Per network address: an authorize request is a person opening a link. */
 export const AGENT_OAUTH_AUTHORIZE_RATE_LIMIT = { scope: 'agent-oauth:authorize', limit: 30, windowSeconds: 60 } as const;
-/** Per network address: a client exchanging a code or refreshing. Hosted clients share addresses. */
-export const AGENT_OAUTH_TOKEN_RATE_LIMIT = { scope: 'agent-oauth:token', limit: 60, windowSeconds: 60 } as const;
+/**
+ * Per network address: a client exchanging a code or refreshing. A hosted client (Claude, ChatGPT)
+ * makes every creator's exchanges and hourly refreshes from a few addresses of its own, so the
+ * limit is sized for a service, not a person; it stops a flood, and guessing 256 bits needs none.
+ */
+export const AGENT_OAUTH_TOKEN_RATE_LIMIT = { scope: 'agent-oauth:token', limit: 600, windowSeconds: 60 } as const;
 export const AGENT_OAUTH_REVOKE_RATE_LIMIT = { scope: 'agent-oauth:revoke', limit: 30, windowSeconds: 60 } as const;
 /** Per account: an answer on the consent page, or a disconnect. */
 export const AGENT_OAUTH_CONSENT_RATE_LIMIT = { scope: 'agent-oauth:consent', limit: 20, windowSeconds: 60 } as const;
@@ -377,20 +380,13 @@ async function handleGrantsRevoke(request: Request, dependencies: AgentOAuthRout
   const user = await requireWebAccount(request, resolved);
   if (user instanceof NextResponse) return user;
   const body = await readJsonBody(request);
-  // One app by its client id, or `all: true` for every app ("Sign out everywhere"): never both.
   const clientId = body?.clientId;
-  const all = body?.all === true;
-  if (all ? clientId !== undefined : !isClientId(clientId)) {
-    return json({ error: 'clientId is required, or all: true alone.', code: 'INVALID_REQUEST' }, 400);
-  }
+  if (!isClientId(clientId)) return json({ error: 'clientId is required.', code: 'INVALID_REQUEST' }, 400);
   if (!isAppAuthorizationServerEnabled(resolved.env)) return json({ revoked: 0 });
   try {
     const admin = resolved.admin();
     await resolved.rateLimit(admin, { ...AGENT_OAUTH_CONSENT_RATE_LIMIT, key: user.id });
-    const revoked = all
-      ? await disconnectEveryAgentClient(admin, { userId: user.id })
-      : await disconnectAgentClient(admin, { userId: user.id, clientId: clientId as string });
-    return json({ revoked });
+    return json({ revoked: await disconnectAgentClient(admin, { userId: user.id, clientId }) });
   } catch (error) {
     if (error instanceof BackendRateLimitError) {
       return json({ error: error.message, code: 'RATE_LIMITED', retryAfterSeconds: error.retryAfterSeconds }, 429);

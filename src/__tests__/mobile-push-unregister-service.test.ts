@@ -215,6 +215,69 @@ describe('mobile push token unregister service', () => {
     ]);
   });
 
+  // That same request is how both clients say "Sign out everywhere" to this app, and the sign-out
+  // itself ends sessions only. An app connected through the app's own authorization server is not
+  // a session, so the account's are ended here (docs/plans/agent-token-broker-plan-2026-11-26.md).
+  it('ends the account\'s connected apps with a sign-out everywhere, and with nothing less', async () => {
+    const endAgentAccess = vi.fn(async () => 2);
+    const everywhere = createUserClient();
+    await expect(unregisterMobilePushTokenForRoute({
+      endAgentAccess,
+      getAdminSupabase: () => createRateLimitClient(),
+      requestBody: { scope: 'account' },
+      userSupabase: everywhere.client,
+    })).resolves.toEqual({ ok: true, body: { success: true } });
+    expect(endAgentAccess).toHaveBeenCalledTimes(1);
+    expect(endAgentAccess).toHaveBeenCalledWith('user-1');
+
+    // One phone's sign-out, or a token retired by name, ends no app.
+    for (const requestBody of [
+      { expoPushToken: 'ExponentPushToken[this-phone]' },
+      { deviceId: 'device-1' },
+      { scope: 'all', allDevices: true },
+    ]) {
+      await unregisterMobilePushTokenForRoute({
+        endAgentAccess,
+        getAdminSupabase: () => createRateLimitClient(),
+        requestBody,
+        userSupabase: createUserClient().client,
+      });
+    }
+    expect(endAgentAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends no app for a caller it does not know or one over its limit', async () => {
+    const endAgentAccess = vi.fn(async () => 0);
+    await unregisterMobilePushTokenForRoute({
+      endAgentAccess,
+      getAdminSupabase: () => createRateLimitClient(),
+      requestBody: { scope: 'account' },
+      userSupabase: createUserClient({ authenticated: false }).client,
+    });
+    await unregisterMobilePushTokenForRoute({
+      endAgentAccess,
+      getAdminSupabase: () => createRateLimitClient(false),
+      requestBody: { scope: 'account' },
+      userSupabase: createUserClient().client,
+    });
+    expect(endAgentAccess).not.toHaveBeenCalled();
+  });
+
+  it('answers a failure when the apps could not be ended, and retires the push tokens all the same', async () => {
+    const user = createUserClient();
+    await expect(unregisterMobilePushTokenForRoute({
+      endAgentAccess: vi.fn(async () => { throw new Error('db down'); }),
+      getAdminSupabase: () => createRateLimitClient(),
+      requestBody: { scope: 'account' },
+      userSupabase: user.client,
+    })).resolves.toEqual({
+      ok: false,
+      body: { error: 'Failed to disconnect the account\'s connected apps.' },
+      status: 500,
+    });
+    expect(user.updateCalls).toHaveLength(1);
+  });
+
   it('reads no other scope as the whole account', async () => {
     const user = createUserClient();
 

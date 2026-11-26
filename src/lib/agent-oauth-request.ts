@@ -1,4 +1,5 @@
 import { isCodeChallenge } from '@/lib/agent-oauth-tokens';
+import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
 import { MCP_SURFACE_ROUTE_PATHS, type McpSurface } from '@/lib/mcp-surfaces';
 
 /**
@@ -86,18 +87,28 @@ export function surfaceOfResource(resource: string, siteOrigin: string): McpSurf
 }
 
 /**
+ * The widest server a client may be granted. Posting-only is said in two places and either is
+ * enough: the client's row, and the code's own list (`MCP_POSTING_ONLY_CLIENT_IDS`), so a row
+ * registered or imported as `full` by mistake does not widen a client the code names.
+ */
+export function widestSurfaceOf(client: Pick<AgentOAuthClient, 'clientId' | 'surface'>): McpSurface {
+  return client.surface === 'posts' || isPostingOnlyClientId(client.clientId) ? 'posts' : 'full';
+}
+
+/**
  * The server a grant is for: the one `resource` names, or the client's own widest server when the
  * client sent none. A posting-only client is never granted the full server.
  */
 export function resolveGrantSurface(
-  client: Pick<AgentOAuthClient, 'surface'>,
+  client: Pick<AgentOAuthClient, 'clientId' | 'surface'>,
   resource: string | null,
   siteOrigin: string,
 ): McpSurface | null {
-  if (resource === null) return client.surface;
+  const widest = widestSurfaceOf(client);
+  if (resource === null) return widest;
   const surface = surfaceOfResource(resource, siteOrigin);
   if (!surface) return null;
-  if (client.surface === 'posts' && surface !== 'posts') return null;
+  if (widest === 'posts' && surface !== 'posts') return null;
   return surface;
 }
 

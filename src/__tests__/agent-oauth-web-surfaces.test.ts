@@ -1,7 +1,6 @@
 import type { User } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
 
-import { AGENT_ACCESS_GRANTS_PATH, endAllAgentAccess } from '@/lib/agent-access-sign-out';
 import {
   APP_GRANTS_API_PATH,
   CONNECTED_APP_ACCESS,
@@ -189,28 +188,6 @@ describe('Connected apps over the app\'s own grants', () => {
     await combineConnectedAppsClients(fresh).revokeGrant({ clientId: 'client-unlisted' });
     expect(fresh[0].revokeGrant).toHaveBeenCalledTimes(1);
     expect(fresh[1].revokeGrant).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('Sign out everywhere and the account\'s agents', () => {
-  it('asks the grants route to end every grant, with the session\'s token, and reads only a confirmed answer as done', async () => {
-    expect(AGENT_ACCESS_GRANTS_PATH).toBe(APP_GRANTS_API_PATH);
-    const send = vi.fn(async () => ({ ok: true }));
-    await expect(endAllAgentAccess({ accessToken: 'web-session-token', fetch: send })).resolves.toBe(true);
-    const [url, init] = send.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('/api/oauth/grants');
-    expect(init.method).toBe('DELETE');
-    expect(init.credentials).toBe('omit');
-    expect(init.headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer web-session-token' });
-    expect(JSON.parse(init.body as string)).toEqual({ all: true });
-  });
-
-  it('is not done without a session, on a refusal, or offline', async () => {
-    const send = vi.fn(async () => ({ ok: false }));
-    await expect(endAllAgentAccess({ accessToken: null, fetch: send })).resolves.toBe(false);
-    expect(send).not.toHaveBeenCalled();
-    await expect(endAllAgentAccess({ accessToken: 't', fetch: send })).resolves.toBe(false);
-    await expect(endAllAgentAccess({ accessToken: 't', fetch: vi.fn(async () => { throw new Error('offline'); }) })).resolves.toBe(false);
   });
 });
 

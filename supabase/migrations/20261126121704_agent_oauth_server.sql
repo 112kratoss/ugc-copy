@@ -164,6 +164,8 @@ $$;
 
 -- Connected apps' Disconnect: every live grant an account gave a client. With no client named,
 -- every live grant of the account: "Sign out everywhere" ends what acts as the account too.
+-- A request the account has been shown or has approved, whose code is not yet exchanged, ends
+-- with them: an Allow followed at once by Disconnect must not still produce a grant.
 create function public.agent_oauth_revoke_grants(p_user_id uuid, p_client_id text, p_reason text)
 returns integer
 language plpgsql
@@ -185,6 +187,11 @@ begin
       v_count := v_count + 1;
     end if;
   end loop;
+  update public.agent_oauth_authorizations
+     set status = 'denied', decided_at = now(), consent_token_hash = null
+   where user_id = p_user_id
+     and (p_client_id is null or client_id = p_client_id)
+     and status in ('pending', 'approved');
   return v_count;
 end;
 $$;
@@ -232,6 +239,11 @@ begin
   end if;
   if v_authorization.status = 'consumed' then
     perform public.agent_oauth_revoke_grant(v_authorization.grant_id, 'code_replay');
+    -- A replay that arrives between the first presentation and its grant finds no grant to
+    -- revoke: the request is closed instead, so agent_oauth_issue_grant issues none.
+    if v_authorization.grant_id is null then
+      update public.agent_oauth_authorizations set status = 'denied' where id = v_authorization.id;
+    end if;
     return jsonb_build_object('outcome', 'replayed');
   end if;
   if v_authorization.status <> 'approved'
@@ -331,23 +343,34 @@ as $$
 declare
   v_token public.agent_oauth_tokens%rowtype;
   v_grant public.agent_oauth_grants%rowtype;
+  v_grant_id uuid;
 begin
   if p_access_ttl_seconds < 1 or p_refresh_ttl_seconds < 1 or p_reuse_grace_seconds < 0 then
     raise exception 'token lifetimes must be positive';
   end if;
+  -- Which grant, without a lock: the grant is locked first and its token second, the order the
+  -- revoke functions take them in, so a refresh and a Disconnect at the same moment wait for
+  -- each other instead of deadlocking.
+  select grant_id into v_grant_id
+    from public.agent_oauth_tokens
+   where token_hash = p_refresh_hash and kind = 'refresh';
+  if v_grant_id is null then
+    return jsonb_build_object('outcome', 'invalid');
+  end if;
+  select * into v_grant
+    from public.agent_oauth_grants
+   where id = v_grant_id
+     for update;
+  -- Another client's token changes nothing: it is not this caller's to burn.
+  if not found or v_grant.client_id <> p_client_id or v_grant.revoked_at is not null then
+    return jsonb_build_object('outcome', 'invalid');
+  end if;
+  -- Read again under the grant's lock: a revocation that got there first has deleted it.
   select * into v_token
     from public.agent_oauth_tokens
    where token_hash = p_refresh_hash and kind = 'refresh'
      for update;
   if not found then
-    return jsonb_build_object('outcome', 'invalid');
-  end if;
-  select * into v_grant
-    from public.agent_oauth_grants
-   where id = v_token.grant_id
-     for update;
-  -- Another client's token changes nothing: it is not this caller's to burn.
-  if not found or v_grant.client_id <> p_client_id or v_grant.revoked_at is not null then
     return jsonb_build_object('outcome', 'invalid');
   end if;
   if exists (

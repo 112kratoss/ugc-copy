@@ -3,6 +3,8 @@ import 'server-only';
 import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
+import { isAppAuthorizationServerEnabled } from '@/lib/agent-oauth-mode';
+import { disconnectEveryAgentClient } from '@/lib/agent-oauth-server-service';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
 import {
   registerMobilePushTokenForRoute,
@@ -56,6 +58,11 @@ async function handleMobilePushUnregisterPOST(
   dependencies: ReturnType<typeof resolveDependencies>,
 ) {
   return toJsonResponse(await dependencies.unregisterMobilePushTokenForRoute({
+    // "Sign out everywhere" asks for the whole account here first; with the app's own
+    // authorization server on, that also ends the apps connected through it.
+    ...(isAppAuthorizationServerEnabled()
+      ? { endAgentAccess: (userId: string) => disconnectEveryAgentClient(dependencies.createServiceClient(), { userId }) }
+      : {}),
     getAdminSupabase: dependencies.createServiceClient,
     readRequestBody: () => request.json(),
     userSupabase: dependencies.createUserClient(request),

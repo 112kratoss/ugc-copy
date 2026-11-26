@@ -5,6 +5,7 @@ import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { readAgentTokenAdmission } from '@/lib/agent-oauth-store';
 import { hashAgentSecret } from '@/lib/agent-oauth-tokens';
 import { isAppAgentAccessToken } from '@/lib/agent-token';
+import { isPostingOnlyClientId } from '@/lib/mcp-client-directory';
 import type { McpSurface } from '@/lib/mcp-surfaces';
 
 /**
@@ -84,7 +85,9 @@ export async function admitAgentAccessToken(
   if (row.isAnonymous) {
     return { ok: false, status: 403, code: 'REGISTRATION_REQUIRED', error: 'Create an account to use this feature.' };
   }
-  if (options.surface === 'full' && row.surface !== 'full') {
+  // The grant says which server it is for; the code's own posting-only list is asked as well, as
+  // the JWT path asks it, so a grant that should never have been `full` is still held to posting.
+  if (options.surface === 'full' && (row.surface !== 'full' || isPostingOnlyClientId(row.clientId))) {
     return {
       ok: false,
       status: 403,

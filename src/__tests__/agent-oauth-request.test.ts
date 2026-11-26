@@ -10,8 +10,10 @@ import {
   resolveGrantSurface,
   singleParameter,
   surfaceOfResource,
+  widestSurfaceOf,
   type AgentOAuthClient,
 } from '@/lib/agent-oauth-request';
+import { MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-directory';
 
 const SITE = 'https://magicbooklet.test';
 const CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM';
@@ -88,13 +90,32 @@ describe('agent OAuth request rules', () => {
   });
 
   it('never grants a posting-only client the full server', () => {
-    expect(resolveGrantSurface({ surface: 'full' }, `${SITE}/api/mcp`, SITE)).toBe('full');
-    expect(resolveGrantSurface({ surface: 'full' }, `${SITE}/api/mcp/posts`, SITE)).toBe('posts');
-    expect(resolveGrantSurface({ surface: 'full' }, null, SITE)).toBe('full');
-    expect(resolveGrantSurface({ surface: 'posts' }, `${SITE}/api/mcp/posts`, SITE)).toBe('posts');
-    expect(resolveGrantSurface({ surface: 'posts' }, null, SITE)).toBe('posts');
-    expect(resolveGrantSurface({ surface: 'posts' }, `${SITE}/api/mcp`, SITE)).toBeNull();
-    expect(resolveGrantSurface({ surface: 'full' }, 'https://evil.test/api/mcp', SITE)).toBeNull();
+    const full = { clientId: CLIENT_ID, surface: 'full' as const };
+    const posts = { clientId: CLIENT_ID, surface: 'posts' as const };
+    expect(resolveGrantSurface(full, `${SITE}/api/mcp`, SITE)).toBe('full');
+    expect(resolveGrantSurface(full, `${SITE}/api/mcp/posts`, SITE)).toBe('posts');
+    expect(resolveGrantSurface(full, null, SITE)).toBe('full');
+    expect(resolveGrantSurface(posts, `${SITE}/api/mcp/posts`, SITE)).toBe('posts');
+    expect(resolveGrantSurface(posts, null, SITE)).toBe('posts');
+    expect(resolveGrantSurface(posts, `${SITE}/api/mcp`, SITE)).toBeNull();
+    expect(resolveGrantSurface(full, 'https://evil.test/api/mcp', SITE)).toBeNull();
+  });
+
+  it('holds a client the code lists as posting-only to posting, whatever its row says', async () => {
+    // A row registered or imported as `full` by mistake: the code's list still decides.
+    for (const clientId of Object.values(MCP_POSTING_ONLY_CLIENT_IDS)) {
+      const mislabelled = { clientId, surface: 'full' as const };
+      expect(widestSurfaceOf(mislabelled)).toBe('posts');
+      expect(resolveGrantSurface(mislabelled, null, SITE)).toBe('posts');
+      expect(resolveGrantSurface(mislabelled, `${SITE}/api/mcp/posts`, SITE)).toBe('posts');
+      expect(resolveGrantSurface(mislabelled, `${SITE}/api/mcp`, SITE)).toBeNull();
+      const refused = await check(
+        authorizeParams({ client_id: clientId, resource: `${SITE}/api/mcp` }),
+        client({ clientId, surface: 'full' }),
+      );
+      expect(refused).toMatchObject({ ok: false, kind: 'redirect', error: 'invalid_target' });
+    }
+    expect(widestSurfaceOf({ clientId: CLIENT_ID, surface: 'full' })).toBe('full');
   });
 
   it('matches a redirect URI as an exact string', () => {

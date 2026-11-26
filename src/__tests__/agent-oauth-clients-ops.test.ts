@@ -108,6 +108,9 @@ describe('oauth-clients CLI: the app\'s own authorization server', () => {
     expect(directory.secret).toBe('mbcs_minted-secret');
     expect(directory.row).toMatchObject({ token_endpoint_auth_method: 'client_secret_post', client_secret_hash: hashAgentSecret('mbcs_minted-secret'), surface: 'posts' });
     expect(() => buildAppClientRow(parseArguments(['create', '--app', '--name', 'X', '--redirect-uri', 'http://example.com/cb']).flags, mint)).toThrow(/loopback/);
+    // Kept as typed: the match is by exact string, and the URL parser would add a slash here.
+    const bare = buildAppClientRow(parseArguments(['create', '--app', '--name', 'X', '--redirect-uri', 'http://localhost:8787', '--redirect-uri', 'http://localhost:8787']).flags, mint);
+    expect(bare.row.redirect_uris).toEqual(['http://localhost:8787']);
   });
 
   it('registers a client only with --apply, and its secret goes to the clipboard alone', async () => {

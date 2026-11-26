@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { admitAgentAccessToken } from '@/lib/agent-oauth-admission';
 import { hashAgentSecret } from '@/lib/agent-oauth-tokens';
+import { MCP_POSTING_ONLY_CLIENT_IDS } from '@/lib/mcp-client-directory';
 import {
   buildOAuthAuthorizationServerMetadata,
   createAuthorizationServerMetadataOptionsResponse,
@@ -82,6 +83,14 @@ describe('agent access token admission', () => {
     expect((await admit({ ...ROW, surface: 'posts' }, 'posts')).admission).toMatchObject({ ok: true, grantSurface: 'posts' });
     expect((await admit(ROW, 'posts')).admission).toMatchObject({ ok: true, grantSurface: 'full' });
     expect((await admit(ROW, 'full')).admission).toMatchObject({ ok: true });
+  });
+
+  it('holds a client the code lists as posting-only off the full server, even with a grant that says full', async () => {
+    for (const clientId of Object.values(MCP_POSTING_ONLY_CLIENT_IDS)) {
+      const mislabelled = { ...ROW, client_id: clientId, surface: 'full' };
+      expect((await admit(mislabelled, 'full')).admission).toMatchObject({ status: 403, code: 'AGENT_SURFACE_NOT_ALLOWED' });
+      expect((await admit(mislabelled, 'posts')).admission).toMatchObject({ ok: true });
+    }
   });
 
   it('answers 503, never 401, when the database cannot be asked', async () => {
