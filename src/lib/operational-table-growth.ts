@@ -92,6 +92,11 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // good until a pruning migration (the runbook's retention follow-up). A backstop against a
   // runaway agent, sized far above any steady state today.
   agent_tool_calls: { warning: 200_000, degraded: 1_000_000 },
+  // The app's own authorization server: one access and one refresh hash per refresh of a grant.
+  // A grant's expired rows go at its next refresh and the rest a day after they expire
+  // (agent_oauth_purge_expired), but a used refresh hash is kept its 90 days so a copy presented
+  // later is recognised. A backstop against a client that refreshes in a loop.
+  agent_oauth_tokens: { warning: 200_000, degraded: 1_000_000 },
   // One row per reader and comment liked or disliked, kept for as long as the
   // comment is: user history, not a pruned table. A planning threshold.
   post_comment_reactions: { warning: 500_000, degraded: 2_500_000 },

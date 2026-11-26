@@ -232,9 +232,28 @@ export function registerIdentityAdmissionContext(client: object, request: Reques
   });
 }
 
+/** Admissions a route established itself, by client: no assertion to verify, the answer is here. */
+const admittedIdentities = new WeakMap<object, Promise<VerifiedIdentityAdmission>>();
+
+/**
+ * Tells the services who a client object acts for, for a route that authenticated the caller
+ * itself rather than through a Supabase JWT and the proxy's assertion: the MCP routes, once an
+ * agent's token is the app's own opaque one (`agent-oauth-admission.ts`). The caller has checked
+ * the account as admission does (exists, active, not banned) before it says so.
+ *
+ * It is keyed on the client object, never on anything a request carries, so only server code
+ * holding that object can make the statement. The client must be one made for this request: a
+ * shared client would carry one caller's identity into another's request.
+ */
+export function registerAdmittedIdentity(client: object, user: User): void {
+  admittedIdentities.set(client, Promise.resolve({ state: 'active', user }));
+}
+
 export async function getVerifiedIdentityAdmission(
   client: object,
 ): Promise<VerifiedIdentityAdmission | null> {
+  const admitted = admittedIdentities.get(client);
+  if (admitted) return admitted;
   const context = admissionContexts.get(client);
   if (!context) return null;
   context.verified ??= verifyIdentityAdmission(context.assertion, context);

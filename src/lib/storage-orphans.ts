@@ -170,6 +170,7 @@ export const ORPHAN_SCANNED_TABLES: ReadonlyArray<{ table: string; key: readonly
 
 const TELEMETRY = 'telemetry or counters: no stored paths, and too large to read whole';
 const NO_TEXT = 'no text or JSON column';
+const OAUTH_SERVER = 'OAuth clients, requests and token hashes: ids, hashes, client names and redirect URIs, never a stored path';
 const SEARCH_DICTIONARY = 'single words of letters, held to that by a check: never a path';
 const SEARCH_ENTITIES = 'model and tool names and their keys, at most 80 characters, copied from Made with: never a stored path';
 const SEARCH_PHRASES = 'phrases of words and model or tool names of at most 60 characters, counts and post ids: never a path';
@@ -185,6 +186,12 @@ const RECIPE_COPY_SOURCES = 'where passed-on recipe copies came from: it names o
 /** Every other table, and why it is not read for references. */
 export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   account_deletion_wallet_records: NO_TEXT,
+  // The app's own authorization server for MCP: requests, grants and token hashes hold ids,
+  // hashes and times; a client holds its name, site and redirect URIs.
+  agent_oauth_authorizations: OAUTH_SERVER,
+  agent_oauth_clients: OAUTH_SERVER,
+  agent_oauth_grants: NO_TEXT,
+  agent_oauth_tokens: OAUTH_SERVER,
   // The MCP server's audit ledger: tool names, codes and ids, one row per agent call.
   agent_tool_calls: TELEMETRY,
   backend_job_locks: TELEMETRY,

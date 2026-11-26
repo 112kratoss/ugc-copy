@@ -221,6 +221,12 @@ const REGISTERED_ROUTES = [
   // Its posting-only form, the server Claude's connectors directory lists: the same admission,
   // and no tool that starts a run (mcp-surfaces.ts).
   '/api/mcp/posts',
+  // The app's own authorization server for those routes, as this app's pages reach it with the
+  // web session: the consent page's answer, and Connected apps' list and Disconnect
+  // (agent-oauth-route-adapter-service.ts). An account decides what acts as it; a guest holds
+  // nothing an agent could act as, and an agent's own token is refused here like everywhere else.
+  '/api/oauth/consent',
+  '/api/oauth/grants',
 ] as const;
 
 /**

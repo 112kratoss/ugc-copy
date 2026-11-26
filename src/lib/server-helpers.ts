@@ -76,6 +76,26 @@ export function createServiceClient(): SupabaseClient {
     return cachedServiceClient;
 }
 
+/**
+ * A service-role client of its own, for one request. The MCP routes hand it to the services as
+ * the caller's client once an agent's token is the app's own opaque one: there is no JWT to
+ * forward, the admitted account is registered on this object
+ * (`registerAdmittedIdentity`), and that must never land on the shared client above.
+ */
+export function createRequestServiceClient(): SupabaseClient {
+    return createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        {
+            auth: {
+                autoRefreshToken: false,
+                detectSessionInUrl: false,
+                persistSession: false,
+            },
+        }
+    );
+}
+
 export { getStoredMediaLocation, isMediaBucket, type MediaBucket } from '@/lib/media-urls';
 
 /**

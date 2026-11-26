@@ -335,6 +335,10 @@ describe('route identity policy', () => {
       // An agent acting as a creator: the consent page refuses a guest, and
       // so does the route if a guest's token arrives anyway.
       '/api/mcp',
+      // The app's own authorization server, as its pages reach it: an account
+      // answers the consent page and manages what acts as it.
+      '/api/oauth/consent',
+      '/api/oauth/grants',
     ]) {
       expect(routeIdentityPolicy(route), route).toBe('registered');
     }

@@ -1,0 +1,227 @@
+# The app's own OAuth server for MCP (2026-11-26)
+
+Status: built on `feat/agent-token-broker`, behind `MCP_AUTHORIZATION_SERVER`. Not cut over.
+Owner's decision, 2026-11-26: "our own token exchange".
+
+## Why
+
+An agent connects to `/api/mcp` and `/api/mcp/posts` through OAuth. Until now Supabase Auth's
+OAuth 2.1 server issued the agent's token, so that token was a Supabase session: the app refused
+it on every route but the MCP ones (`agent-token.ts`), and that was the only line, because the
+same token is valid at the Supabase project itself (Auth, PostgREST, Storage).
+
+The requirement: **no OAuth client can obtain a Supabase JWT, refresh token or session by any
+path.** So the app is the authorization server, the agent's token is an opaque string only this
+app can read, and Supabase's OAuth server ends up switched off. A proxy in front of Supabase's
+token endpoint would not meet it: a client could call Supabase directly.
+
+## What an agent holds afterwards
+
+| | Before | After |
+|---|---|---|
+| Access token | Supabase JWT with `client_id` | `mbat_` + 256 random bits, meaningless outside this app |
+| Refresh token | Supabase refresh token | `mbrt_` + 256 random bits |
+| Valid at Supabase (Auth, PostgREST, Storage) | yes, as the creator | no: not a JWT |
+| Bound to | nothing | one grant: one account, one client, one MCP server |
+
+## Tables (migration `20261126121704_agent_oauth_server.sql`)
+
+All four: RLS on, no policy, every grant revoked from `anon` and `authenticated`, read and written
+by the service role only. Secrets are stored as `base64url(SHA-256(value))`, never the value.
+
+- `agent_oauth_clients`: `client_id` (text, the ids already registered), `client_name`,
+  `client_uri`, `redirect_uris text[]`, `token_endpoint_auth_method` (`none`,
+  `client_secret_post`, `client_secret_basic`), `client_secret_hash`, `surface` (`full` or
+  `posts`: the widest server it may be granted), `disabled_at`.
+- `agent_oauth_authorizations`: one row per `/oauth/authorize` request (`id` is the
+  `authorization_id` the consent page carries, `mbar_…`): client, redirect URI, surface, `state`,
+  `code_challenge`, the account it was shown to (`user_id`), `consent_token_hash`, `status`
+  (`pending`, `approved`, `denied`, `consumed`), `code_hash`, `code_expires_at`, `grant_id`,
+  `expires_at` (10 minutes).
+- `agent_oauth_grants`: one row per approval: `user_id`, `client_id`, `surface`, `created_at`,
+  `last_used_at`, `revoked_at`, `revoked_reason` (`user`, `client`, `reuse`, `code_replay`,
+  `operator`).
+- `agent_oauth_tokens`: `token_hash` (primary key), `kind` (`access`, `refresh`), `grant_id`,
+  `expires_at`, `used_at` (a refresh token's first use).
+
+Functions, `service_role` only: `agent_oauth_consume_code` (single use; a replayed code revokes
+its grant), `agent_oauth_issue_tokens`, `agent_oauth_rotate_refresh_token` (rotation and reuse
+detection in one transaction), `agent_oauth_token_admission` (the MCP routes' one round trip:
+token, grant, client and the account's lifecycle), `agent_oauth_revoke_grants`,
+`agent_oauth_revoke_token`, `agent_oauth_import_supabase_clients` (cutover: copies the registered
+clients, a confidential one's secret hash included, so no client id or secret changes).
+
+## Endpoints
+
+| Path | What |
+|---|---|
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 metadata. Issuer: the site origin. |
+| `GET /.well-known/oauth-protected-resource[/api/mcp[/posts]]` | RFC 9728, as before; names the app as authorization server once the flag says so. |
+| `GET /oauth/authorize` | Code flow start. Validates, stores the request, sends the browser to `/oauth/consent?authorization_id=mbar_…`. |
+| `POST /oauth/token` | `authorization_code` and `refresh_token` grants. |
+| `POST /oauth/revoke` | RFC 7009: a client ends its own grant. |
+| `POST /api/oauth/consent` | The consent page's answer (web session, registered accounts). |
+| `GET`, `DELETE /api/oauth/grants` | Connected apps: list and disconnect. |
+
+Rules: `response_type=code` only; PKCE `S256` required (no `plain`, no missing challenge);
+`redirect_uri` required and matched as an exact string; pre-registered clients only; a parameter
+sent twice is refused; `resource` (RFC 8707) must be one of the two MCP URLs of this origin and
+binds the grant to that server; a `posts` client is never granted the full server. The confidential
+client authenticates with its secret (`client_secret_post` or `client_secret_basic`), compared in
+constant time. Authorization code: 2 minutes, single use. Access token: 1 hour. Refresh token:
+rotated on every use, each valid 90 days from issue.
+
+Consent: the page keeps its look and its rules (registered accounts only, the fixed access list,
+the posting-only list when the grant is for the posting server). It is rendered for the signed-in
+account, which binds the request to that account and mints a one-time consent token into the
+page. The answer is a same-origin `POST` carrying the web session's bearer token, the
+`authorization_id` and the consent token; the adapter also checks `Origin` and `Sec-Fetch-Site`.
+`X-Frame-Options: DENY` and `frame-ancestors 'none'` are the site-wide headers, unchanged.
+
+MCP admission (`agent-oauth-admission.ts`): hash the bearer token, one `agent_oauth_token_admission`
+round trip, then the same answers the proxy's evaluator gives: unknown, expired or revoked 401
+with the `WWW-Authenticate` challenge; account gone 401; `deleting` 409; banned 401; `merged` 409;
+guest 403 `REGISTRATION_REQUIRED`; a posting grant at `/api/mcp` 403 `AGENT_SURFACE_NOT_ALLOWED`.
+The tools then run on a per-request service-role client told who the admitted account is; the
+agent's token is stripped from the request the services see.
+
+Rate limits (`check_backend_rate_limit`): authorize 30 per minute per network address; token 60
+per minute per network address; revoke 30 per minute per network address; the consent answer and
+Disconnect 20 per minute per account. None is keyed on the client id, which is public: a limit
+there would let anyone lock a client out. No token, code, secret or consent token is logged.
+
+## The flag
+
+`MCP_AUTHORIZATION_SERVER`, read per request (`agent-oauth-mode.ts`):
+
+| Value | Metadata names | `/oauth/*` and `/api/oauth/*` | MCP routes accept |
+|---|---|---|---|
+| unset or `supabase` | Supabase | answer 404 | Supabase agent JWTs (today's behaviour) |
+| `both` | the app | on | app tokens, and Supabase agent JWTs already issued |
+| `app` | the app | on | app tokens only; any JWT is refused |
+
+`MCP_SERVER_DISABLED=1` still switches the MCP routes off in every mode.
+
+## What each existing file becomes
+
+- `agent-token.ts`: unchanged rule for Supabase JWTs (still refused off the MCP routes while
+  Supabase's server is on); gains the app token's prefix test.
+- `mcp-route-adapter-service.ts`: picks the admission by token shape and flag; app tokens go to
+  `agent-oauth-admission.ts`, JWTs to the existing evaluator until `app`.
+- `mcp-server-service.ts`: unchanged. Its one use of the caller's client beyond
+  `getVerifiedAuthUserResult` is signing Storage links for paths already checked against
+  `userId` (`resolveGenerationMediaSource`), which the service client does as the web's run
+  steps already do.
+- `identity-admission-assertion.ts`: `registerAdmittedIdentity(client, user)` lets a route that
+  authenticated the caller itself tell the services who it is, with no assertion header.
+- `oauth-protected-resource-metadata.ts`: `authorization_servers` follows the flag.
+- `oauth-consent-service.ts`, `/oauth/consent`: the page loads an `mbar_` request on the server
+  and answers through `/api/oauth/consent`; a GoTrue id keeps the old client-side path until `app`.
+- `connected-apps.ts`, `ConnectedApps.tsx`: list and revoke the app's grants through
+  `/api/oauth/grants`, merged with Supabase's until its server is off.
+- `route-identity-policy.ts`: `/api/oauth/consent` and `/api/oauth/grants` are `registered`.
+- `scripts/ops/oauth-clients.ts`: `--app` turns `list` and `create` to `agent_oauth_clients`, and
+  `import`, `disable`, `enable` and `rotate-secret` exist only there; without the switch `list`
+  and `create` are still Supabase's, until the follow-up.
+- `server-helpers.ts`: `createRequestServiceClient()`, the per-request service client the tools
+  get behind an app token.
+- `agent-tool-calls.ts`: unchanged; `client_id` is the app client's id, which is the same id.
+
+## Decisions
+
+1. **Opaque tokens looked up by hash**, not JWTs signed by the app. Rejected: self-signed JWTs
+   (no round trip, but revocation waits for expiry and a signing key becomes one more secret).
+2. **Clients in a table**, imported once from Supabase with their ids and secret hash. Rejected:
+   clients in code (a confidential secret hash and ChatGPT's per-account redirect do not belong
+   in a public repo) and new ids (every setup command and the directory listing would change).
+3. **No dynamic client registration.** Every client in `mcp-client-directory.ts` signs in with a
+   static id today (Claude, Claude Code, Cursor, Codex, ChatGPT, the two posting-only Claude
+   clients); none needs it. Rejected: open registration, which lets any program name itself.
+4. **The request is stored and carried as `authorization_id`**, as GoTrue did, so the consent
+   page, its sign-in round trip and its tests keep their shape. Rejected: the whole request in
+   the query string (long, and nothing to bind the consent token to).
+5. **Consent is asked every time.** Rejected: skipping the screen for a client approved before,
+   which for a loopback client lets any local program collect a code silently.
+6. **Refresh reuse grace of 10 seconds**: a second use of a rotated token inside 10 seconds gets
+   a fresh pair (two Claude Code processes share one stored token and race); after that it
+   revokes the grant. Rejected: zero grace, which disconnects honest clients.
+7. **Refresh tokens last 90 days unused, with no absolute cap.** Rejected: 30 days (a creator who
+   posts monthly would reconnect each time) and non-expiring (an abandoned grant stays live).
+8. **A full grant is accepted at the posting server; a posting grant only there.** The posting
+   tools are a subset, and a client that omits `resource` gets its client's default surface.
+   Rejected: strict audience equality, which breaks a full client connected to the posting URL
+   and protects nothing.
+9. **No `iss` in the authorization response** (RFC 9207 not advertised): Codex chooses its
+   redirect path by that flag, and its registered redirect is the form it sends today.
+10. **Scopes are not permissions.** Any `scope` is accepted and the token response says `mcp`;
+    access is the grant's surface. Rejected: per-tool scopes, which no client asks for.
+11. **Tools run on the service client with explicit owner checks**, not a JWT minted for the
+    account. Rejected: a server-side Supabase session per agent (it is the thing being removed).
+12. **A flag with a `both` stage**, so the new server is proven on production with one real
+    connection before anything is refused. Rejected: a hard switch at deploy.
+13. **`/oauth/authorize` and `/oauth/token` outside `/api`**: conventional paths, outside the
+    proxy's bearer admission, which they do not use.
+
+## Cutover
+
+The runbook has the commands (`docs/mcp-server-operations.md`, "The app's own authorization
+server" → "Cutover"). Steps 1 to 3 change nothing a creator can see. Every step from 2 on is the
+owner's to approve.
+
+1. Merge and deploy with the flag unset. The migration creates empty tables. Nothing changes.
+2. Import the clients: `npm run ops:oauth-clients -- import --apply` against production. It
+   copies each Supabase OAuth client (id, name, redirect URIs, auth method, secret hash) into
+   `agent_oauth_clients`, marks the two posting-only ids `posts`, and prints the ids and names.
+   It skips a secret hash that is not the 43-character SHA-256 form (then the directory client
+   needs a new secret, `rotate-secret`, and the listing an update).
+3. Set `MCP_AUTHORIZATION_SERVER=both` on Vercel production and redeploy.
+4. Prove it on production with the owner's own account: reconnect Claude Code, approve on the
+   consent page, run `list_models` and one `publish_post` with `visibility: private`; check
+   Connected apps lists it and that Disconnect ends it.
+5. Set `MCP_AUTHORIZATION_SERVER=app` and redeploy. Supabase-issued agent tokens are now refused
+   at the MCP routes; every connected agent is asked to sign in again (two accounts on
+   2026-11-26, both the owner's).
+6. In the Supabase dashboard, Authentication → OAuth Server → Apps: delete each app, which
+   deletes its consents and sessions, so no old refresh token works.
+7. Same page: switch the OAuth server off.
+8. Check that Supabase's authorization-server metadata no longer answers and that no session
+   with an OAuth client remains.
+9. Distribution. The Claude Code plugin, the setup page's commands, the MCP registry entry
+   (`server.json`) and the directory listings name the MCP URL and a client id, never an
+   authorization server, and the import keeps every id and the directory client's secret: nothing
+   to republish or resubmit. Reconnect once from the Claude connectors-directory listing and from
+   ChatGPT to confirm.
+10. Follow-up PR: delete the `supabase` and `both` branches, `supabase.auth.oauth` from the
+    consent page and Connected apps, the Supabase half of `ops:oauth-clients`, and
+    `[auth.oauth_server]` from `supabase/config.toml`; make `app` the only behaviour.
+
+Rollback before step 6: set the flag back to `supabase` and redeploy; Supabase's clients and
+grants are untouched until then.
+
+## Proof
+
+On a throwaway local stack (GoTrue v2.186.0, CLI 2.75.0, never production), 2026-11-26:
+
+- Before: with a token Supabase's OAuth server issued, the audit's probe changed the account's
+  password and signed in with it, approved a grant for another client, and enrolled an MFA
+  factor.
+- After, flag `app`, the real route handlers against the same stack: authorize → consent →
+  token issues `mbat_`/`mbrt_` tokens; `tools/list`, `list_creations` and a private
+  `publish_post` work and write `agent_tool_calls` rows under the client's id; the same token is
+  answered 403 by GoTrue (`/user`, `PUT /user`, the consent endpoint, `/factors`), 401 by
+  PostgREST and 400 by Storage, and the refresh token 400 by GoTrue's token endpoint; a Supabase
+  session JWT and a Supabase agent JWT are both answered 401 at `/api/mcp`; a posting-only
+  client is refused the full server at authorize and at the route; a replayed code, a reused
+  refresh token, Disconnect, `/oauth/revoke` and a ban each end access at once.
+- The migration's rules are held by `supabase/tests/database/agent_oauth_server.test.sql` (81
+  assertions) on a full replay.
+
+## Known limits
+
+- A used refresh token's hash is kept until it expires (90 days) so a late reuse is recognised:
+  a grant refreshed hourly holds about 2,000 small rows. `agent_oauth_tokens` has a row budget in
+  `operational-table-growth.ts`.
+- The flag defaults to `supabase`, so a deployment that loses the variable reverts to the old
+  server; after step 7 that means every agent call is 401, which is loud. The follow-up removes
+  the default.
+- `agent_oauth_clients` has no command to add a redirect URI to an existing client yet.

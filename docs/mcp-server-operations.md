@@ -49,6 +49,133 @@ agent token is the creator's session under RLS, like any user token, so whoever 
 can read and change what that account may until the grant is revoked (which deletes the token's
 session) or the hour runs out. Revocation and expiry are the remedy; see "Revoking a client".
 
+That last paragraph is why the app has an authorization server of its own, which replaces
+Supabase's at the cutover: the next section. Everything from "Enabling the OAuth server" on
+describes Supabase's server and holds until the cutover's step 5.
+
+## The app's own authorization server
+
+Plan and decisions: `docs/plans/agent-token-broker-plan-2026-11-26.md`. Code:
+`src/lib/agent-oauth-*.ts`, `src/lib/oauth-authorization-server-metadata.ts`, migration
+`20261126121704_agent_oauth_server.sql`.
+
+The app is the OAuth 2.1 authorization server for both MCP routes. An agent's access token is
+`mbat_` and 256 random bits, its refresh token `mbrt_` and the same: rows of hashes in this
+app's database, meaning nothing at the Supabase project (not a JWT; Auth, PostgREST and Storage
+refuse it). An access token lasts an hour; a refresh token is replaced on every use and lasts
+90 days unused; a refresh token used again more than 10 seconds after its first use revokes its
+grant (`agent_oauth_refresh_reuse_detected` in the logs).
+
+### The flag
+
+`MCP_AUTHORIZATION_SERVER` on Vercel, read per request; a change needs a configuration-only
+redeployment.
+
+| Value | Metadata names | `/oauth/authorize`, `/oauth/token`, `/oauth/revoke`, `/api/oauth/*` | MCP routes accept |
+|---|---|---|---|
+| unset, `supabase` | Supabase | 404 | Supabase agent JWTs |
+| `both` | the app | on | the app's tokens, and Supabase agent JWTs already issued |
+| `app` | the app | on | the app's tokens only; every JWT is answered 401 |
+
+`MCP_SERVER_DISABLED=1` still answers both MCP routes 503 in every mode.
+
+### How a connection works under it
+
+1. 401 with the same challenge; the protected-resource document names `https://magicbooklet.com`
+   as the authorization server, whose RFC 8414 document is
+   `/.well-known/oauth-authorization-server`.
+2. The client sends the browser to `/oauth/authorize` with its client id, its registered redirect
+   URI (matched as an exact string), a PKCE S256 challenge and `resource` (the MCP URL it
+   connects to). A request that fails the client or redirect check is shown a plain page; any
+   later refusal goes to the client's redirect URI as `error=…`.
+3. The request is stored and the browser goes to `/oauth/consent?authorization_id=mbar_…`: the
+   same page, the same sign-in round trip, the same guest wall. The page lists the access of the
+   server the grant is for (the posting list for `/api/mcp/posts`). Consent is asked every time.
+4. Allow sends the browser to the redirect URI with a code (2 minutes, single use). The client
+   exchanges it at `/oauth/token` with its PKCE verifier; the confidential directory client also
+   sends its secret.
+5. Each tool call carries the access token. The route hashes it and asks the database once
+   (`agent_oauth_token_admission`): the grant is live, the client enabled, the account exists, is
+   active, not banned, not a guest. The tools run on the service role with the admitted account;
+   the token is not forwarded anywhere.
+
+### Clients
+
+Rows of `public.agent_oauth_clients`; no dynamic registration. `npm run ops:oauth-clients`:
+
+```bash
+npm run ops:oauth-clients -- list --app
+npm run ops:oauth-clients -- import            # what the cutover would copy from Supabase; --apply does it
+npm run ops:oauth-clients -- create --app --name "<name>" --redirect-uri <uri> [--confidential] [--posting-only] --apply
+npm run ops:oauth-clients -- disable --client-id <id> --apply    # its sign-ins and tokens stop at once
+npm run ops:oauth-clients -- enable --client-id <id> --apply
+npm run ops:oauth-clients -- rotate-secret --client-id <id> --apply   # new secret to the clipboard
+```
+
+`import` keeps every id, redirect URI and, for a confidential client, the stored hash of its
+secret (GoTrue v2.186.0 stores `base64url(SHA-256(secret))`, the form this server uses), so no
+setup command, plugin or directory listing changes. It marks the ids in
+`MCP_POSTING_ONLY_CLIENT_IDS` as `posts`: such a client is never granted `/api/mcp`. It skips a
+client already present, and names any confidential client whose hash is in another form
+(`secret_hash_unusable`): give that one a new secret with `rotate-secret` and update whoever
+holds it. A new redirect URI for an existing client (ChatGPT's per-account callback) is an
+`update` of `redirect_uris` in the SQL editor until the CLI grows a command for it.
+
+### Revoking
+
+- One creator, one app: Connected apps → Disconnect (`DELETE /api/oauth/grants`). The grant's
+  tokens are deleted: the next call is 401 and the refresh fails, at once.
+- One client for everyone: `disable --client-id <id> --apply`.
+- Everyone: the kill switch. To end every grant without switching the server off:
+  `select public.agent_oauth_revoke_grant(id, 'operator') from public.agent_oauth_grants where revoked_at is null;`
+
+### Logs
+
+`agent_oauth_authorization_started`, `agent_oauth_consent_approved`, `agent_oauth_consent_denied`,
+`agent_oauth_token_issued` (`grant`: `authorization_code` or `refresh_token`),
+`agent_oauth_grant_revoked` (`by`: `user` or `client`), `agent_oauth_refresh_reuse_detected`,
+`agent_oauth_code_replayed`, and the refusals `agent_oauth_authorize_refused`,
+`agent_oauth_token_refused`, `agent_oauth_revoke_refused` with the OAuth error code. Each names
+the client and, where known, the account and the grant; none carries a token, a code, a secret
+or a request parameter. `mcp_request_refused` gains `reason: token_kind` (a token of a kind the
+flag does not take).
+
+Rate limits: authorize 30 a minute per network address; token 60 a minute per network address;
+revoke 30; the consent answer and Disconnect 20 a minute per account.
+
+### Cutover
+
+Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a creator sees.
+
+1. Deploy with the flag unset. The migration creates empty tables.
+2. `npm run ops:oauth-clients -- import`, read the list, then `import --apply`, against
+   production. Check `list --app` shows all seven clients, the two posting-only ones as `posts`.
+3. Set `MCP_AUTHORIZATION_SERVER=both` in Vercel Production; configuration-only redeployment.
+   `curl -s https://magicbooklet.com/.well-known/oauth-authorization-server` answers the document
+   and `…/.well-known/oauth-protected-resource/api/mcp` names `https://magicbooklet.com`.
+4. Prove it with the owner's own account: in Claude Code, `claude mcp logout magicbooklet` (or
+   remove and re-add the server) and reconnect; approve on the consent page; run `list_models`
+   and one `publish_post` with `visibility: private`; see the app under Connected apps and
+   Disconnect it; reconnect. Read the Vercel logs for `agent_oauth_token_issued`.
+5. Set `MCP_AUTHORIZATION_SERVER=app`; configuration-only redeployment. Every agent still holding
+   a Supabase token is answered 401 and signs in again through the app.
+6. End what Supabase's server issued. Supabase dashboard → Authentication → OAuth Server → Apps:
+   delete each app. Deleting an app deletes its consents and its sessions (`auth.oauth_consents`
+   and `auth.sessions.oauth_client_id` reference `auth.oauth_clients` with `on delete cascade`),
+   so no old access or refresh token works. The same in the SQL editor, if the dashboard is
+   awkward: `delete from auth.oauth_clients;`
+7. Same page: switch the OAuth server off.
+8. Check: `curl -s -o /dev/null -w '%{http_code}' https://<project-ref>.supabase.co/auth/v1/.well-known/oauth-authorization-server`
+   is not 200, and `select count(*) from auth.sessions where oauth_client_id is not null` is 0.
+9. Distribution. The Claude Code plugin, the setup page's commands and `server.json` name the MCP
+   URL and a client id, never an authorization server, and both are unchanged: nothing to
+   republish. Reconnect once from the Claude connectors-directory listing (posting server) and
+   from ChatGPT to confirm their held client id (and the directory's secret) still sign in.
+10. Follow-up PR: delete the `supabase` and `both` paths (the plan's last step).
+
+Rollback before step 6: set the flag back to `supabase` and redeploy. Supabase's clients and
+grants are untouched until step 6; the app's grants stay in its tables, unused.
+
 ## Enabling the OAuth server (production dashboard)
 
 Supabase Auth's OAuth server is off by default and is enabled per project in the dashboard,
@@ -684,6 +811,12 @@ shipped, a preview project) the grants API answers `feature_disabled`, which the
 no apps connected rather than as a failure. Revoking deletes the client's sessions: the agent's next
 call fails the route's lifecycle check and is answered 401 with the challenge, its refresh fails,
 and connecting again goes through the consent screen afresh.
+
+Since the app has an authorization server of its own ("The app's own authorization server"), the
+section lists both servers' grants as one list: the app's through `GET /api/oauth/grants` with
+the session's token, Supabase's as above until its server is off, which then reads as none.
+Disconnect goes to each server that listed the app (`combineConnectedAppsClients`); a list that
+one server could not answer is shown as a failure, never as shorter.
 
 ## The kill switch
 
