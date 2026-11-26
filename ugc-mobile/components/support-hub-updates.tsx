@@ -1,3 +1,4 @@
+import { useIsFocused } from '@react-navigation/native';
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
 import { Megaphone, MessageCircle, MessageCircleOff, Sparkles } from 'lucide-react-native';
@@ -7,6 +8,7 @@ import { FlatList, Pressable, View } from 'react-native';
 import { SkeletonBone } from '@/components/skeleton';
 import { SupportHubReactions } from '@/components/support-hub-reactions';
 import { AppText, SecondaryButton, StatusBlock } from '@/components/ui';
+import { useAppForeground } from '@/lib/app-foreground';
 import { useAuth } from '@/lib/auth';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { textPostViewerHref } from '@/lib/immersive-preview-view-model';
@@ -73,12 +75,18 @@ export function SupportUpdatesTab({ active }: { active: boolean }) {
   const latestAt = supportUpdatesLatestAt(pages);
 
   // The newest update has been shown: the dot goes, here and on the menu, and
-  // the menu's own read of the newest takes this fresher one.
+  // the menu's own read of the newest takes this fresher one. Shown means
+  // looked at: the tab in front, on the screen in front, with the app open,
+  // so a read that lands under a pushed post page or in the background clears
+  // nothing until the reader is back.
+  const isFocused = useIsFocused();
+  const foreground = useAppForeground();
+  const lookedAt = active && isFocused && foreground;
   useEffect(() => {
-    if (!active || latestAt === undefined) return;
+    if (!lookedAt || latestAt === undefined) return;
     queryClient.setQueryData(SUPPORT_UPDATES_LATEST_QUERY_KEY, latestAt);
     if (latestAt) void markSupportUpdatesSeen(latestAt);
-  }, [active, latestAt, queryClient]);
+  }, [lookedAt, latestAt, queryClient]);
 
   const reactor = useMemo(() => createSupportHubReactor({
     send: (id, emoji) => api.reactToSupportUpdate(id, emoji),

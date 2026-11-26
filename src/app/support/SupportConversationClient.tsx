@@ -59,19 +59,19 @@ export function SupportChatIntro() {
  * prompt for one without, so no thread is asked for there.
  */
 export default function SupportConversationClient({
-  initialDraft = '',
-  focusComposer = false,
-  onDraftChange,
+  active = true,
+  composerRequest = null,
 }: {
-  /** What the composer opens with: the message written before another tab was opened, or "Feature idea: ". */
-  initialDraft?: string;
-  /** Puts the focus in the composer as it opens, after the text: "Suggest a feature". */
-  focusComposer?: boolean;
-  /** The message being written, as it changes. */
-  onDraftChange?: (draft: string) => void;
+  /**
+   * False while Help & Support shows another tab: the chat stays mounted, so a message on its way,
+   * a picked photo, a reply or an edit survive the switch, but it reads nothing and marks nothing read.
+   */
+  active?: boolean;
+  /** "Suggest a feature": each new nonce puts its text in an empty composer and the focus after it. */
+  composerRequest?: { text: string; nonce: number } | null;
 }) {
   const transport = useMemo(() => createAccountSupportTransport(authHeaders), []);
-  const chat = useSupportChat({ viewer: 'user', transport });
+  const chat = useSupportChat({ viewer: 'user', transport, active });
   const [retrying, setRetrying] = useState(false);
 
   const retry = async () => {
@@ -119,9 +119,7 @@ export default function SupportConversationClient({
           emptyTitle={SUPPORT_WORDS.emptyTitle}
           emptyBody={SUPPORT_WORDS.emptyBody}
           closedNote={SUPPORT_WORDS.resolved}
-          initialDraft={initialDraft}
-          autoFocusComposer={focusComposer}
-          onDraftChange={onDraftChange}
+          composerRequest={composerRequest}
           avatar={(
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
               <LifeBuoy className="h-5 w-5" aria-hidden />

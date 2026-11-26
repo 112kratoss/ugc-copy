@@ -1782,7 +1782,7 @@ describe('comments turned off', () => {
     author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
   });
 
-  it('says comments are off in the composer\'s place, and offers no reply or edit, the thread still readable', () => {
+  it('says comments are off in the composer\'s place, and offers no reply, the thread still readable', () => {
     pages = [{ ...page([comment(), mine()]), commentsLocked: true }];
     const { tree } = renderInline();
 
@@ -1794,8 +1794,20 @@ describe('comments turned off', () => {
     expect(pressables(tree.root, 'Reply to @viewer')).toHaveLength(0);
     // Likes stay: they are not comments.
     expect(pressables(tree.root, "Like @batman's comment")).toHaveLength(1);
-    // An edit is written in the composer: the author keeps Delete only.
-    expect(commentOptions(tree.root, '@viewer').actions.map((action) => action.label)).toEqual(['Delete']);
+    // An edit is not a new comment: the lock refuses only those, on the server and the web alike.
+    expect(commentOptions(tree.root, '@viewer').actions.map((action) => action.label)).toEqual(['Edit', 'Delete']);
+  });
+
+  it('opens the composer for an edit of one\'s own comment, in the place of "Comments are off"', () => {
+    pages = [{ ...page([comment(), mine()]), commentsLocked: true }];
+    const { tree } = renderInline();
+
+    renderer.act(() => {
+      commentOptions(tree.root, '@viewer').actions.find((action) => action.label === 'Edit')?.onPress?.();
+    });
+    expect(texts(tree.root)).toContain('Editing your comment');
+    expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(1);
+    expect(tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityLabel === 'Comments are off')).toHaveLength(0);
   });
 
   it('says the same in the reel\'s sheet', () => {

@@ -94,9 +94,16 @@ export type SupportUnreadMark = { fromId: string; count: number } | null;
 export function useSupportChat({
   viewer,
   transport,
+  active = true,
 }: {
   viewer: SupportMessageAuthor;
   transport: SupportChatTransport;
+  /**
+   * False while the thread is kept but not on screen (Help & Support's Updates
+   * and Roadmap tabs): it reads nothing again and marks nothing read, and keeps
+   * what is on its way, a photo picked or a reply started for when it is back.
+   */
+  active?: boolean;
 }) {
   const [state, setState] = useState<SupportChatState>({ kind: 'loading' });
   const [pending, setPending] = useState<SupportPendingMessage[]>([]);
@@ -243,8 +250,10 @@ export function useSupportChat({
   }, [load, noteChange]);
 
   // The thread is read again while the tab is visible, and at once when it
-  // comes back; nothing is asked while it is hidden.
+  // comes back; nothing is asked while it is hidden, or while the thread is
+  // kept off screen (`active` false), and it is read at once when shown again.
   useEffect(() => {
+    if (!active) return undefined;
     let generation = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -285,11 +294,12 @@ export function useSupportChat({
       nudgeRef.current = null;
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [load]);
+  }, [load, active]);
 
   // Read receipts: while the thread is on screen, the other side's new
   // messages are read.
   useEffect(() => {
+    if (!active) return;
     if (state.kind !== 'ready' || !state.conversation || markingRef.current) return;
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     const lastReadAt = viewer === 'user' ? state.conversation.userLastReadAt : state.conversation.staffLastReadAt;
@@ -308,7 +318,7 @@ export function useSupportChat({
       .finally(() => {
         markingRef.current = false;
       });
-  }, [state, viewer]);
+  }, [state, viewer, active]);
 
   const applyMessage = useCallback((message: SupportMessage) => {
     setState((current) => (current.kind === 'ready'

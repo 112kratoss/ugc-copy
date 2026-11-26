@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
@@ -11,8 +11,10 @@ import { useSupportUpdatesUnread } from '@/lib/support-updates-unread';
 
 import {
   SUPPORT_FEATURE_IDEA_PREFIX,
+  SUPPORT_HUB_TAB_PARAM,
   SUPPORT_HUB_TABS,
   SUPPORT_HUB_WORDS,
+  readSupportHubTab,
   supportHubPath,
   type SupportHubTab,
 } from '../../../ugc-mobile/lib/support-hub-policy/support-hub-policy';
@@ -35,19 +37,21 @@ const panelId = (tab: SupportHubTab) => `support-panel-${tab}`;
  * and Roadmap as tabs under the page's heading, opening on Chat.
  *
  * - The tab travels in the address (`?tab=updates`, `?tab=roadmap`; the chat
- *   has none), written with `router.replace` without a scroll, and a link to
- *   another tab of the page (the shell's Help & feedback opens the chat) is
- *   followed.
+ *   has none), written with the browser's `history.replaceState`, which Next's
+ *   router follows without asking the server for the page again (a press is
+ *   instant, and a failed or skewed fetch cannot turn into a reload that loses
+ *   the chat). A link to another tab of the page (the shell's Help & feedback
+ *   opens the chat) is followed through the address it leaves.
  * - The page is everyone's: a visitor reads Updates and the Roadmap, and the
  *   Chat tab asks them to sign in, or offers the support mail.
- * - The chat is drawn only while its tab is open, since it reads the thread
- *   every few seconds and marks replies read; the message being written is
- *   kept here meanwhile and given back when the tab opens again. Updates and
- *   the Roadmap stay drawn once opened, so coming back to one reads nothing.
+ * - Every tab stays drawn once opened, the chat too, as the app keeps it: a
+ *   message on its way, a picked photo, a reply or an edit survive a look at
+ *   Updates. The chat reads the thread and marks replies read only while
+ *   shown; coming back to Updates or the Roadmap reads nothing.
  * - A dot on Updates while an update is newer than this device's last look.
  */
 export default function SupportHubClient({ initialTab }: { initialTab: SupportHubTab }) {
-  const router = useRouter();
+  const searchParams = useSearchParams();
   const { session, user } = useAuth();
   const accessToken = session?.access_token ?? null;
   const hasSession = Boolean(session);
@@ -57,30 +61,32 @@ export default function SupportHubClient({ initialTab }: { initialTab: SupportHu
   const readerKey = user?.id ?? 'visitor';
 
   const [tab, setTab] = useState<SupportHubTab>(initialTab);
-  // The tab the address names, as the page was last drawn: a navigation to another one is followed.
-  const [addressTab, setAddressTab] = useState<SupportHubTab>(initialTab);
-  if (initialTab !== addressTab) {
-    setAddressTab(initialTab);
-    setTab(initialTab);
+  // The tab the address names: a navigation to another one (a link) is followed.
+  // A press writes the address too, naming the tab it already shows.
+  const addressTab = searchParams ? readSupportHubTab(searchParams.get(SUPPORT_HUB_TAB_PARAM) ?? undefined) : initialTab;
+  const [followedAddressTab, setFollowedAddressTab] = useState<SupportHubTab>(addressTab);
+  if (addressTab !== followedAddressTab) {
+    setFollowedAddressTab(addressTab);
+    setTab(addressTab);
   }
   const [openedTabs, setOpenedTabs] = useState<ReadonlySet<SupportHubTab>>(() => new Set([initialTab]));
   if (!openedTabs.has(tab)) setOpenedTabs(new Set([...openedTabs, tab]));
 
-  const [chatDraft, setChatDraft] = useState('');
-  const [focusComposer, setFocusComposer] = useState(false);
+  // "Suggest a feature" asks the mounted chat to open its composer; a message already started is kept.
+  // The request is the reader's who made it: another account signing in on the open page never gets it.
+  const [composerRequest, setComposerRequest] = useState<{ text: string; nonce: number; readerKey: string } | null>(null);
+  const readersComposerRequest = composerRequest?.readerKey === readerKey ? composerRequest : null;
   const updatesUnread = useSupportUpdatesUnread();
 
-  const selectTab = (next: SupportHubTab, { focusChat = false }: { focusChat?: boolean } = {}) => {
-    setFocusComposer(focusChat);
+  const selectTab = (next: SupportHubTab) => {
     if (next === tab) return;
     setTab(next);
-    router.replace(supportHubPath(next), { scroll: false });
+    window.history.replaceState(null, '', supportHubPath(next));
   };
 
   const suggestFeature = () => {
-    // A message already started is kept: it is what the chat opens with.
-    setChatDraft((current) => (current.trim() ? current : SUPPORT_FEATURE_IDEA_PREFIX));
-    selectTab('chat', { focusChat: true });
+    setComposerRequest((current) => ({ text: SUPPORT_FEATURE_IDEA_PREFIX, nonce: (current?.nonce ?? 0) + 1, readerKey }));
+    selectTab('chat');
   };
 
   const tabOptions: SegmentedControlOption<SupportHubTab>[] = SUPPORT_HUB_TABS.map((value) => {
@@ -116,12 +122,10 @@ export default function SupportHubClient({ initialTab }: { initialTab: SupportHu
         />
 
         <div role="tabpanel" id={panelId('chat')} aria-labelledby={tabId('chat')} hidden={tab !== 'chat'}>
-          {tab !== 'chat' ? null : hasSession ? (
-            <SupportConversationClient
-              initialDraft={chatDraft}
-              focusComposer={focusComposer}
-              onDraftChange={setChatDraft}
-            />
+          {/* Kept mounted once opened, as the app keeps it: a message on its way, a picked photo, a
+              reply or an edit survive a look at Updates. It reads and marks read only while shown. */}
+          {!openedTabs.has('chat') ? null : hasSession ? (
+            <SupportConversationClient active={tab === 'chat'} composerRequest={readersComposerRequest} />
           ) : (
             <div>
               <SupportChatIntro />

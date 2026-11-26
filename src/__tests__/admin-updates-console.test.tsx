@@ -13,6 +13,7 @@ const LIVE = '10000000-0000-4000-8000-000000000001';
 const DOWN = '10000000-0000-4000-8000-000000000002';
 const FLAGGED = '10000000-0000-4000-8000-000000000003';
 const QUIET = '10000000-0000-4000-8000-000000000004';
+const PAUSED = '10000000-0000-4000-8000-000000000005';
 const BUILDING = '20000000-0000-4000-8000-000000000001';
 const SHIPPED = '20000000-0000-4000-8000-000000000002';
 const ARCHIVED = '20000000-0000-4000-8000-000000000003';
@@ -34,7 +35,7 @@ function hub(overrides: Record<string, unknown> = {}) {
         commentCount: 4,
         commentsLocked: false,
         reactionPeople: 9,
-        broadcast: { push: false, sentCount: 120, finished: false },
+        broadcast: { sentCount: 120, finished: false },
       },
       {
         id: DOWN,
@@ -60,7 +61,7 @@ function hub(overrides: Record<string, unknown> = {}) {
         commentCount: 0,
         commentsLocked: true,
         reactionPeople: 0,
-        broadcast: { push: true, sentCount: 5000, finished: true },
+        broadcast: { sentCount: 5000, finished: true },
       },
       {
         id: QUIET,
@@ -75,6 +76,19 @@ function hub(overrides: Record<string, unknown> = {}) {
         reactionPeople: 3,
         broadcast: null,
       },
+      {
+        id: PAUSED,
+        kind: 'announcement',
+        title: 'Paused note',
+        body: 'Taken down while its alert was going out.',
+        createdAt: '2026-11-14T10:00:00.000Z',
+        published: false,
+        hiddenByReview: false,
+        commentCount: 0,
+        commentsLocked: false,
+        reactionPeople: 0,
+        broadcast: { sentCount: 40, finished: false },
+      },
     ],
     roadmap: [
       { id: BUILDING, title: 'Folders for creations', summary: 'Group your work.', status: 'building', position: 0, shippedAt: null, shippedUpdateId: null, archived: false, people: 3 },
@@ -84,6 +98,8 @@ function hub(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
@@ -174,16 +190,21 @@ describe('the console’s Updates and Roadmap', () => {
     const flagged = await updateRow('Reported note');
     expect(flagged).toHaveTextContent('Hidden by review');
     expect(flagged).toHaveTextContent('Comments off');
-    expect(flagged).toHaveTextContent('Alert + push sent to 5,000 accounts, finished');
+    expect(flagged).toHaveTextContent('Alert sent to 5,000 accounts, finished');
     expect(within(flagged).getByRole('button', { name: 'Turn comments on' })).toBeInTheDocument();
     expect(within(flagged).queryByRole('button', { name: 'Continue sending' })).not.toBeInTheDocument();
     expect(within(flagged).queryByRole('link', { name: 'Open post' })).not.toBeInTheDocument();
+
+    // A take-down pauses an alert going out; it goes on only once the update is back up.
+    const paused = await updateRow('Paused note');
+    expect(paused).toHaveTextContent('Alert paused at 40 accounts while the update is down');
+    expect(within(paused).queryByRole('button', { name: 'Continue sending' })).not.toBeInTheDocument();
 
     // Only a live update published quietly can still be announced.
     const quiet = await updateRow('Quiet note');
     expect(quiet).toHaveTextContent('Quiet: no alert went out');
     expect(within(quiet).getByRole('button', { name: 'Announce…' })).toBeEnabled();
-    for (const announced of [live, down, flagged]) {
+    for (const announced of [live, down, flagged, paused]) {
       expect(within(announced).queryByRole('button', { name: 'Announce…' })).not.toBeInTheDocument();
     }
 
@@ -248,13 +269,14 @@ describe('the console’s Updates and Roadmap', () => {
 
     await waitFor(() => expect(posted(fetchMock)).toEqual([{
       action: 'publish',
+      postId: expect.stringMatching(UUID),
       kind: 'shipped',
       title: 'Folders are here',
       body: 'Group your creations into folders.\nOpen Studio to start.',
       commentsLocked: true,
       announce: 'alert',
     }]));
-    // Only a push asks first.
+    // The composer's choice is the ask: an Alert from it asks nothing more.
     expect(confirmMock).not.toHaveBeenCalled();
     expect(await within(composer).findByText('Published. The alert is going out to every account.')).toBeInTheDocument();
     expect(readCount(fetchMock)).toBe(2);
@@ -264,99 +286,101 @@ describe('the console’s Updates and Roadmap', () => {
     expect(within(composer).getByRole('checkbox', { name: 'Comments on' })).toBeChecked();
   });
 
-  it('asks before an Alert + push, and sends nothing on a no', async () => {
-    const fetchMock = consoleApi();
-    confirmMock.mockResolvedValueOnce(false);
+  it('tries the same post again after a failure, and a new one once published or taken down', async () => {
+    const answers = [
+      json({ error: 'That did not go through. Try again.' }, 500),
+      json({ error: 'The last try was taken down. Press Publish again to post it as a new update.', code: 'DRAFT_TAKEN_DOWN' }, 409),
+      json({ success: true, postId: LIVE, announced: false }),
+    ];
+    const fetchMock = consoleApi({ answer: () => answers.shift() ?? json({ success: true, postId: LIVE, announced: false }) });
     render(<AdminUpdatesConsole />);
 
     const composer = await screen.findByRole('region', { name: 'Post an update' });
     fireEvent.change(within(composer).getByLabelText('Title'), { target: { value: 'Big news' } });
     fireEvent.change(within(composer).getByLabelText('Body'), { target: { value: 'Something big.' } });
-    fireEvent.click(within(composer).getByRole('radio', { name: 'Alert + push' }));
-
+    const publish = within(composer).getByRole('button', { name: 'Publish' });
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await press(publish);
+      await waitFor(() => expect(posted(fetchMock)).toHaveLength(attempt));
+    }
+    fireEvent.change(within(composer).getByLabelText('Title'), { target: { value: 'Next news' } });
+    fireEvent.change(within(composer).getByLabelText('Body'), { target: { value: 'Something else.' } });
     await press(within(composer).getByRole('button', { name: 'Publish' }));
-    expect(confirmMock).toHaveBeenCalledTimes(1);
-    expect(confirmMock.mock.calls[0][0]).toMatchObject({
-      title: 'Send a push to every phone?',
-      confirmLabel: 'Publish and push',
-      tone: 'danger',
-    });
-    expect(posted(fetchMock)).toEqual([]);
-    expect(within(composer).getByLabelText('Title')).toHaveValue('Big news');
+    await waitFor(() => expect(posted(fetchMock)).toHaveLength(4));
 
-    await press(within(composer).getByRole('button', { name: 'Publish' }));
-    await waitFor(() => expect(posted(fetchMock)).toEqual([{
-      action: 'publish',
-      kind: 'announcement',
-      title: 'Big news',
-      body: 'Something big.',
-      commentsLocked: false,
-      announce: 'alert_push',
-    }]));
-    expect(confirmMock).toHaveBeenCalledTimes(2);
+    const ids = posted(fetchMock).map((body) => body.postId);
+    // A failed try is tried again as the same post, so it cannot be posted twice.
+    expect(ids[1]).toBe(ids[0]);
+    // A try that was taken down starts a new post, and so does the next update once one is published.
+    expect(ids[2]).not.toBe(ids[1]);
+    expect(ids[3]).not.toBe(ids[2]);
+    for (const id of ids) expect(id).toMatch(UUID);
   });
 
-  it('announces a quietly published update with an alert, then reads the page again', async () => {
+  it('offers Quiet and Alert only: no choice sends a push', async () => {
+    consoleApi();
+    render(<AdminUpdatesConsole />);
+
+    const composer = await screen.findByRole('region', { name: 'Post an update' });
+    expect(within(composer).getAllByRole('radio').map((radio) => radio.getAttribute('value'))).toEqual(['quiet', 'alert']);
+    expect(within(composer).getByText('An alert in the app to every account. No phone notification.')).toBeInTheDocument();
+  });
+
+  it('says when an update went live but its alert could not start', async () => {
+    const fetchMock = consoleApi({ answer: () => json({ success: true, postId: LIVE, announced: false }) });
+    render(<AdminUpdatesConsole />);
+
+    const composer = await screen.findByRole('region', { name: 'Post an update' });
+    fireEvent.change(within(composer).getByLabelText('Title'), { target: { value: 'Big news' } });
+    fireEvent.change(within(composer).getByLabelText('Body'), { target: { value: 'Something big.' } });
+    fireEvent.click(within(composer).getByRole('radio', { name: 'Alert' }));
+    await press(within(composer).getByRole('button', { name: 'Publish' }));
+
+    await waitFor(() => expect(posted(fetchMock)).toHaveLength(1));
+    expect(await within(composer).findByText('Published, but the alert could not start. Use Announce on it below.')).toBeInTheDocument();
+  });
+
+  it('announces a quietly published update after one question, then reads the page again', async () => {
     const fetchMock = consoleApi({ answer: () => json({ success: true, postId: QUIET }) });
     render(<AdminUpdatesConsole />);
 
     const quiet = await updateRow('Quiet note');
-    fireEvent.click(within(quiet).getByRole('button', { name: 'Announce…' }));
+    await press(within(quiet).getByRole('button', { name: 'Announce…' }));
 
-    // Quiet is what it already had: the choices are the two that tell people.
-    const alert = within(quiet).getByRole('radio', { name: 'Alert' });
-    expect(alert).toBeChecked();
-    expect(alert).toHaveFocus();
-    expect(within(quiet).getByRole('radio', { name: 'Alert + push' })).not.toBeChecked();
-    expect(within(quiet).queryByRole('radio', { name: 'Quiet' })).not.toBeInTheDocument();
-
-    await press(within(quiet).getByRole('button', { name: 'Announce' }));
-
-    await waitFor(() => expect(posted(fetchMock)).toEqual([{ action: 'announce', postId: QUIET, push: false }]));
-    expect(confirmMock).not.toHaveBeenCalled();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock.mock.calls[0][0]).toMatchObject({
+      title: 'Alert every account?',
+      message: expect.stringContaining('“Quiet note”'),
+      confirmLabel: 'Announce',
+    });
+    await waitFor(() => expect(posted(fetchMock)).toEqual([{ action: 'announce', postId: QUIET }]));
     expect(await within(quiet).findByText('Announced. The alert is going out to every account.')).toBeInTheDocument();
     expect(readCount(fetchMock)).toBe(2);
   });
 
-  it('asks before announcing with a push, and sends nothing on a no', async () => {
+  it('sends nothing when the announce question is answered no', async () => {
     const fetchMock = consoleApi();
     confirmMock.mockResolvedValueOnce(false);
     render(<AdminUpdatesConsole />);
 
     const quiet = await updateRow('Quiet note');
-    fireEvent.click(within(quiet).getByRole('button', { name: 'Announce…' }));
-    fireEvent.click(within(quiet).getByRole('radio', { name: 'Alert + push' }));
+    await press(within(quiet).getByRole('button', { name: 'Announce…' }));
 
-    await press(within(quiet).getByRole('button', { name: 'Announce' }));
     expect(confirmMock).toHaveBeenCalledTimes(1);
-    expect(confirmMock.mock.calls[0][0]).toMatchObject({
-      title: 'Send a push to every phone?',
-      message: expect.stringContaining('“Quiet note”'),
-      confirmLabel: 'Announce and push',
-      tone: 'danger',
-    });
     expect(posted(fetchMock)).toEqual([]);
-
-    await press(within(quiet).getByRole('button', { name: 'Announce' }));
-    await waitFor(() => expect(posted(fetchMock)).toEqual([{ action: 'announce', postId: QUIET, push: true }]));
-    expect(await within(quiet).findByText('Announced. The alert and the push are going out to every account.')).toBeInTheDocument();
+    expect(within(quiet).getByRole('button', { name: 'Announce…' })).toBeEnabled();
   });
 
-  it('says why an announcement was refused, reads the page again, and closes on Cancel', async () => {
+  it('says why an announcement was refused, and reads the page again', async () => {
     const refusal = 'That update was already announced. Use Continue sending if it stopped short.';
     const fetchMock = consoleApi({ answer: () => json({ error: refusal }, 409) });
     render(<AdminUpdatesConsole />);
 
     const quiet = await updateRow('Quiet note');
-    fireEvent.click(within(quiet).getByRole('button', { name: 'Announce…' }));
-    await press(within(quiet).getByRole('button', { name: 'Announce' }));
+    await press(within(quiet).getByRole('button', { name: 'Announce…' }));
 
     expect(await within(quiet).findByRole('alert')).toHaveTextContent(refusal);
     await waitFor(() => expect(readCount(fetchMock)).toBe(2));
-
-    fireEvent.click(within(quiet).getByRole('button', { name: 'Cancel' }));
-    expect(within(quiet).queryByRole('radio', { name: 'Alert' })).not.toBeInTheDocument();
-    expect(within(quiet).getByRole('button', { name: 'Announce…' })).toHaveFocus();
   });
 
   it('ships a roadmap item only with a published update, after saying who is told', async () => {
@@ -391,6 +415,34 @@ describe('the console’s Updates and Roadmap', () => {
     });
     await waitFor(() => expect(posted(fetchMock)).toEqual([{ action: 'roadmapShip', itemId: BUILDING, updatePostId: LIVE }]));
     expect(await within(building).findByText('Marked shipped. 3 people were told it’s live.')).toBeInTheDocument();
+  });
+
+  it('links a shipped item to another update once its own is down, telling no one again', async () => {
+    const fetchMock = consoleApi({
+      read: () => json(hub({
+        roadmap: [{ id: SHIPPED, title: 'Remix', summary: '', status: 'shipped', position: 0, shippedAt: '2026-11-25T11:00:00.000Z', shippedUpdateId: DOWN, archived: false, people: 12 }],
+      })),
+      answer: () => json({ success: true, told: 0 }),
+    });
+    render(<AdminUpdatesConsole />);
+
+    const shipped = await roadmapRow('Remix');
+    // Readers see no link to an update that is down.
+    expect(shipped).toHaveTextContent('its update is down, so readers see no link');
+    expect(within(shipped).queryByRole('link', { name: /Read/ })).not.toBeInTheDocument();
+
+    fireEvent.click(within(shipped).getByRole('button', { name: 'Change update…' }));
+    fireEvent.change(within(shipped).getByLabelText('The update it links to'), { target: { value: QUIET } });
+    expect(shipped).toHaveTextContent('No one is told again: the alert went out when it shipped.');
+    await press(within(shipped).getByRole('button', { name: 'Link update' }));
+
+    expect(confirmMock.mock.calls[0][0]).toMatchObject({
+      title: 'Link “Remix” to “Quiet note”?',
+      confirmLabel: 'Link update',
+      message: expect.stringContaining('No one is told again'),
+    });
+    await waitFor(() => expect(posted(fetchMock)).toEqual([{ action: 'roadmapShip', itemId: SHIPPED, updatePostId: QUIET }]));
+    expect(await within(shipped).findByText('Linked to “Quiet note”.')).toBeInTheDocument();
   });
 
   it('does not ship when the answer is no', async () => {

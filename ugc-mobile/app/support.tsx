@@ -408,13 +408,15 @@ function SupportChat({ active, prefill }: { active: boolean; prefill: SupportCha
 
   // "Suggest a feature" on the Roadmap tab: the composer starts with the
   // idea's words, once per press, never over words being written or an edit.
+  // It waits for the thread: until it is read there is no composer to focus.
   const appliedPrefillRef = useRef<number | null>(null);
+  const threadDrawn = data !== undefined;
   useEffect(() => {
-    if (!prefill || !active || appliedPrefillRef.current === prefill.key) return;
+    if (!prefill || !active || !threadDrawn || appliedPrefillRef.current === prefill.key) return;
     appliedPrefillRef.current = prefill.key;
     setDraft((current) => supportFeatureIdeaDraft({ draft: current, editing: Boolean(editing) }) ?? current);
     fieldRef.current?.focus();
-  }, [active, editing, prefill]);
+  }, [active, editing, prefill, threadDrawn]);
 
   // The divider above the first unread message is placed once, as the thread opens.
   useEffect(() => {

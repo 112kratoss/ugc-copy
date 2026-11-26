@@ -174,6 +174,22 @@ type RoadmapRow = {
 };
 
 /** The roadmap as people see it, with each item's reactions and the reader's own. */
+/** Of the updates shipped items name, the ones people can read now: the Updates list's own filter. */
+async function readLiveUpdateIds(adminSupabase: SupabaseClient, ids: ReadonlyArray<string | null>): Promise<Set<string>> {
+  const named = [...new Set(ids.filter((id): id is string => typeof id === 'string' && isSupportHubId(id)))];
+  if (named.length === 0) return new Set();
+  const { data, error } = await adminSupabase
+    .from('posts')
+    .select('id')
+    .in('id', named)
+    .not('support_update_kind', 'is', null)
+    .eq('visibility', 'public')
+    .is('archived_at', null)
+    .eq('review_status', 'visible');
+  if (error) throw error;
+  return new Set(((data ?? []) as Array<{ id: string }>).map((row) => row.id));
+}
+
 export async function listSupportRoadmap({
   adminSupabase,
   viewerUserId,
@@ -195,7 +211,10 @@ export async function listSupportRoadmap({
   if (error) throw error;
 
   const rows = ((data ?? []) as RoadmapRow[]).filter((row) => isSupportRoadmapStatus(row.status));
-  const reactions = await readReactions(adminSupabase, 'support_roadmap_reactions_for', rows.map((row) => row.id), viewerUserId);
+  const [reactions, liveUpdateIds] = await Promise.all([
+    readReactions(adminSupabase, 'support_roadmap_reactions_for', rows.map((row) => row.id), viewerUserId),
+    readLiveUpdateIds(adminSupabase, rows.map((row) => row.shipped_update_post_id)),
+  ]);
 
   const items: SupportRoadmapItem[] = rows.map((row) => {
     const read = reactions.get(row.id);
@@ -205,7 +224,8 @@ export async function listSupportRoadmap({
       summary: row.summary ?? '',
       status: row.status as SupportRoadmapItem['status'],
       shippedAt: row.shipped_at,
-      shippedUpdateId: row.shipped_update_post_id,
+      // Linked while people can read it: an update taken down since leaves the item shipped, unlinked.
+      shippedUpdateId: row.shipped_update_post_id && liveUpdateIds.has(row.shipped_update_post_id) ? row.shipped_update_post_id : null,
       reactions: readSupportHubReactionCounts(read?.reactions),
       myReaction: viewerUserId ? readMyReaction(read?.my_reaction) : null,
     };

@@ -148,6 +148,47 @@ describe('listSupportRoadmap', () => {
   });
 });
 
+describe('listSupportRoadmap links', () => {
+  it('links a shipped item to its update only while people can read it', async () => {
+    const now = Date.parse('2026-11-26T00:00:00.000Z');
+    const postsCalls: Array<[string, unknown[]]> = [];
+    const answers: Record<string, unknown[]> = {
+      support_roadmap_items: [
+        { id: POST_A, title: 'Folders', summary: '', status: 'shipped', shipped_at: '2026-11-20T00:00:00.000Z', shipped_update_post_id: POST_B },
+        { id: POST_C, title: 'Remix', summary: '', status: 'shipped', shipped_at: '2026-11-21T00:00:00.000Z', shipped_update_post_id: POST_C },
+      ],
+      // Only POST_B is still public, marked, not archived and not hidden.
+      posts: [{ id: POST_B }],
+    };
+    const client = {
+      from: (table: string) => {
+        const builder: Record<string, unknown> = {};
+        for (const method of ['select', 'not', 'eq', 'is', 'or', 'order', 'limit', 'in']) {
+          builder[method] = (...args: unknown[]) => {
+            if (table === 'posts') postsCalls.push([method, args]);
+            return builder;
+          };
+        }
+        builder.then = (resolve: (value: unknown) => unknown) => resolve({ data: answers[table] ?? [], error: null });
+        return builder;
+      },
+      rpc: vi.fn(async () => ({ data: [], error: null })),
+    } as unknown as SupabaseClient;
+
+    const roadmap = await listSupportRoadmap({ adminSupabase: client, viewerUserId: null, now });
+
+    expect(roadmap.items.map((item) => [item.id, item.shippedUpdateId])).toEqual([[POST_A, POST_B], [POST_C, null]]);
+    // The Updates list's own filter.
+    expect(postsCalls).toEqual(expect.arrayContaining([
+      ['in', ['id', [POST_B, POST_C]]],
+      ['not', ['support_update_kind', 'is', null]],
+      ['eq', ['visibility', 'public']],
+      ['is', ['archived_at', null]],
+      ['eq', ['review_status', 'visible']],
+    ]));
+  });
+});
+
 describe('setSupportUpdateReaction', () => {
   it('answers the counts, or why not', async () => {
     const reacted = { rpc: vi.fn(async () => ({ data: { status: 'reacted', myReaction: '❤️', reactions: { '❤️': 1 } }, error: null })) };

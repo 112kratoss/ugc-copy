@@ -6276,10 +6276,17 @@
       },
       "reactions": "One per account per update, from 👍 ❤️ 😂 😮 😢 🙏; another replaces it, null clears it.",
       "errors": {
-        "registrationRequired": {
+        "unauthorized": {
           "status": 401,
           "response": {
             "error": "Sign in to react.",
+            "code": "UNAUTHORIZED"
+          }
+        },
+        "registrationRequired": {
+          "status": 403,
+          "response": {
+            "error": "Create an account to react.",
             "code": "REGISTRATION_REQUIRED"
           }
         },
@@ -6365,10 +6372,17 @@
       },
       "reactions": "One per account per roadmap item, from 👍 ❤️ 😂 😮 😢 🙏; not on an archived item.",
       "errors": {
-        "registrationRequired": {
+        "unauthorized": {
           "status": 401,
           "response": {
             "error": "Sign in to react.",
+            "code": "UNAUTHORIZED"
+          }
+        },
+        "registrationRequired": {
+          "status": 403,
+          "response": {
+            "error": "Create an account to react.",
             "code": "REGISTRATION_REQUIRED"
           }
         },

@@ -160,13 +160,16 @@ describe('POST reactions', () => {
     authUser.value = { id: 'guest-1', is_anonymous: true };
     const guest = await createSupportUpdateReactionRouteHandlers({ dependencies: dependencies() })
       .POST(request(`/api/support/updates/${POST_ID}/reaction`, 'POST', { body: { emoji: '👍' } }), updateContext());
-    expect(guest.status).toBe(401);
+    // The proxy's own answers: a guest 403 REGISTRATION_REQUIRED, no account 401 UNAUTHORIZED.
+    expect(guest.status).toBe(endpoints.reactToSupportUpdate.errors.registrationRequired.status);
+    expect(guest.status).toBe(403);
     expect(await guest.json()).toEqual(endpoints.reactToSupportUpdate.errors.registrationRequired.response);
 
     authUser.value = null;
     const none = await createSupportUpdateReactionRouteHandlers({ dependencies: dependencies() })
       .POST(request(`/api/support/updates/${POST_ID}/reaction`, 'POST', { body: { emoji: '👍' } }), updateContext());
     expect(none.status).toBe(401);
+    expect(await none.json()).toEqual(endpoints.reactToSupportUpdate.errors.unauthorized.response);
   });
 
   it('refuses a reaction that is not a quick reaction, and an id that is not one', async () => {

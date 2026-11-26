@@ -1713,39 +1713,6 @@ export async function createMobileNotification({
  * last, once the push is reserved, so an owner with push off or no device never
  * spends a post's push slot. A failed push is logged.
  */
-/**
- * Pushes alerts a database function wrote in bulk (an announced update's
- * batch, a shipped roadmap item's), each the way `createMobileNotification`
- * pushes one it wrote: only where its owner's preferences allow it and a
- * device can take it. A few at a time; a failed push is logged, never thrown.
- */
-export async function pushStoredMobileNotifications(
-  adminSupabase: SupabaseClient,
-  notifications: ReadonlyArray<{ id: string; userId: string }>,
-  { concurrency = 8 }: { concurrency?: number } = {},
-): Promise<void> {
-  for (let start = 0; start < notifications.length; start += 200) {
-    const chunk = notifications.slice(start, start + 200);
-    const owners = new Map(chunk.map((entry) => [entry.id, entry.userId]));
-    const { data, error } = await adminSupabase
-      .from('mobile_notifications')
-      .select('*')
-      .in('id', chunk.map((entry) => entry.id));
-    if (error) {
-      logBackendError('failed_to_read_stored_mobile_notifications', { error });
-      continue;
-    }
-    const records = ((data ?? []) as NotificationRow[]).map(toMobileNotificationRecord);
-    for (let index = 0; index < records.length; index += concurrency) {
-      await Promise.all(records.slice(index, index + concurrency).map(async (record) => {
-        const userId = owners.get(record.id);
-        if (!userId) return;
-        await pushWrittenNotification(adminSupabase, record, userId, record.category);
-      }));
-    }
-  }
-}
-
 async function pushWrittenNotification(
   adminSupabase: SupabaseClient,
   notification: MobileNotificationRecord,

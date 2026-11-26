@@ -97,10 +97,27 @@ async function readViewerUserId(request: Request, dependencies: Resolved): Promi
 }
 
 /** The registered account behind the request, or null (no token, a refused one, or a guest's). */
-async function readRegisteredUserId(request: Request, dependencies: Resolved): Promise<string | null> {
+/**
+ * The account a reaction is for: a registered one. No account answers 401
+ * UNAUTHORIZED and a guest 403 REGISTRATION_REQUIRED, the proxy's own answers,
+ * which it gives first (this is the backstop).
+ */
+async function readReactingUser(
+  request: Request,
+  dependencies: Resolved,
+): Promise<{ ok: true; userId: string } | { ok: false; response: NextResponse }> {
   const supabase = dependencies.createUserClient(request);
   const { data: { user }, error } = await getVerifiedAuthUserResult(supabase);
-  return error || !user || isGuestUser(user) ? null : user.id;
+  if (error || !user) {
+    return { ok: false, response: NextResponse.json({ error: 'Sign in to react.', code: 'UNAUTHORIZED' }, { status: 401 }) };
+  }
+  if (isGuestUser(user)) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: 'Create an account to react.', code: 'REGISTRATION_REQUIRED' }, { status: 403 }),
+    };
+  }
+  return { ok: true, userId: user.id };
 }
 
 /** A Supabase session cookie of any project, whole or in chunks, as the comments thread reads it. */
@@ -187,8 +204,9 @@ async function handleReactionPOST(
   targetId: string,
   set: (userId: string, emoji: Parameters<Resolved['setSupportUpdateReaction']>[0]['emoji']) => ReturnType<Resolved['setSupportUpdateReaction']>,
 ) {
-  const userId = await readRegisteredUserId(request, dependencies);
-  if (!userId) return NextResponse.json({ error: 'Sign in to react.', code: 'REGISTRATION_REQUIRED' }, { status: 401 });
+  const reacting = await readReactingUser(request, dependencies);
+  if (!reacting.ok) return reacting.response;
+  const { userId } = reacting;
   if (!isSupportHubId(targetId)) return NextResponse.json({ error: 'Not found.', code: 'NOT_FOUND' }, { status: 404 });
 
   const reaction = await readReactionBody(request, dependencies);

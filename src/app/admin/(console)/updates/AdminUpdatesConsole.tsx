@@ -71,28 +71,29 @@ const CHOICE_CLASSES = 'h-4 w-4 accent-[var(--ui-primary)]';
 
 const ROW_CLASSES = 'rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] px-4 py-3';
 
+// No push choice: a push of news needs an opt-in of its own (App Store
+// guideline 4.5.4), which the app does not ask for.
 const ANNOUNCE_CHOICES: ReadonlyArray<{ value: SupportUpdateAnnounce; label: string; hint: string }> = [
   { value: 'quiet', label: 'Quiet', hint: 'Only the dot on Updates.' },
-  { value: 'alert', label: 'Alert', hint: 'An alert in the app to every account.' },
-  { value: 'alert_push', label: 'Alert + push', hint: 'The alert, and a notification on every phone with the app.' },
+  { value: 'alert', label: 'Alert', hint: 'An alert in the app to every account. No phone notification.' },
 ];
-
-/** What a quietly published update can still be announced with, once. */
-const LATER_ANNOUNCE_CHOICES = ANNOUNCE_CHOICES.filter((choice) => choice.value !== 'quiet');
 
 const PUBLISHED_WORDS: Record<SupportUpdateAnnounce, string> = {
   quiet: 'Published. It shows under Updates now.',
   alert: 'Published. The alert is going out to every account.',
-  alert_push: 'Published. The alert and the push are going out to every account.',
 };
 
-/** Asked before a push to every phone, for a new update or one published quietly. */
-function pushQuestion(title: string, confirmLabel: string): ConfirmationRequest {
+const PUBLISHED_ALERT_NOT_STARTED = 'Published, but the alert could not start. Use Announce on it below.';
+
+/** The server's code for a try at publishing that was taken down (`SUPPORT_UPDATE_DRAFT_TAKEN_DOWN`). */
+const DRAFT_TAKEN_DOWN = 'DRAFT_TAKEN_DOWN';
+
+/** Asked before announcing an update published quietly: one click alerts every account. */
+function announceQuestion(title: string): ConfirmationRequest {
   return {
-    title: 'Send a push to every phone?',
-    message: `“${title.trim()}” goes to every account as an alert in the app, and as a notification on every phone with the app. A push cannot be called back.`,
-    confirmLabel,
-    tone: 'danger',
+    title: 'Alert every account?',
+    message: `“${title.trim()}” goes to every account as an alert in the app. An update is announced once.`,
+    confirmLabel: 'Announce',
   };
 }
 
@@ -110,19 +111,24 @@ function countWords(count: number, one: string, many: string): string {
   return `${count.toLocaleString('en-US')} ${count === 1 ? one : many}`;
 }
 
-/** How far an update's announcement got: nothing for a quiet one, "sent to N" while it runs and once done. */
-function supportUpdateBroadcastWords(broadcast: AdminSupportUpdate['broadcast']): string {
+/**
+ * How far an update's announcement got: nothing for a quiet one, "sent to N"
+ * while it runs and once done, and paused while the update is down (it goes on
+ * with Continue sending once the update is back up).
+ */
+function supportUpdateBroadcastWords(broadcast: AdminSupportUpdate['broadcast'], live: boolean): string {
   if (!broadcast) return 'Quiet: no alert went out';
-  const how = broadcast.push ? 'Alert + push' : 'Alert';
   const sent = countWords(broadcast.sentCount, 'account', 'accounts');
-  return broadcast.finished ? `${how} sent to ${sent}, finished` : `${how} sent to ${sent} so far, not finished`;
+  if (broadcast.finished) return `Alert sent to ${sent}, finished`;
+  if (!live) return `Alert paused at ${sent} while the update is down`;
+  return `Alert sent to ${sent} so far, not finished`;
 }
 
 // Reading and acting ----------------------------------------------------------
 
 type HubRead = 'loading' | 'ready' | 'failed' | 'signed-out';
 type ActionBody = { action: string } & Record<string, unknown>;
-type ActionResult = { ok: true; data: Record<string, unknown> } | { ok: false; error: string };
+type ActionResult = { ok: true; data: Record<string, unknown> } | { ok: false; error: string; code?: string };
 type Act = (body: ActionBody) => Promise<ActionResult>;
 
 function readHub(value: unknown): AdminSupportHub | null {
@@ -189,7 +195,11 @@ function useSupportHub() {
       }
       result = response.ok
         ? { ok: true, data: data ?? {} }
-        : { ok: false, error: typeof data?.error === 'string' ? data.error : ACTION_FAILED };
+        : {
+          ok: false,
+          error: typeof data?.error === 'string' ? data.error : ACTION_FAILED,
+          ...(typeof data?.code === 'string' ? { code: data.code } : {}),
+        };
     } catch {
       result = { ok: false, error: ACTION_OFFLINE };
     }
@@ -286,13 +296,11 @@ function AnnounceChoices({
   choices,
   value,
   onChange,
-  autoFocus = false,
 }: {
   name: string;
   choices: typeof ANNOUNCE_CHOICES;
   value: SupportUpdateAnnounce;
   onChange: (value: SupportUpdateAnnounce) => void;
-  autoFocus?: boolean;
 }) {
   return (
     <fieldset>
@@ -308,7 +316,6 @@ function AnnounceChoices({
               value={choice.value}
               checked={value === choice.value}
               onChange={() => onChange(choice.value)}
-              autoFocus={autoFocus && value === choice.value}
               aria-labelledby={`${name}-${choice.value}`}
               aria-describedby={`${name}-${choice.value}-hint`}
               className={clsx(CHOICE_CLASSES, 'mt-0.5')}
@@ -405,13 +412,16 @@ export function AdminUpdatesConsole() {
 
 function UpdateComposer({ officialAccountReady, act }: { officialAccountReady: boolean; act: Act }) {
   const id = useId();
-  const confirm = useConfirmation();
   const action = useAction(act);
   const [kind, setKind] = useState<SupportUpdateKind>('announcement');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [commentsOn, setCommentsOn] = useState(true);
   const [announce, setAnnounce] = useState<SupportUpdateAnnounce>('quiet');
+  // The id of the post this update becomes, the same on every try: a try whose
+  // answer was lost, or that stopped at a private draft, is never posted twice.
+  // A new one after it is published, or once a try was taken down.
+  const [draftId, setDraftId] = useState(() => crypto.randomUUID());
 
   const publishing = action.pending === 'publish';
   const canPublish = officialAccountReady && title.trim() !== '' && body.trim() !== '' && !publishing;
@@ -420,21 +430,25 @@ function UpdateComposer({ officialAccountReady, act }: { officialAccountReady: b
     if (!canPublish) return;
     action.clear();
     const chosen = announce;
-    if (chosen === 'alert_push' && !(await confirm(pushQuestion(title, 'Publish and push')))) return;
     const result = await action.run('publish', {
       action: 'publish',
+      postId: draftId,
       kind,
       title: title.trim(),
       body: body.trim(),
       commentsLocked: !commentsOn,
       announce: chosen,
     });
-    if (!result.ok) return;
+    if (!result.ok) {
+      if (result.code === DRAFT_TAKEN_DOWN) setDraftId(crypto.randomUUID());
+      return;
+    }
+    setDraftId(crypto.randomUUID());
     setTitle('');
     setBody('');
     setCommentsOn(true);
     setAnnounce('quiet');
-    action.setNotice(PUBLISHED_WORDS[chosen]);
+    action.setNotice(chosen === 'alert' && result.data.announced === false ? PUBLISHED_ALERT_NOT_STARTED : PUBLISHED_WORDS[chosen]);
   };
 
   return (
@@ -546,26 +560,25 @@ function UpdateRow({ update, act }: { update: AdminSupportUpdate; act: Act }) {
   const id = useId();
   const confirm = useConfirmation();
   const action = useAction(act);
-  const [mode, setMode] = useState<'view' | 'edit' | 'announce'>('view');
+  const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [title, setTitle] = useState(update.title);
   const [body, setBody] = useState(update.body);
-  const [announceWith, setAnnounceWith] = useState<SupportUpdateAnnounce>('alert');
   const focusReturnRef = useFocusReturn(mode !== 'view');
 
   const busy = action.pending !== null;
   const live = update.published && !update.hiddenByReview;
   const publicHref = live ? adminPostHref(update.id) : null;
-  const unfinished = update.broadcast !== null && !update.broadcast.finished;
+  // A broadcast paused by a take-down goes on only once the update is live again.
+  const resumable = live && update.broadcast !== null && !update.broadcast.finished;
   // One published quietly can still be announced, once, while it is live.
   const announceable = live && update.broadcast === null;
 
-  const open = (next: 'edit' | 'announce') => {
+  const open = () => {
     action.clear();
-    focusReturnRef.current = `${id}-${next}`;
+    focusReturnRef.current = `${id}-edit`;
     setTitle(update.title);
     setBody(update.body);
-    setAnnounceWith('alert');
-    setMode(next);
+    setMode('edit');
   };
 
   const close = () => {
@@ -579,14 +592,10 @@ function UpdateRow({ update, act }: { update: AdminSupportUpdate; act: Act }) {
   };
 
   const announce = async () => {
-    const push = announceWith === 'alert_push';
-    if (push && !(await confirm(pushQuestion(update.title, 'Announce and push')))) return;
-    const result = await action.run('announce', { action: 'announce', postId: update.id, push });
-    if (!result.ok) return;
-    setMode('view');
-    action.setNotice(push
-      ? 'Announced. The alert and the push are going out to every account.'
-      : 'Announced. The alert is going out to every account.');
+    action.clear();
+    if (!(await confirm(announceQuestion(update.title)))) return;
+    const result = await action.run('announce', { action: 'announce', postId: update.id });
+    if (result.ok) action.setNotice('Announced. The alert is going out to every account.');
   };
 
   const continueSending = async () => {
@@ -651,96 +660,72 @@ function UpdateRow({ update, act }: { update: AdminSupportUpdate; act: Act }) {
               countWords(update.commentCount, 'comment', 'comments'),
               update.commentsLocked ? 'Comments off' : null,
               countWords(update.reactionPeople, 'person reacted', 'people reacted'),
-              supportUpdateBroadcastWords(update.broadcast),
+              supportUpdateBroadcastWords(update.broadcast, live),
             ].filter(Boolean).join(' · ')}
           </Text>
-          {mode === 'announce' ? (
-            <div className="mt-3 flex flex-col gap-3">
-              <AnnounceChoices
-                name={`${id}-announce-with`}
-                choices={LATER_ANNOUNCE_CHOICES}
-                value={announceWith}
-                onChange={setAnnounceWith}
-                autoFocus
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="primary"
-                  icon={Megaphone}
-                  iconPosition="start"
-                  pending={action.pending === 'announce'}
-                  onClick={() => void announce()}
-                >
-                  {action.pending === 'announce' ? 'Announcing…' : 'Announce'}
-                </Button>
-                <Button variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
-              </div>
-            </div>
-          ) : (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button id={`${id}-edit`} variant="secondary" icon={Pencil} iconPosition="start" disabled={busy} onClick={() => open('edit')}>
-                Edit
-              </Button>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button id={`${id}-edit`} variant="secondary" icon={Pencil} iconPosition="start" disabled={busy} onClick={open}>
+              Edit
+            </Button>
+            <Button
+              variant="secondary"
+              icon={update.commentsLocked ? MessageSquare : MessageSquareOff}
+              iconPosition="start"
+              disabled={busy}
+              pending={action.pending === 'lock'}
+              onClick={() => void action.run('lock', { action: 'lock', postId: update.id, locked: !update.commentsLocked })}
+            >
+              {action.pending === 'lock'
+                ? 'Saving…'
+                : update.commentsLocked ? 'Turn comments on' : 'Turn comments off'}
+            </Button>
+            <Button
+              variant="secondary"
+              icon={update.published ? EyeOff : Eye}
+              iconPosition="start"
+              disabled={busy}
+              pending={action.pending === 'publishState'}
+              onClick={() => void action.run('publishState', { action: 'publishState', postId: update.id, published: !update.published })}
+            >
+              {action.pending === 'publishState'
+                ? (update.published ? 'Taking down…' : 'Putting back up…')
+                : (update.published ? 'Take down' : 'Put back up')}
+            </Button>
+            {resumable ? (
               <Button
                 variant="secondary"
-                icon={update.commentsLocked ? MessageSquare : MessageSquareOff}
+                icon={Send}
                 iconPosition="start"
                 disabled={busy}
-                pending={action.pending === 'lock'}
-                onClick={() => void action.run('lock', { action: 'lock', postId: update.id, locked: !update.commentsLocked })}
+                pending={action.pending === 'continueBroadcast'}
+                onClick={() => void continueSending()}
               >
-                {action.pending === 'lock'
-                  ? 'Saving…'
-                  : update.commentsLocked ? 'Turn comments on' : 'Turn comments off'}
+                {action.pending === 'continueBroadcast' ? 'Sending…' : 'Continue sending'}
               </Button>
+            ) : null}
+            {announceable ? (
               <Button
                 variant="secondary"
-                icon={update.published ? EyeOff : Eye}
+                icon={Megaphone}
                 iconPosition="start"
                 disabled={busy}
-                pending={action.pending === 'publishState'}
-                onClick={() => void action.run('publishState', { action: 'publishState', postId: update.id, published: !update.published })}
+                pending={action.pending === 'announce'}
+                onClick={() => void announce()}
               >
-                {action.pending === 'publishState'
-                  ? (update.published ? 'Taking down…' : 'Putting back up…')
-                  : (update.published ? 'Take down' : 'Put back up')}
+                {action.pending === 'announce' ? 'Announcing…' : 'Announce…'}
               </Button>
-              {unfinished ? (
-                <Button
-                  variant="secondary"
-                  icon={Send}
-                  iconPosition="start"
-                  disabled={busy}
-                  pending={action.pending === 'continueBroadcast'}
-                  onClick={() => void continueSending()}
-                >
-                  {action.pending === 'continueBroadcast' ? 'Sending…' : 'Continue sending'}
-                </Button>
-              ) : null}
-              {announceable ? (
-                <Button
-                  id={`${id}-announce`}
-                  variant="secondary"
-                  icon={Megaphone}
-                  iconPosition="start"
-                  disabled={busy}
-                  onClick={() => open('announce')}
-                >
-                  Announce…
-                </Button>
-              ) : null}
-              {publicHref ? (
-                <Link href={publicHref} target="_blank" rel="noreferrer" className="ui-button ui-button-ghost ui-focus-ring">
-                  <ExternalLink className="h-4 w-4" aria-hidden />
-                  Open post
-                </Link>
-              ) : (
-                <Text as="span" variant="caption">
-                  {update.published ? 'Hidden by review: it has no public page.' : 'Taken down: it has no public page.'}
-                </Text>
-              )}
-            </div>
-          )}
+            ) : null}
+            {publicHref ? (
+              <Link href={publicHref} target="_blank" rel="noreferrer" className="ui-button ui-button-ghost ui-focus-ring">
+                <ExternalLink className="h-4 w-4" aria-hidden />
+                Open post
+              </Link>
+            ) : (
+              <Text as="span" variant="caption">
+                {update.published ? 'Hidden by review: it has no public page.' : 'Taken down: it has no public page.'}
+              </Text>
+            )}
+          </div>
         </>
       )}
       <ActionFeedback error={action.error} notice={action.notice} />
@@ -891,6 +876,8 @@ function RoadmapRow({
   const busy = action.pending !== null;
   const shipped = item.status === 'shipped';
   const shippedUpdate = item.shippedUpdateId ? updates.find((update) => update.id === item.shippedUpdateId) ?? null : null;
+  // Readers get "Read the update" only while that update is up: one taken down leaves the item unlinked.
+  const linkLive = shippedUpdate !== null && shippedUpdate.published && !shippedUpdate.hiddenByReview;
   const chosenUpdate = shippable.find((update) => update.id === updateId) ?? null;
   const alertTitle = supportRoadmapShippedAlertWords(item.title).title;
 
@@ -922,17 +909,28 @@ function RoadmapRow({
 
   const ship = async () => {
     if (!chosenUpdate) return;
-    const sure = await confirm({
-      title: `Mark “${item.title}” shipped?`,
-      message: item.people > 0
-        ? `Everyone who reacted (${countWords(item.people, 'person', 'people')}) gets a “${alertTitle}” alert that opens “${chosenUpdate.title}”. It goes out once and cannot be called back.`
-        : `Nobody has reacted to it yet, so no alert goes out. It moves to Shipped, linked to “${chosenUpdate.title}”.`,
-      confirmLabel: 'Mark shipped',
-    });
+    // A shipped item is linked to another update (its own was taken down): its alert went out once already.
+    const sure = await confirm(shipped
+      ? {
+        title: `Link “${item.title}” to “${chosenUpdate.title}”?`,
+        message: `Its “Read the update” opens “${chosenUpdate.title}”. No one is told again: the alert went out when it shipped.`,
+        confirmLabel: 'Link update',
+      }
+      : {
+        title: `Mark “${item.title}” shipped?`,
+        message: item.people > 0
+          ? `Everyone who reacted (${countWords(item.people, 'person', 'people')}) gets a “${alertTitle}” alert that opens “${chosenUpdate.title}”. It goes out once and cannot be called back.`
+          : `Nobody has reacted to it yet, so no alert goes out. It moves to Shipped, linked to “${chosenUpdate.title}”.`,
+        confirmLabel: 'Mark shipped',
+      });
     if (!sure) return;
     const result = await action.run('ship', { action: 'roadmapShip', itemId: item.id, updatePostId: chosenUpdate.id });
     if (!result.ok) return;
     setMode('view');
+    if (shipped) {
+      action.setNotice(`Linked to “${chosenUpdate.title}”.`);
+      return;
+    }
     const told = typeof result.data.told === 'number' ? result.data.told : 0;
     action.setNotice(told > 0 ? `Marked shipped. ${countWords(told, 'person was', 'people were')} told it’s live.` : 'Marked shipped.');
   };
@@ -998,7 +996,7 @@ function RoadmapRow({
               Publish an update about it first: shipping points everyone who reacted to the update that announced it.
             </Text>
           ) : (
-            <Field id={`${id}-update`} label="The update that announced it">
+            <Field id={`${id}-update`} label={shipped ? 'The update it links to' : 'The update that announced it'}>
               <select
                 id={`${id}-update`}
                 autoFocus
@@ -1016,7 +1014,9 @@ function RoadmapRow({
             </Field>
           )}
           <Text variant="caption">
-            {`Everyone who reacted (${countWords(item.people, 'person', 'people')}) gets a “${alertTitle}” alert that opens the update. It goes out once.`}
+            {shipped
+              ? 'No one is told again: the alert went out when it shipped.'
+              : `Everyone who reacted (${countWords(item.people, 'person', 'people')}) gets a “${alertTitle}” alert that opens the update. It goes out once.`}
           </Text>
           <div className="flex flex-wrap items-center gap-2">
             <Button
@@ -1027,7 +1027,9 @@ function RoadmapRow({
               pending={action.pending === 'ship'}
               onClick={() => void ship()}
             >
-              {action.pending === 'ship' ? 'Marking shipped…' : 'Mark shipped'}
+              {action.pending === 'ship'
+                ? (shipped ? 'Linking…' : 'Marking shipped…')
+                : (shipped ? 'Link update' : 'Mark shipped')}
             </Button>
             <Button variant="ghost" disabled={busy} onClick={close}>Cancel</Button>
           </div>
@@ -1038,7 +1040,7 @@ function RoadmapRow({
           {shipped ? (
             <Text variant="caption" className="mt-2">
               {`Shipped ${formatTimestamp(item.shippedAt)} · `}
-              {item.shippedUpdateId ? (
+              {item.shippedUpdateId && linkLive ? (
                 <Link
                   href={adminPostHref(item.shippedUpdateId)}
                   target="_blank"
@@ -1047,7 +1049,7 @@ function RoadmapRow({
                 >
                   {shippedUpdate ? `Read “${shippedUpdate.title}”` : 'Read the update'}
                 </Link>
-              ) : 'its update was deleted'}
+              ) : item.shippedUpdateId ? 'its update is down, so readers see no link' : 'its update was deleted'}
             </Text>
           ) : null}
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -1086,9 +1088,9 @@ function RoadmapRow({
             >
               {item.archived ? 'Restore' : 'Archive'}
             </Button>
-            {!shipped && !item.archived ? (
+            {!item.archived ? (
               <Button id={`${id}-ship`} variant="secondary" icon={Rocket} iconPosition="start" disabled={busy} onClick={() => open('ship')}>
-                Mark shipped
+                {shipped ? 'Change update…' : 'Mark shipped'}
               </Button>
             ) : null}
           </div>

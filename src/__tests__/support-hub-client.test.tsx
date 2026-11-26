@@ -10,9 +10,12 @@ const { authState, router } = vi.hoisted(() => ({
   router: { replace: vi.fn(), push: vi.fn(), prefetch: vi.fn(), refresh: vi.fn(), back: vi.fn() },
 }));
 
+// The address as Next's router reports it: the window's, which a tab press writes
+// with history.replaceState and Next follows.
 vi.mock('next/navigation', () => ({
   useRouter: () => router,
   usePathname: () => '/support',
+  useSearchParams: () => new URLSearchParams(window.location.search),
 }));
 vi.mock('next/link', () => ({
   default: ({ prefetch, ...props }: ComponentPropsWithoutRef<'a'> & { prefetch?: boolean }) => (
@@ -43,11 +46,13 @@ import SupportHubClient from '@/app/support/SupportHubClient';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { resetFeedbackState } from '@/components/feedback-state';
 import { noteSupportUpdatesLatest, resetSupportUpdatesUnreadForTests } from '@/lib/support-updates-unread';
+import { SUPPORT_WORDS } from '../../ugc-mobile/lib/support-conversation-policy/support-conversation-policy';
 
 import {
   SUPPORT_FEATURE_IDEA_PREFIX,
   SUPPORT_HUB_WORDS,
   SUPPORT_UPDATES_SEEN_STORAGE_KEY,
+  supportHubPath,
   supportUpdateDateLabel,
   type SupportRoadmapItem,
   type SupportUpdate,
@@ -84,6 +89,8 @@ function roadmapItem(overrides: Partial<SupportRoadmapItem> & Pick<SupportRoadma
 
 type Call = { path: string; method: string; authorization: string | null; body: unknown };
 const calls: Call[] = [];
+/** The abort signal each POST was sent with: a reaction that hangs must end. */
+const postSignals: Array<AbortSignal | null | undefined> = [];
 let answer: (call: Call) => Response | Promise<Response> = () => json({ error: 'Not answered' }, 503);
 
 function json(body: unknown, status = 200) {
@@ -106,7 +113,12 @@ function signInAs({ guest = false }: { guest?: boolean } = {}) {
   authState.session = { access_token: 'token-1', user };
 }
 
+/** Where the page's address stands, path and query. */
+const address = () => `${window.location.pathname}${window.location.search}`;
+
 function view(initialTab: 'chat' | 'updates' | 'roadmap' = 'chat') {
+  // The page is opened at the address that names its tab.
+  window.history.replaceState(null, '', supportHubPath(initialTab));
   return render(
     <>
       <SupportHubClient initialTab={initialTab} />
@@ -120,6 +132,7 @@ beforeEach(() => {
   authState.user = null;
   router.replace.mockClear();
   calls.length = 0;
+  postSignals.length = 0;
   answer = () => json({ error: 'Not answered' }, 503);
   chatTransport.load.mockClear();
   window.localStorage.clear();
@@ -135,6 +148,7 @@ beforeEach(() => {
       body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
     };
     calls.push(call);
+    if (call.method === 'POST') postSignals.push(init?.signal);
     return answer(call);
   }));
 });
@@ -163,17 +177,20 @@ describe('Help & Support on the web', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Updates' }));
       expect(screen.getByRole('tab', { name: 'Updates' })).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByRole('tabpanel', { name: 'Updates' })).toBeInTheDocument();
-      expect(router.replace).toHaveBeenLastCalledWith('/support?tab=updates', { scroll: false });
+      expect(address()).toBe('/support?tab=updates');
       expect(await screen.findByText(SUPPORT_HUB_WORDS.updatesEmptyTitle)).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('tab', { name: 'Roadmap' }));
-      expect(router.replace).toHaveBeenLastCalledWith('/support?tab=roadmap', { scroll: false });
+      expect(address()).toBe('/support?tab=roadmap');
       expect(await screen.findByText(SUPPORT_HUB_WORDS.roadmapEmptyTitle)).toBeInTheDocument();
 
       // The chat has no parameter: its address is the page's own.
       fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
-      expect(router.replace).toHaveBeenLastCalledWith('/support', { scroll: false });
+      expect(address()).toBe('/support');
       expect(screen.getByRole('tabpanel', { name: 'Chat' })).toBeInTheDocument();
+      // Written in place: no navigation, so the server is never asked for the page again.
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(router.push).not.toHaveBeenCalled();
     });
 
     it('opens on Updates or the Roadmap from the address, and follows a link to another tab of the page', async () => {
@@ -184,7 +201,8 @@ describe('Help & Support on the web', () => {
       expect(screen.getByRole('tab', { name: 'Updates' })).toHaveAttribute('aria-selected', 'true');
       expect(await screen.findByRole('link', { name: 'Folders are here' })).toBeInTheDocument();
 
-      // The shell's Help & feedback leads to `/support`, the chat.
+      // The shell's Help & feedback leads to `/support`, the chat: the address changes and the page is drawn again.
+      window.history.replaceState(null, '', '/support');
       rerender(
         <>
           <SupportHubClient initialTab="chat" />
@@ -248,6 +266,24 @@ describe('Help & Support on the web', () => {
       fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
       expect(await screen.findByRole('textbox', { name: 'Message' })).toHaveValue('My video failed');
       expect(chatTransport.load.mock.calls.length).toBeGreaterThan(readsWhileAway);
+    });
+
+    it('keeps a message that was not sent, with its retry, while another tab is open', async () => {
+      signInAs();
+      answer = () => json({ updates: [], nextCursor: null, latestAt: null });
+      view('chat');
+      await screen.findByText('How can we help?');
+      const field = screen.getByRole('textbox', { name: 'Message' });
+      fireEvent.change(field, { target: { value: 'Is anyone there?' } });
+      await act(async () => { fireEvent.keyDown(field, { key: 'Enter' }); });
+      expect(await screen.findByRole('button', { name: SUPPORT_WORDS.notSent })).toBeInTheDocument();
+
+      // The chat stays mounted under another tab: its sends and their retries are kept.
+      fireEvent.click(screen.getByRole('tab', { name: 'Updates' }));
+      await screen.findByText(SUPPORT_HUB_WORDS.updatesEmptyTitle);
+      fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
+      expect(await screen.findByRole('button', { name: SUPPORT_WORDS.notSent })).toBeInTheDocument();
+      expect(screen.getByText('Is anyone there?')).toBeInTheDocument();
     });
   });
 
@@ -339,7 +375,7 @@ describe('Help & Support on the web', () => {
     it('clears the reaction the reader presses again, and sends a lapsed session to sign in', async () => {
       signInAs();
       answer = (call) => (call.method === 'POST'
-        ? json({ error: 'Sign in to react.', code: 'REGISTRATION_REQUIRED' }, 401)
+        ? json({ error: 'Sign in to react.', code: 'UNAUTHORIZED' }, 401)
         : json({ updates: [{ ...UPDATE_ANNOUNCEMENT, myReaction: '👍' }], nextCursor: null, latestAt: UPDATE_ANNOUNCEMENT.createdAt }));
       view('updates');
 
@@ -392,6 +428,24 @@ describe('Help & Support on the web', () => {
 
       fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
       expect(screen.getByRole('tab', { name: 'Updates' }).querySelector('[data-support-updates-dot]')).toBeNull();
+    });
+
+    it('waits for the page to be shown before it counts as a look', async () => {
+      window.localStorage.setItem(SUPPORT_UPDATES_SEEN_STORAGE_KEY, '2026-11-20T09:00:00.000Z');
+      answer = () => json({ updates: [UPDATE_ANNOUNCEMENT], nextCursor: null, latestAt: UPDATE_ANNOUNCEMENT.createdAt });
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+      try {
+        view('updates');
+        await screen.findByRole('link', { name: 'Folders are here' });
+        // Read in a background browser tab: not a look yet.
+        expect(window.localStorage.getItem(SUPPORT_UPDATES_SEEN_STORAGE_KEY)).toBe('2026-11-20T09:00:00.000Z');
+
+        visibility.mockReturnValue('visible');
+        act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+        expect(window.localStorage.getItem(SUPPORT_UPDATES_SEEN_STORAGE_KEY)).toBe(UPDATE_ANNOUNCEMENT.createdAt);
+      } finally {
+        visibility.mockRestore();
+      }
     });
 
     it('draws none once the newest update is seen', () => {
@@ -458,6 +512,9 @@ describe('Help & Support on the web', () => {
         authorization: 'Bearer token-1',
         body: { emoji: '👍' },
       }]);
+      // A reaction that hangs gives up, so the item takes presses again.
+      expect(postSignals).toHaveLength(1);
+      expect(postSignals[0]).toBeInstanceOf(AbortSignal);
     });
 
     it('suggests a feature in the chat, its composer started and focused', async () => {
@@ -466,7 +523,7 @@ describe('Help & Support on the web', () => {
       view('roadmap');
 
       fireEvent.click(await screen.findByRole('button', { name: SUPPORT_HUB_WORDS.suggestFeature }));
-      expect(router.replace).toHaveBeenLastCalledWith('/support', { scroll: false });
+      expect(address()).toBe('/support');
       expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true');
       const composer = await screen.findByRole('textbox', { name: 'Message' });
       expect(composer).toHaveValue(SUPPORT_FEATURE_IDEA_PREFIX);

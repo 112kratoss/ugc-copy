@@ -113,6 +113,7 @@ describe("Help & Support's Updates and Roadmap through the API client", () => {
 
   it("passes a refusal on with the server's words and code", async () => {
     const refusals = [
+      endpoints.reactToSupportUpdate.errors.unauthorized,
       endpoints.reactToSupportUpdate.errors.registrationRequired,
       endpoints.reactToSupportUpdate.errors.invalidReaction,
       endpoints.reactToSupportRoadmapItem.errors.notFound,

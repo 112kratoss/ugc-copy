@@ -20,7 +20,7 @@ The owner asked for an honest opinion and said merging or adding sections was fi
 - **Added:**
   - a "You asked, it's live" alert to everyone who reacted to a roadmap item when it ships;
   - a "Suggest a feature" button that opens the chat;
-  - an alert for new announcements, and a push for big ones;
+  - an alert for new announcements, and a push for big ones (the push was dropped after the max review: see "After the max review");
   - polls, later.
 - **Kept small:** the roadmap is short and gives no dates. Later, drafts of Updates entries are written from merged PRs for the owner to approve in `/admin`.
 
@@ -230,3 +230,16 @@ Both phases went into one branch: once one session built them, the reason for tw
   - `support_update_alert_batch` makes the send safe to repeat: each account is told once, by the alert's dedupe key `support_update:<post id>`.
   - A backend job can be added later if broadcasts outgrow one request.
 - **Two read functions were added:** `support_update_reactions_for` and `support_roadmap_reactions_for`. Each list reads its counts, and the reader's own reaction, in one call.
+
+### After the max review (2026-11-27)
+
+The owner asked for a full max review of #939 ("do a full max review"). What changed:
+
+- **No push at all.** *Alert + push* is gone, and a shipped roadmap item tells people in the app only. The pushes went out as `system` alerts, which no category switch mutes and which go at high priority: for news, App Store guideline 4.5.4 asks for an opt-in of its own and a way out in the app, and the app has neither. Pushes could also be lost for good partway through a send (a preferences read that threw, the 60 s function limit) with no way to resume them. In-app alerts and the unread dot stay. A push could come back later behind its own opt-in switch, sent by a backend job that records each push.
+- **Take down, Put back up and Edit go through the owner's own post services**, so the cached feeds and the post page (where every alert points) change at once, and the edit keeps a post's checks (limits, moderation lock, safety check).
+- **An update's limits are a post's:** a 100-character title and 2,000 characters of text (120 and 5,000 before, which the composer refused).
+- **Publishing is safe to retry.** The console names the post's id for the update being written: a retry after a lost answer is answered as the first try, and one the composer left as a private draft is finished. A try that was taken down starts a new post.
+- **A take-down pauses a broadcast** instead of ending it. "Continue sending" carries on once the update is back up.
+- **The web keeps the chat mounted under the other tabs**, as the app does, so a send on its way, a picked photo, a reply or an edit survive a look at Updates. Tabs write the address with `history.replaceState`, with no server round trip.
+- **Seen means looked at:** the web marks Updates seen only while the page is visible, and the app only while the screen is in front and the app open.
+- **Smaller fixes:** the reaction routes answer 401 `UNAUTHORIZED` with no account and 403 `REGISTRATION_REQUIRED` for a guest; the web's reaction gives up after 15 s; the app keeps Edit on a thread whose comments are off; the app's "Suggest a feature" waits for the composer before focusing it; the growth report reads the two reaction tables; the migration says what it locks.

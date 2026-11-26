@@ -14,7 +14,10 @@ vi.mock('next/link', () => ({
     <a {...props} data-prefetch={prefetch === undefined ? undefined : String(prefetch)} />
   ),
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+}));
 vi.mock('@/components/AuthProvider', () => ({ useAuth: () => authState }));
 vi.mock('@/lib/supabase', () => ({
   supabase: { auth: { getSession: vi.fn(async () => ({ data: { session: null } })) } },

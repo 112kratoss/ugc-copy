@@ -365,7 +365,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   // Closed is an answer, not a failure: no retry, and no composer inviting a comment.
   const commentsClosed = loadError ? !loadError.canRetry : false;
   // Turned off by the console (a Help & Support update's switch): the comments
-  // stay readable, and nothing offers to write one, a reply or an edit.
+  // stay readable and nothing offers to write one or a reply. An edit of one's
+  // own comment stays, as on the web: the lock refuses only a new comment.
   const commentsLocked = isCommentThreadLocked(commentsQuery.data?.pages);
 
   const publishCommentCount = useCallback((nextCount: number) => {
@@ -909,8 +910,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     block: canBlockCommentAuthor(comment, resolvedPostCreatorId, user?.id)
       ? { authorLabel: getCommentDisplay(comment).authorLabel, onBlock: () => blockAuthor(comment) }
       : null,
-    // An edit is written in the composer, which a thread whose comments are off has not got.
-    canEdit: canEditComment(comment, user?.id) && !commentsLocked,
+    canEdit: canEditComment(comment, user?.id),
     pin: canPinComment(comment, resolvedPostCreatorId, user?.id)
       ? { pinned: Boolean(comment.pinned), onToggle: () => pinComment(comment) }
       : null,
@@ -918,7 +918,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     onDelete: () => removeComment(comment, false),
     onRemove: () => removeComment(comment, true),
     onReport: () => reportComment(comment),
-  }), [blockAuthor, commentsLocked, pinComment, removeComment, reportComment, resolvedPostCreatorId, startEdit, user?.id]);
+  }), [blockAuthor, pinComment, removeComment, reportComment, resolvedPostCreatorId, startEdit, user?.id]);
 
   const rowActions = useMemo<CommentRowActions>(() => ({
     postCreatorId: resolvedPostCreatorId,
@@ -1120,8 +1120,9 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     />
   );
 
-  // In the composer's place, a thread whose comments are off says so.
-  const commentsOff = commentsLocked ? (
+  // In the composer's place, a thread whose comments are off says so, except
+  // while an edit is open: that is written in the composer, and goes through.
+  const commentsOff = commentsLocked && !editing ? (
     <View
       accessible
       accessibilityRole="text"

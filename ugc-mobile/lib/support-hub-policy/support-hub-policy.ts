@@ -140,9 +140,13 @@ export function isSupportUpdateKind(value: unknown): value is SupportUpdateKind 
 /** A page of updates holds at most this many; the dot asks for one. */
 export const SUPPORT_UPDATES_PAGE_SIZE = 20;
 
-/** The console's limits for an update's words; the post's own rules apply too. */
-export const SUPPORT_UPDATE_TITLE_MAX_LENGTH = 120;
-export const SUPPORT_UPDATE_BODY_MAX_LENGTH = 5000;
+/**
+ * The console's limits for an update's words: a post's own (`TITLE_MAX_LENGTH`
+ * in `src/lib/post-limits.ts`, `BODY_MAX_LENGTH` in `src/lib/posts-server.ts`),
+ * since an update is a post; `support-hub-policy.test.ts` holds them equal.
+ */
+export const SUPPORT_UPDATE_TITLE_MAX_LENGTH = 100;
+export const SUPPORT_UPDATE_BODY_MAX_LENGTH = 2000;
 
 export type SupportUpdate = {
   /** The post's id: the update opens on the post page, `/showcase/<id>`. */

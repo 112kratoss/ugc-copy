@@ -18,6 +18,8 @@ const signUp = vi.hoisted(() => ({ open: vi.fn() }));
 const actionSheet = vi.hoisted(() => ({ show: vi.fn() }));
 const haptics = vi.hoisted(() => ({ select: vi.fn() }));
 const seen = vi.hoisted(() => ({ mark: vi.fn(async () => undefined) }));
+/** Whether the screen is the one in front, and the app open: what "looked at" also needs. */
+const looking = vi.hoisted(() => ({ focused: true, foreground: true }));
 const authState = vi.hoisted(() => ({
   api: {
     getSupportUpdates: vi.fn(),
@@ -109,6 +111,8 @@ vi.mock('@/lib/action-sheet', () => ({ showActionSheet: actionSheet.show }));
 vi.mock('@/lib/haptics', () => ({ haptic: haptics }));
 vi.mock('@/lib/join-navigation', () => ({ openSignUpSheet: signUp.open }));
 vi.mock('@/lib/support-updates-seen', () => ({ markSupportUpdatesSeen: seen.mark }));
+vi.mock('@react-navigation/native', () => ({ useIsFocused: () => looking.focused }));
+vi.mock('@/lib/app-foreground', () => ({ useAppForeground: () => looking.foreground }));
 vi.mock('@/lib/theme-context', () => ({
   useAppTheme: () => ({ colors: new Proxy({}, { get: (_target, name) => `colour:${String(name)}` }) }),
 }));
@@ -194,6 +198,8 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  looking.focused = true;
+  looking.foreground = true;
   authState.user = { id: 'account-1' };
   for (const call of Object.values(authState.api)) call.mockReset();
   cache.updates = updatesState();
@@ -264,6 +270,16 @@ describe("Help & Support's Updates", () => {
   it('marks the updates seen once the newest has been shown, and not while another tab is in front', () => {
     mount(element(false));
     expect(seen.mark).not.toHaveBeenCalled();
+
+    // Read under a pushed screen, or with the app in the background, nobody has looked yet.
+    looking.focused = false;
+    mount(element(true));
+    looking.focused = true;
+    looking.foreground = false;
+    mount(element(true));
+    looking.foreground = true;
+    expect(seen.mark).not.toHaveBeenCalled();
+    expect(cache.latest).toEqual([]);
 
     mount(element(true));
     expect(seen.mark).toHaveBeenCalledWith('2026-11-26T12:00:00.000Z');

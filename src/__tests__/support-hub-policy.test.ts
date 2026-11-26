@@ -19,11 +19,22 @@ import {
   supportUpdateDateLabel,
   supportUpdatePreview,
   supportUpdatesSeenValue,
+  SUPPORT_UPDATE_BODY_MAX_LENGTH,
+  SUPPORT_UPDATE_TITLE_MAX_LENGTH,
   type SupportRoadmapItem,
 } from '../../ugc-mobile/lib/support-hub-policy/support-hub-policy';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { TITLE_MAX_LENGTH } from '@/lib/post-limits';
+import { BODY_MAX_LENGTH } from '@/lib/posts-server';
 
 const endpoints = mobileApiContract.endpoints;
+
+describe('support update limits', () => {
+  it('are a post\'s own, since an update is a post', () => {
+    expect(SUPPORT_UPDATE_TITLE_MAX_LENGTH).toBe(TITLE_MAX_LENGTH);
+    expect(SUPPORT_UPDATE_BODY_MAX_LENGTH).toBe(BODY_MAX_LENGTH);
+  });
+});
 
 describe('support hub tabs', () => {
   it('opens on the chat and reads only its three tabs', () => {

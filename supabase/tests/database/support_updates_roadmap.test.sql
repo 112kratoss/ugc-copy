@@ -9,7 +9,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(57);
+select plan(62);
 
 -- Row-level security.
 select ok((select relrowsecurity from pg_class where oid = 'public.support_update_reactions'::regclass), 'support_update_reactions has row-level security enabled');
@@ -48,7 +48,9 @@ values
   ('a2000000-0000-4000-8000-000000000002'::uuid, 'hub-creator@example.invalid', 'authenticated', 'authenticated', false, '{}'::jsonb, '{}'::jsonb, now() - interval '30 days'),
   ('a3000000-0000-4000-8000-000000000003'::uuid, 'hub-reader-one@example.invalid', 'authenticated', 'authenticated', false, '{}'::jsonb, '{}'::jsonb, now() - interval '30 days'),
   ('a4000000-0000-4000-8000-000000000004'::uuid, 'hub-reader-two@example.invalid', 'authenticated', 'authenticated', false, '{}'::jsonb, '{}'::jsonb, now() - interval '30 days'),
-  ('a5000000-0000-4000-8000-000000000005'::uuid, null, 'authenticated', 'authenticated', true, '{}'::jsonb, '{}'::jsonb, now() - interval '1 day');
+  ('a5000000-0000-4000-8000-000000000005'::uuid, null, 'authenticated', 'authenticated', true, '{}'::jsonb, '{}'::jsonb, now() - interval '1 day'),
+  ('a6000000-0000-4000-8000-000000000006'::uuid, 'hub-leaving@example.invalid', 'authenticated', 'authenticated', false, '{}'::jsonb, '{}'::jsonb, now() - interval '30 days'),
+  ('a7000000-0000-4000-8000-000000000007'::uuid, 'hub-merged@example.invalid', 'authenticated', 'authenticated', false, '{}'::jsonb, '{}'::jsonb, now() - interval '30 days');
 
 update public.profiles set username = 'magicbooklet' where id = 'a1000000-0000-4000-8000-000000000001'::uuid;
 
@@ -99,13 +101,27 @@ select lives_ok(
   'an unlocked update takes comments'
 );
 
+-- One account is being deleted, another was merged into a reader: neither is told anything.
+update public.profiles set identity_state = 'deleting' where id = 'a6000000-0000-4000-8000-000000000006'::uuid;
+update public.profiles
+set merged_into_user_id = 'a3000000-0000-4000-8000-000000000003'::uuid,
+    merged_at = now(),
+    identity_state = 'merged'
+where id = 'a7000000-0000-4000-8000-000000000007'::uuid;
+
 -- An announced update alerts every registered, active account once.
-insert into public.support_update_broadcasts (post_id, push, title, body)
-values ('b1000000-0000-4000-8000-000000000001'::uuid, false, 'Folders are here', 'Group your creations into folders.');
+insert into public.support_update_broadcasts (post_id, title, body)
+values ('b1000000-0000-4000-8000-000000000001'::uuid, 'Folders are here', 'Group your creations into folders.');
+
+-- Taken down, the update pauses its broadcast: nothing is sent and nothing ends.
+update public.posts set archived_at = now() where id = 'b1000000-0000-4000-8000-000000000001'::uuid;
+select is(public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 3)->>'status', 'paused', 'a taken-down update pauses its broadcast');
+select ok((select finished_at is null and sent_count = 0 from public.support_update_broadcasts where post_id = 'b1000000-0000-4000-8000-000000000001'::uuid), 'a paused broadcast is not finished and has sent nothing');
+update public.posts set archived_at = null where id = 'b1000000-0000-4000-8000-000000000001'::uuid;
 
 select is(public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 3)->>'status', 'continuing', 'a full batch leaves more to send');
 select is(public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 3)->>'status', 'finished', 'a short batch ends the broadcast');
-select is(jsonb_array_length(public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 3)->'written'), 0, 'a finished broadcast writes nothing');
+select is((public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 3)->>'told')::integer, 0, 'a finished broadcast writes nothing');
 select is(
   (select count(*)::integer from public.mobile_notifications where type = 'support_update' and object_id = 'b1000000-0000-4000-8000-000000000001'),
   3,
@@ -121,10 +137,16 @@ select is(
   0,
   'a guest is not told'
 );
+select is(
+  (select count(*)::integer from public.mobile_notifications
+   where type = 'support_update' and user_id in ('a6000000-0000-4000-8000-000000000006'::uuid, 'a7000000-0000-4000-8000-000000000007'::uuid)),
+  0,
+  'an account being deleted, or merged into another, is not told'
+);
 
 -- A retry from the start writes no second alert.
 update public.support_update_broadcasts set next_after_user_id = null, finished_at = null where post_id = 'b1000000-0000-4000-8000-000000000001'::uuid;
-select is(jsonb_array_length(public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 10)->'written'), 0, 'a retry writes no alert twice');
+select is((public.support_update_alert_batch('b1000000-0000-4000-8000-000000000001'::uuid, 10)->>'told')::integer, 0, 'a retry writes no alert twice');
 
 -- The roadmap: one reaction per account; an archived item takes none.
 insert into public.support_roadmap_items (id, title, summary, status, position)
@@ -138,11 +160,24 @@ select is(public.set_support_roadmap_reaction('a3000000-0000-4000-8000-000000000
 select is(public.set_support_roadmap_reaction('a4000000-0000-4000-8000-000000000004'::uuid, 'c1000000-0000-4000-8000-000000000001'::uuid, '👍')->'reactions', '{"👍": 1, "🙏": 1}'::jsonb, 'each reaction is one person''s');
 select is(public.set_support_roadmap_reaction('a3000000-0000-4000-8000-000000000003'::uuid, 'c2000000-0000-4000-8000-000000000002'::uuid, '👍')->>'status', 'not_found', 'an archived item takes no reaction');
 
--- Shipping tells everyone who reacted, once.
+-- Shipping tells everyone who reacted and is still active, once.
 select is(
-  jsonb_array_length(public.ship_support_roadmap_item('c1000000-0000-4000-8000-000000000001'::uuid, 'b1000000-0000-4000-8000-000000000001'::uuid, 'You asked, it''s live', 'Folders are here.')->'written'),
+  public.ship_support_roadmap_item('c2000000-0000-4000-8000-000000000002'::uuid, 'b1000000-0000-4000-8000-000000000001'::uuid, 'You asked, it''s live', 'Done.')->>'status',
+  'not_found',
+  'an archived item does not ship'
+);
+insert into public.support_roadmap_reactions (item_id, user_id, emoji)
+values ('c1000000-0000-4000-8000-000000000001'::uuid, 'a6000000-0000-4000-8000-000000000006'::uuid, '👍');
+select is(
+  (public.ship_support_roadmap_item('c1000000-0000-4000-8000-000000000001'::uuid, 'b1000000-0000-4000-8000-000000000001'::uuid, 'You asked, it''s live', 'Folders are here.')->>'told')::integer,
   2,
-  'both people who reacted are told'
+  'both people who reacted and are still active are told'
+);
+select is(
+  (select count(*)::integer from public.mobile_notifications
+   where type = 'support_roadmap_shipped' and user_id = 'a6000000-0000-4000-8000-000000000006'::uuid),
+  0,
+  'a reactor whose account is being deleted is not told'
 );
 select ok(
   (select status = 'shipped' and shipped_at is not null and shipped_update_post_id = 'b1000000-0000-4000-8000-000000000001'::uuid
@@ -150,7 +185,7 @@ select ok(
   'the item is shipped with the update that announced it'
 );
 select is(
-  jsonb_array_length(public.ship_support_roadmap_item('c1000000-0000-4000-8000-000000000001'::uuid, 'b1000000-0000-4000-8000-000000000001'::uuid, 'You asked, it''s live', 'Folders are here.')->'written'),
+  (public.ship_support_roadmap_item('c1000000-0000-4000-8000-000000000001'::uuid, 'b1000000-0000-4000-8000-000000000001'::uuid, 'You asked, it''s live', 'Folders are here.')->>'told')::integer,
   0,
   'shipping again tells no one twice'
 );

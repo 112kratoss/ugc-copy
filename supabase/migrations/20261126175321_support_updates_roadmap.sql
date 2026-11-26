@@ -15,11 +15,25 @@
 -- of people is its vote. Marking an item shipped names the update that
 -- announced it, and everyone who reacted is told, once.
 --
--- An update can be announced to every registered account as an alert:
+-- An update can be announced to every registered account as an in-app alert
+-- (no push: a push of news needs its own opt-in, which this does not add):
 -- support_update_broadcasts keeps how far that has reached, and
 -- support_update_alert_batch writes the next batch of alerts, at most once per
 -- account by the alert's dedupe key, so a retry or a second runner never tells
--- anyone twice.
+-- anyone twice. An update taken down mid-way pauses its broadcast, which goes
+-- on from where it stopped once the update is back up.
+--
+-- Locks: ACCESS EXCLUSIVE on posts from the columns to this file's commit
+-- (neither column needs a rewrite; the kind's check reads every post), so the
+-- partial index, the trigger on post_comments (SHARE ROW EXCLUSIVE), the new
+-- tables' foreign keys (SHARE ROW EXCLUSIVE on auth.users and posts) and the
+-- functions are all made inside it. The widened alert-type check comes last: it
+-- reads every row of mobile_notifications under ACCESS EXCLUSIVE, also held to
+-- commit (NOT VALID and VALIDATE in one transaction would hold it just as long;
+-- the type checks before this one were widened the same way). Every step reads
+-- or defines, so the file takes milliseconds to seconds; lock_timeout (5 s)
+-- fails the release, to be run again, rather than queue writers behind a lock
+-- it cannot get.
 --
 -- The API is the only door, as for the support chat: the account's routes act
 -- as the service role after the proxy admits them (src/lib/route-identity-policy.ts),
@@ -223,7 +237,6 @@ COMMENT ON TABLE public.support_roadmap_reactions IS
 
 CREATE TABLE public.support_update_broadcasts (
   post_id uuid PRIMARY KEY REFERENCES public.posts(id) ON DELETE CASCADE,
-  push boolean NOT NULL DEFAULT false,
   title text NOT NULL CHECK (char_length(title) BETWEEN 1 AND 200),
   body text NOT NULL CHECK (char_length(body) BETWEEN 1 AND 500),
   next_after_user_id uuid,
@@ -238,7 +251,7 @@ CREATE INDEX support_update_broadcasts_unfinished_idx
   WHERE finished_at IS NULL;
 
 COMMENT ON TABLE public.support_update_broadcasts IS
-  'An update announced to every registered account: the alert''s words, whether it pushes, and how far the fan-out in account-id order has reached.';
+  'An update announced to every registered account: the alert''s words and how far the fan-out in account-id order has reached.';
 
 -- Grants -------------------------------------------------------------------------
 
@@ -471,8 +484,8 @@ COMMENT ON FUNCTION public.set_support_roadmap_reaction(uuid, uuid, text) IS
 
 -- Writes the next batch of an update's alerts: registered, active accounts in
 -- id order after the broadcast's cursor, each told at most once by the dedupe
--- key. Answers the alerts written (for their pushes) and whether it is done. A
--- broadcast another runner holds answers busy.
+-- key. Answers how many it told and whether it is done. A broadcast another
+-- runner holds answers busy; one whose update is down answers paused.
 CREATE OR REPLACE FUNCTION public.support_update_alert_batch(
   p_post_id uuid,
   p_limit integer
@@ -487,7 +500,6 @@ DECLARE
   v_limit integer := least(greatest(coalesce(p_limit, 200), 1), 1000);
   v_accounts uuid[];
   v_last uuid;
-  v_written jsonb;
   v_written_count integer;
   v_done boolean;
 BEGIN
@@ -508,11 +520,12 @@ BEGIN
   END IF;
 
   IF v_broadcast.finished_at IS NOT NULL THEN
-    RETURN jsonb_build_object('status', 'finished', 'sentCount', v_broadcast.sent_count, 'written', '[]'::jsonb);
+    RETURN jsonb_build_object('status', 'finished', 'sentCount', v_broadcast.sent_count, 'told', 0);
   END IF;
 
   -- An update taken back (unmarked, archived, hidden or no longer public)
-  -- announces no further.
+  -- announces no further for now: the broadcast pauses where it is and goes on
+  -- once the update is back up.
   IF NOT EXISTS (
     SELECT 1
     FROM public.posts post
@@ -522,11 +535,7 @@ BEGIN
       AND post.archived_at IS NULL
       AND post.review_status = 'visible'
   ) THEN
-    UPDATE public.support_update_broadcasts
-    SET finished_at = clock_timestamp(),
-        updated_at = clock_timestamp()
-    WHERE post_id = p_post_id;
-    RETURN jsonb_build_object('status', 'withdrawn', 'sentCount', v_broadcast.sent_count, 'written', '[]'::jsonb);
+    RETURN jsonb_build_object('status', 'paused', 'sentCount', v_broadcast.sent_count, 'told', 0);
   END IF;
 
   SELECT array_agg(account.id ORDER BY account.id)
@@ -564,13 +573,9 @@ BEGIN
       'support_update:' || p_post_id::text
     FROM unnest(v_accounts) AS account_id
     ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-    RETURNING id, user_id
+    RETURNING 1
   )
-  SELECT
-    coalesce(jsonb_agg(jsonb_build_object('id', written.id, 'userId', written.user_id)), '[]'::jsonb),
-    count(*)::integer
-  INTO v_written, v_written_count
-  FROM written;
+  SELECT count(*)::integer INTO v_written_count FROM written;
 
   UPDATE public.support_update_broadcasts
   SET next_after_user_id = coalesce(v_last, next_after_user_id),
@@ -581,9 +586,8 @@ BEGIN
 
   RETURN jsonb_build_object(
     'status', CASE WHEN v_done THEN 'finished' ELSE 'continuing' END,
-    'push', v_broadcast.push,
     'sentCount', v_broadcast.sent_count + v_written_count,
-    'written', v_written
+    'told', v_written_count
   );
 END;
 $$;
@@ -595,8 +599,8 @@ COMMENT ON FUNCTION public.support_update_alert_batch(uuid, integer) IS
   'Service-role-only: writes the next batch of an announced update''s alerts, each account at most once.';
 
 -- Marks a roadmap item shipped with the update that announced it and tells
--- everyone who reacted to it, once (the item records when, and each alert has
--- a dedupe key). Answers the alerts written, for their pushes.
+-- everyone who reacted to it in the app, once (the item records when, and each
+-- alert has a dedupe key). Answers how many it told.
 CREATE OR REPLACE FUNCTION public.ship_support_roadmap_item(
   p_item_id uuid,
   p_update_post_id uuid,
@@ -611,7 +615,7 @@ AS $$
 DECLARE
   v_item public.support_roadmap_items%ROWTYPE;
   v_now timestamptz := clock_timestamp();
-  v_written jsonb := '[]'::jsonb;
+  v_told integer := 0;
 BEGIN
   IF p_item_id IS NULL OR p_update_post_id IS NULL THEN
     RETURN jsonb_build_object('status', 'invalid', 'error', 'a roadmap item and the update that announced it are required');
@@ -669,18 +673,16 @@ BEGIN
       WHERE reaction.item_id = p_item_id
         AND profile.identity_state = 'active'
       ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-      RETURNING id, user_id
+      RETURNING 1
     )
-    SELECT coalesce(jsonb_agg(jsonb_build_object('id', written.id, 'userId', written.user_id)), '[]'::jsonb)
-    INTO v_written
-    FROM written;
+    SELECT count(*)::integer INTO v_told FROM written;
 
     UPDATE public.support_roadmap_items
     SET shipped_alerts_sent_at = v_now
     WHERE id = p_item_id;
   END IF;
 
-  RETURN jsonb_build_object('status', 'shipped', 'written', v_written);
+  RETURN jsonb_build_object('status', 'shipped', 'told', v_told);
 END;
 $$;
 
@@ -689,6 +691,101 @@ GRANT EXECUTE ON FUNCTION public.ship_support_roadmap_item(uuid, uuid, text, tex
 
 COMMENT ON FUNCTION public.ship_support_roadmap_item(uuid, uuid, text, text) IS
   'Service-role-only: marks a roadmap item shipped with its announcing update and alerts everyone who reacted, once.';
+
+-- Growth accounting -------------------------------------------------------------
+
+-- The reactions grow with accounts (one row per account and update or item
+-- reacted to): the ops dashboard's growth report reads them, held to their
+-- budgets in src/lib/operational-table-growth.ts. Everything it read before is
+-- read still (the definition of 20261123070741 with the two tables added).
+CREATE OR REPLACE FUNCTION public.get_operational_table_growth()
+RETURNS TABLE (
+  table_name text,
+  live_rows bigint,
+  total_bytes bigint
+)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog, pg_temp
+AS $function$
+  SELECT growth.table_name, growth.live_rows, growth.total_bytes
+  FROM (
+    SELECT
+      stats.relname::text AS table_name,
+      stats.n_live_tup AS live_rows,
+      pg_catalog.pg_total_relation_size(stats.relid) AS total_bytes
+    FROM pg_catalog.pg_stat_user_tables AS stats
+    WHERE stats.schemaname = 'public'
+      AND stats.relname = ANY (ARRAY[
+        'account_merge_tickets',
+        'ai_usage_events',
+        'backend_job_locks',
+        'backend_job_runs',
+        'backend_rate_limits',
+        'feed_delivery_facts',
+        'feed_events',
+        'feed_session_items',
+        'feed_sessions',
+        'feed_viewer_daily',
+        'generation_completion_jobs',
+        'generation_model_provider_checks',
+        'mobile_notifications',
+        'mobile_push_deliveries',
+        'onboarding_events',
+        'playback_metrics',
+        'playback_metrics_daily_rollup',
+        'post_search_embeddings',
+        'post_view_days',
+        'post_view_marks',
+        'provider_dependency_events',
+        'search_query_embeddings',
+        'search_query_events',
+        'search_result_opens',
+        'support_roadmap_reactions',
+        'support_update_reactions',
+        'template_run_steps',
+        'template_runs',
+        'upload_byte_reservations',
+        'upload_byte_user_counters',
+        'upload_path_tombstones',
+        'workflow_canvas_run_steps',
+        'workflow_canvas_runs',
+        'workflow_run_step_jobs'
+      ])
+
+    UNION ALL
+
+    SELECT
+      'auth.users',
+      stats.n_live_tup,
+      pg_catalog.pg_total_relation_size(stats.relid)
+    FROM pg_catalog.pg_stat_user_tables AS stats
+    WHERE stats.schemaname = 'auth'
+      AND stats.relname = 'users'
+
+    UNION ALL
+
+    SELECT
+      'guest_identities',
+      (
+        SELECT count(*)
+        FROM auth.users AS guest
+        WHERE guest.is_anonymous
+          AND guest.deleted_at IS NULL
+      ),
+      0::bigint
+  ) AS growth
+  ORDER BY growth.total_bytes DESC, growth.table_name;
+$function$;
+
+REVOKE ALL ON FUNCTION public.get_operational_table_growth()
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_operational_table_growth()
+  TO service_role;
+
+COMMENT ON FUNCTION public.get_operational_table_growth() IS
+  'Row counts and byte sizes for churn-prone operational state, append-only telemetry with retention, the vectors search keeps of posts and of queries, post view marks and daily view totals, Help & Support''s reactions, permanent security ledgers, user-owned workflow history, auth.users and the exact count of live guest identities (bytes 0: part of auth.users). Service role only.';
 
 -- Alerts --------------------------------------------------------------------------
 

@@ -77,6 +77,8 @@ test('a signed-out visitor opens Help & Support, is asked to sign in to chat, an
   await expect(page.getByRole('complementary', { name: 'Primary navigation' }).getByRole('link', { name: /^Help & feedback/ }))
     .toHaveAttribute('href', '/support');
 
+  // A press writes its tab into the address in place (history.replaceState): no navigation and no
+  // server render to wait for, so the address follows at once and expect's own timeout is plenty.
   await openTab(page, page.getByRole('tab', { name: /^Updates/ }));
   await expect(page).toHaveURL(/\/support\?tab=updates$/);
   const card = page.getByRole('article').filter({ hasText: UPDATE.title });

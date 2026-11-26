@@ -87,7 +87,7 @@ function logFailure(request: Request, msg: string, action: unknown, error: unkno
 function answer<T>(result: AdminSupportHubResult<T>, headers: Headers) {
   return result.ok
     ? NextResponse.json({ success: true, ...(result.value && typeof result.value === 'object' ? result.value : {}) }, { headers })
-    : NextResponse.json({ error: result.error }, { status: result.status, headers });
+    : NextResponse.json({ error: result.error, ...(result.code ? { code: result.code } : {}) }, { status: result.status, headers });
 }
 
 export async function getAdminSupportHub(request: Request, dependencies: AdminSupportHubRouteDependencies = {}) {
@@ -137,6 +137,8 @@ export async function postAdminSupportHubAction(request: Request, dependencies: 
         }
         const result = await publishSupportUpdate({
           adminSupabase,
+          // The console's id for the update being written: a retry names the same post.
+          postId: body.postId,
           kind: body.kind,
           title: body.title,
           body: body.body,
@@ -156,7 +158,7 @@ export async function postAdminSupportHubAction(request: Request, dependencies: 
       case 'publishState':
         return answer(await setSupportUpdatePublished({ adminSupabase, postId, published: body.published === true }), headers);
       case 'announce': {
-        const result = await announceSupportUpdate({ adminSupabase, postId, push: body.push === true });
+        const result = await announceSupportUpdate({ adminSupabase, postId });
         if (result.ok) runAfter(() => runSupportUpdateBroadcastQuietly({ adminSupabase, postId }));
         return answer(result, headers);
       }

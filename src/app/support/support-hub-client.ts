@@ -133,7 +133,20 @@ function reactionPath({ kind, id }: SupportHubReactionTarget): string {
   return `${base}/${encodeURIComponent(id)}/reaction`;
 }
 
-/** Sets the account's reaction (`null` clears it), answered with the counts as they now are. */
+/** How long a reaction may take before it counts as failed (and its chip is free again). */
+export const SUPPORT_HUB_REACTION_TIMEOUT_MS = 15_000;
+
+function reactionTimeoutSignal(): AbortSignal | undefined {
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+    ? AbortSignal.timeout(SUPPORT_HUB_REACTION_TIMEOUT_MS)
+    : undefined;
+}
+
+/**
+ * Sets the account's reaction (`null` clears it), answered with the counts as
+ * they now are. A request that hangs fails after
+ * `SUPPORT_HUB_REACTION_TIMEOUT_MS`, so the item takes presses again.
+ */
 export async function sendSupportHubReaction({
   target,
   emoji,
@@ -149,6 +162,7 @@ export async function sendSupportHubReaction({
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ emoji }),
+      signal: reactionTimeoutSignal(),
     });
     const json: unknown = await response.json().catch(() => null);
     const code = json && typeof json === 'object' ? (json as { code?: unknown }).code : undefined;

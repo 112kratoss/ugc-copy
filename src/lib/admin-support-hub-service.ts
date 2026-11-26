@@ -1,13 +1,16 @@
 import 'server-only';
 
-import { randomUUID } from 'node:crypto';
-
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { buildAgentComposedPostFormData } from '@/lib/agent-upload-publish-request';
 import { logBackendError } from '@/lib/backend-logger';
-import { pushStoredMobileNotifications } from '@/lib/mobile-notifications';
 import { createOwnerPostForRoute } from '@/lib/post-create-route-service';
+import {
+  archiveOwnerPostForRoute,
+  restoreOwnerPostForRoute,
+  type PostLifecycleResult,
+} from '@/lib/post-lifecycle-service';
+import { updateOwnerPostForRoute } from '@/lib/post-update-service';
 import { isSupportHubId } from '@/lib/support-hub-service';
 
 import {
@@ -33,21 +36,27 @@ import {
  * own create, the path an agent's text post takes, so the public-post rules,
  * moderation and search treat it as any post; then `set_support_update` marks
  * it. Announcing it starts a broadcast: `support_update_alert_batch` writes
- * the alerts a batch at a time, each account at most once, and the pushes
- * follow where chosen. It runs behind the publish's response and, should it
- * stop short of the end, "Continue sending" picks it up where it stopped.
+ * the in-app alerts a batch at a time, each account at most once. It runs
+ * behind the publish's response and, should it stop short of the end or pause
+ * while the update is down, "Continue sending" picks it up where it stopped.
+ * There is no push: a push of news needs an opt-in of its own (App Store
+ * guideline 4.5.4), which the app does not ask for.
+ *
+ * Taking an update down, putting it back and rewording it go through the post
+ * services an owner's own edits use, so the cached feeds and the post's page
+ * (where every alert points) follow at once.
  */
 
-export type SupportUpdateAnnounce = 'quiet' | 'alert' | 'alert_push';
+export type SupportUpdateAnnounce = 'quiet' | 'alert';
 
 export function isSupportUpdateAnnounce(value: unknown): value is SupportUpdateAnnounce {
-  return value === 'quiet' || value === 'alert' || value === 'alert_push';
+  return value === 'quiet' || value === 'alert';
 }
 
-export type AdminSupportHubResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string };
+export type AdminSupportHubResult<T> = { ok: true; value: T } | { ok: false; status: number; error: string; code?: string };
 
-function refusal(status: number, error: string): { ok: false; status: number; error: string } {
-  return { ok: false, status, error };
+function refusal(status: number, error: string, code?: string): { ok: false; status: number; error: string; code?: string } {
+  return code ? { ok: false, status, error, code } : { ok: false, status, error };
 }
 
 export type AdminSupportUpdate = {
@@ -61,7 +70,7 @@ export type AdminSupportUpdate = {
   commentCount: number;
   commentsLocked: boolean;
   reactionPeople: number;
-  broadcast: { push: boolean; sentCount: number; finished: boolean } | null;
+  broadcast: { sentCount: number; finished: boolean } | null;
 };
 
 export type AdminRoadmapItem = {
@@ -121,7 +130,7 @@ export async function listAdminSupportHub({ adminSupabase }: { adminSupabase: Su
       ? adminSupabase.rpc('support_roadmap_reactions_for', { p_item_ids: itemIds, p_user_id: null })
       : Promise.resolve({ data: [], error: null }),
     updateIds.length
-      ? adminSupabase.from('support_update_broadcasts').select('post_id, push, sent_count, finished_at').in('post_id', updateIds)
+      ? adminSupabase.from('support_update_broadcasts').select('post_id, sent_count, finished_at').in('post_id', updateIds)
       : Promise.resolve({ data: [], error: null }),
   ]);
   if (updateReactions.error) throw updateReactions.error;
@@ -135,7 +144,7 @@ export async function listAdminSupportHub({ adminSupabase }: { adminSupabase: Su
   }
   const broadcastById = new Map(((broadcasts.data ?? []) as Array<Record<string, unknown>>).map((row) => [
     String(row.post_id),
-    { push: row.push === true, sentCount: Number(row.sent_count ?? 0), finished: row.finished_at !== null },
+    { sentCount: Number(row.sent_count ?? 0), finished: row.finished_at !== null },
   ]));
 
   return {
@@ -181,27 +190,55 @@ function checkUpdateWords(title: unknown, body: unknown): { title: string; body:
   return { title: cleanTitle, body: cleanBody };
 }
 
+/** Answered when a try at publishing was taken down: the console starts a new post for the next one. */
+export const SUPPORT_UPDATE_DRAFT_TAKEN_DOWN = 'DRAFT_TAKEN_DOWN';
+
+type PublishTryRow = {
+  user_id: string;
+  support_update_kind: string | null;
+  archived_at: string | null;
+  tombstoned_at: string | null;
+};
+
+/** The post a try at publishing named, if one was made. */
+async function readPublishTry(adminSupabase: SupabaseClient, postId: string): Promise<PublishTryRow | null> {
+  const { data, error } = await adminSupabase
+    .from('posts')
+    .select('user_id, support_update_kind, archived_at, tombstoned_at')
+    .eq('id', postId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as PublishTryRow | null;
+}
+
 /**
  * Publishes an update as the official account and marks it; with an announce
- * other than `quiet`, records its broadcast for `runSupportUpdateBroadcast`.
+ * of `alert`, records its broadcast for `runSupportUpdateBroadcast`.
+ *
+ * `postId` is the console's for the update being written, the same on every
+ * try, so a try is never posted twice: one that went through (its answer lost
+ * on the way) is answered as it was, and one the composer left as a private
+ * draft is finished with the words as they are now. A try that was taken
+ * down answers `DRAFT_TAKEN_DOWN`, and the console starts a new post.
  */
 export async function publishSupportUpdate({
   adminSupabase,
+  postId,
   kind,
   title,
   body,
   commentsLocked,
   announce,
-  createPostId = randomUUID,
 }: {
   adminSupabase: SupabaseClient;
+  postId: unknown;
   kind: unknown;
   title: unknown;
   body: unknown;
   commentsLocked: boolean;
   announce: SupportUpdateAnnounce;
-  createPostId?: () => string;
 }): Promise<AdminSupportHubResult<{ postId: string; announced: boolean }>> {
+  if (!isSupportHubId(postId)) return refusal(400, 'Reload the page, then post the update again.');
   if (!isSupportUpdateKind(kind)) return refusal(400, 'Choose Announcement or New.');
   const words = checkUpdateWords(title, body);
   if (typeof words === 'string') return refusal(400, words);
@@ -209,22 +246,45 @@ export async function publishSupportUpdate({
   const official = await officialAccountId(adminSupabase);
   if (!official) return refusal(409, 'No account holds the @magicbooklet handle, so there is nobody to post as.');
 
-  const postId = createPostId();
-  const formData = buildAgentComposedPostFormData({
-    title: words.title,
-    body: words.body,
-    visibility: 'public',
-    resourceBundle: null,
-  });
-  const created = await createOwnerPostForRoute({
-    adminSupabase,
-    ownerUserId: official,
-    readFormData: async () => formData,
-    createPostId: () => postId,
-  });
-  if (!created.ok) {
-    const message = typeof created.body?.error === 'string' ? created.body.error : 'The update could not be posted.';
-    return refusal(created.status >= 400 && created.status < 500 ? created.status : 500, message);
+  const earlier = await readPublishTry(adminSupabase, postId);
+  if (earlier && earlier.user_id !== official) return refusal(409, 'Reload the page, then post the update again.');
+  if (earlier?.support_update_kind) {
+    // An earlier try went through: answered as it was, and announced now if asked.
+    return { ok: true, value: { postId, announced: await recordBroadcast(adminSupabase, postId, announce, earlier.support_update_kind, words.title) } };
+  }
+  if (earlier && (earlier.archived_at !== null || earlier.tombstoned_at !== null)) {
+    return refusal(409, 'The last try was taken down. Press Publish again to post it as a new update.', SUPPORT_UPDATE_DRAFT_TAKEN_DOWN);
+  }
+
+  if (earlier) {
+    // The composer made the post but could not make it public: finish it.
+    const finished = await updateOwnerPostForRoute({
+      adminSupabase,
+      ownerUserId: official,
+      postId,
+      body: { title: words.title, body: words.body, visibility: 'public' },
+    });
+    if (!finished.ok) return postServiceRefusal(finished, 'The update could not be posted.');
+  } else {
+    const formData = buildAgentComposedPostFormData({
+      title: words.title,
+      body: words.body,
+      visibility: 'public',
+      resourceBundle: null,
+    });
+    const created = await createOwnerPostForRoute({
+      adminSupabase,
+      ownerUserId: official,
+      readFormData: async () => formData,
+      createPostId: () => postId,
+    });
+    if (!created.ok) {
+      // Saved, but only as a private draft: the next try finishes it.
+      if (await readPublishTry(adminSupabase, postId)) {
+        return refusal(500, 'The update was saved as a private draft but could not be made public. Press Publish again to finish it.');
+      }
+      return postServiceRefusal(created, 'The update could not be posted.');
+    }
   }
 
   const { data: marked, error: markError } = await adminSupabase.rpc('set_support_update', {
@@ -234,30 +294,58 @@ export async function publishSupportUpdate({
   });
   if (markError || (marked as { status?: unknown } | null)?.status !== 'set') {
     // Never leave a stray post on the official profile: take it down again.
-    await adminSupabase.from('posts').update({ archived_at: new Date().toISOString() }).eq('id', postId);
+    const takenDown = await archiveOwnerPostForRoute({ adminSupabase, ownerUserId: official, postId });
+    if (!takenDown.ok) {
+      logBackendError('support_update_stray_post_left_up', {
+        postId,
+        markStatus: (marked as { status?: unknown } | null)?.status ?? null,
+        ...(markError ? { error: markError } : {}),
+      });
+      return refusal(500, 'The post was made but could not be marked as an update, and taking it down failed. Take it down from the @magicbooklet profile.');
+    }
     if (markError) throw markError;
-    return refusal(409, 'The post was made but could not be marked as an update, so it was taken down. Try again.');
+    return refusal(
+      409,
+      'The post was made but could not be marked as an update, so it was taken down. Press Publish again to post it as a new update.',
+      SUPPORT_UPDATE_DRAFT_TAKEN_DOWN,
+    );
   }
 
-  if (announce !== 'quiet') {
-    const alert = supportUpdateAlertWords(kind, words.title);
-    const { error } = await adminSupabase.from('support_update_broadcasts').insert({
-      post_id: postId,
-      push: announce === 'alert_push',
-      title: alert.title,
-      body: alert.body,
-    });
-    if (error) throw error;
-  }
-  return { ok: true, value: { postId, announced: announce !== 'quiet' } };
+  return { ok: true, value: { postId, announced: await recordBroadcast(adminSupabase, postId, announce, kind, words.title) } };
+}
+
+/**
+ * Records a live update's broadcast when it is to be announced, and says
+ * whether it is (one recorded before counts). The update is live by now: a
+ * broadcast that cannot be recorded is reported, never thrown, or a retry
+ * would publish the update twice.
+ */
+async function recordBroadcast(
+  adminSupabase: SupabaseClient,
+  postId: string,
+  announce: SupportUpdateAnnounce,
+  kind: string,
+  title: string,
+): Promise<boolean> {
+  if (announce !== 'alert' || !isSupportUpdateKind(kind)) return false;
+  const alert = supportUpdateAlertWords(kind, title);
+  const { error } = await adminSupabase.from('support_update_broadcasts').insert({
+    post_id: postId,
+    title: alert.title,
+    body: alert.body,
+  });
+  if (!error) return true;
+  if ((error as { code?: unknown }).code === '23505') return true;
+  logBackendError('support_update_broadcast_not_recorded', { postId, error });
+  return false;
 }
 
 export type SupportUpdateBroadcastProgress = { status: string; sentCount: number };
 
 /**
- * Sends an announced update's alerts, a batch at a time, until done or out of
- * time; the pushes follow each batch where the broadcast pushes. Safe to run
- * twice at once or again later: each account is told once.
+ * Sends an announced update's alerts, a batch at a time, until done, paused
+ * (the update is down) or out of time. Safe to run twice at once or again
+ * later: each account is told once.
  */
 export async function runSupportUpdateBroadcast({
   adminSupabase,
@@ -280,14 +368,7 @@ export async function runSupportUpdateBroadcast({
       p_limit: batchSize,
     });
     if (error) throw error;
-    const record = (data ?? {}) as { status?: unknown; sentCount?: unknown; push?: unknown; written?: unknown };
-    const written = Array.isArray(record.written)
-      ? (record.written as Array<{ id?: unknown; userId?: unknown }>)
-        .filter((entry): entry is { id: string; userId: string } => typeof entry.id === 'string' && typeof entry.userId === 'string')
-      : [];
-    if (record.push === true && written.length > 0) {
-      await pushStoredMobileNotifications(adminSupabase, written);
-    }
+    const record = (data ?? {}) as { status?: unknown; sentCount?: unknown };
     progress = {
       status: typeof record.status === 'string' ? record.status : 'not_found',
       sentCount: Number(record.sentCount ?? progress.sentCount),
@@ -305,15 +386,34 @@ export async function runSupportUpdateBroadcastQuietly(args: { adminSupabase: Su
   }
 }
 
-async function readUpdateRow(adminSupabase: SupabaseClient, postId: string) {
+type UpdateRow = {
+  id: string;
+  user_id: string;
+  support_update_kind: string;
+  comments_locked: boolean;
+  archived_at: string | null;
+};
+
+async function readUpdateRow(adminSupabase: SupabaseClient, postId: string): Promise<UpdateRow | null> {
   const { data, error } = await adminSupabase
     .from('posts')
-    .select('id, support_update_kind, comments_locked')
+    .select('id, user_id, support_update_kind, comments_locked, archived_at')
     .eq('id', postId)
     .not('support_update_kind', 'is', null)
     .maybeSingle();
   if (error) throw error;
-  return data as { id: string; support_update_kind: string; comments_locked: boolean } | null;
+  return data as UpdateRow | null;
+}
+
+/** A post service's refusal as the console's: its own words for a 4xx, a 429 for its rate limit. */
+function postServiceRefusal(
+  result: { ok: false; rateLimitError: unknown } | { ok: false; status: number; body: { error?: unknown } },
+  fallback: string,
+): { ok: false; status: number; error: string } {
+  if ('rateLimitError' in result) return refusal(429, 'Too many changes to @magicbooklet\'s posts at once. Wait a minute and try again.');
+  if (result.status === 429) return refusal(429, 'Too many changes to @magicbooklet\'s posts at once. Wait a minute and try again.');
+  const message = typeof result.body?.error === 'string' && result.body.error ? result.body.error : fallback;
+  return refusal(result.status >= 400 && result.status < 500 ? result.status : 500, message);
 }
 
 /** Rewords an update's title and body. */
@@ -330,13 +430,17 @@ export async function editSupportUpdate({
 }): Promise<AdminSupportHubResult<null>> {
   const words = checkUpdateWords(title, body);
   if (typeof words === 'string') return refusal(400, words);
-  if (!(await readUpdateRow(adminSupabase, postId))) return refusal(404, 'That update no longer exists.');
-  const { error } = await adminSupabase
-    .from('posts')
-    .update({ title: words.title, body: words.body })
-    .eq('id', postId)
-    .not('support_update_kind', 'is', null);
-  if (error) throw error;
+  const row = await readUpdateRow(adminSupabase, postId);
+  if (!row) return refusal(404, 'That update no longer exists.');
+  // The owner's own edit: its limits, its moderation lock, and the refresh of
+  // the cached cards and page that drew the old words.
+  const saved = await updateOwnerPostForRoute({
+    adminSupabase,
+    ownerUserId: row.user_id,
+    postId,
+    body: { title: words.title, body: words.body },
+  });
+  if (!saved.ok) return postServiceRefusal(saved, 'The update could not be saved.');
   return { ok: true, value: null };
 }
 
@@ -374,11 +478,9 @@ export async function setSupportUpdateCommentsLocked({
 export async function announceSupportUpdate({
   adminSupabase,
   postId,
-  push,
 }: {
   adminSupabase: SupabaseClient;
   postId: string;
-  push: boolean;
 }): Promise<AdminSupportHubResult<{ postId: string }>> {
   const { data, error } = await adminSupabase
     .from('posts')
@@ -392,20 +494,17 @@ export async function announceSupportUpdate({
   if (row.visibility !== 'public' || row.archived_at !== null || row.review_status !== 'visible') {
     return refusal(409, 'Only a live update can be announced. Put it back up first.');
   }
-  const { data: existing, error: existingError } = await adminSupabase
-    .from('support_update_broadcasts')
-    .select('post_id')
-    .eq('post_id', postId)
-    .maybeSingle();
-  if (existingError) throw existingError;
-  if (existing) return refusal(409, 'That update was already announced. Use Continue sending if it stopped short.');
   const alert = supportUpdateAlertWords(row.support_update_kind, row.title ?? '');
   const { error: insertError } = await adminSupabase.from('support_update_broadcasts').insert({
     post_id: postId,
-    push,
     title: alert.title,
     body: alert.body,
   });
+  // The broadcast's key is the update: a second announce (a double click, two
+  // tabs) finds it there.
+  if ((insertError as { code?: unknown } | null)?.code === '23505') {
+    return refusal(409, 'That update was already announced. Use Continue sending if it stopped short.');
+  }
   if (insertError) throw insertError;
   return { ok: true, value: { postId } };
 }
@@ -420,13 +519,17 @@ export async function setSupportUpdatePublished({
   postId: string;
   published: boolean;
 }): Promise<AdminSupportHubResult<null>> {
-  if (!(await readUpdateRow(adminSupabase, postId))) return refusal(404, 'That update no longer exists.');
-  const { error } = await adminSupabase
-    .from('posts')
-    .update({ archived_at: published ? null : new Date().toISOString() })
-    .eq('id', postId)
-    .not('support_update_kind', 'is', null);
-  if (error) throw error;
+  const row = await readUpdateRow(adminSupabase, postId);
+  if (!row) return refusal(404, 'That update no longer exists.');
+  if ((row.archived_at === null) === published) return { ok: true, value: null };
+  // The owner's own archive and restore: the feeds drop or refresh the post
+  // and its page stops or starts showing it at once.
+  const result: PostLifecycleResult = published
+    ? await restoreOwnerPostForRoute({ adminSupabase, ownerUserId: row.user_id, postId })
+    : await archiveOwnerPostForRoute({ adminSupabase, ownerUserId: row.user_id, postId });
+  if (!result.ok) {
+    return postServiceRefusal(result, published ? 'The update could not be put back up.' : 'The update could not be taken down.');
+  }
   return { ok: true, value: null };
 }
 
@@ -555,7 +658,7 @@ export async function moveRoadmapItem({
   return { ok: true, value: null };
 }
 
-/** Marks an item shipped with the update that announced it, and tells everyone who reacted. */
+/** Marks an item shipped with the update that announced it, and tells everyone who reacted in the app. */
 export async function shipRoadmapItem({
   adminSupabase,
   itemId,
@@ -580,13 +683,8 @@ export async function shipRoadmapItem({
     p_body: words.body,
   });
   if (error) throw error;
-  const record = (data ?? {}) as { status?: unknown; written?: unknown };
+  const record = (data ?? {}) as { status?: unknown; told?: unknown };
   if (record.status === 'update_not_found') return refusal(409, 'Choose a published update to ship it with.');
   if (record.status !== 'shipped') return refusal(404, 'That item is archived or no longer exists.');
-  const written = Array.isArray(record.written)
-    ? (record.written as Array<{ id?: unknown; userId?: unknown }>)
-      .filter((entry): entry is { id: string; userId: string } => typeof entry.id === 'string' && typeof entry.userId === 'string')
-    : [];
-  if (written.length > 0) await pushStoredMobileNotifications(adminSupabase, written);
-  return { ok: true, value: { told: written.length } };
+  return { ok: true, value: { told: Number(record.told ?? 0) } };
 }

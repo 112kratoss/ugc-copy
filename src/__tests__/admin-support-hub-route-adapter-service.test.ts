@@ -95,14 +95,15 @@ describe('/api/admin/support-hub', () => {
   it('announces a quiet update later, and sends its alerts behind the response', async () => {
     service.announceSupportUpdate.mockResolvedValue({ ok: true, value: { postId: POST_ID } });
     const d = deps();
-    const response = await postAdminSupportHubAction(post({ action: 'announce', postId: POST_ID, push: true }), d);
+    const response = await postAdminSupportHubAction(post({ action: 'announce', postId: POST_ID }), d);
 
     expect(response.status).toBe(200);
-    expect(service.announceSupportUpdate).toHaveBeenCalledWith(expect.objectContaining({ postId: POST_ID, push: true }));
+    // Alerts in the app only: no push is asked for or passed on.
+    expect(service.announceSupportUpdate).toHaveBeenCalledWith({ adminSupabase: expect.anything(), postId: POST_ID });
     expect(service.runSupportUpdateBroadcastQuietly).toHaveBeenCalledWith(expect.objectContaining({ postId: POST_ID }));
 
     service.announceSupportUpdate.mockResolvedValue({ ok: false, status: 409, error: 'That update was already announced. Use Continue sending if it stopped short.' });
-    const again = await postAdminSupportHubAction(post({ action: 'announce', postId: POST_ID, push: false }), deps());
+    const again = await postAdminSupportHubAction(post({ action: 'announce', postId: POST_ID }), deps());
     expect(again.status).toBe(409);
   });
 

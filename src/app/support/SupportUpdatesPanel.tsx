@@ -169,10 +169,18 @@ export default function SupportUpdatesPanel({
     return () => controller.abort();
   }, [attempt]);
 
-  // Looked at: the newest update the list shows is seen on this device.
+  // Looked at: the newest update the list shows is seen on this device, once
+  // the tab is open in a page someone can see. A list read in a background
+  // browser tab waits until the page is shown.
   const shownLatestAt = state.status === 'ready' ? state.latestAt : null;
   useEffect(() => {
-    if (active && shownLatestAt) markSupportUpdatesSeen(shownLatestAt);
+    if (!active || !shownLatestAt) return undefined;
+    const markIfShown = () => {
+      if (document.visibilityState === 'visible') markSupportUpdatesSeen(shownLatestAt);
+    };
+    markIfShown();
+    document.addEventListener('visibilitychange', markIfShown);
+    return () => document.removeEventListener('visibilitychange', markIfShown);
   }, [active, shownLatestAt]);
 
   const patch = useCallback((id: string, change: Pick<SupportUpdate, 'reactions' | 'myReaction'>) => {
