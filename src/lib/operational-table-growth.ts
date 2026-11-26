@@ -100,6 +100,11 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   // One row per reader and comment liked or disliked, kept for as long as the
   // comment is: user history, not a pruned table. A planning threshold.
   post_comment_reactions: { warning: 500_000, degraded: 2_500_000 },
+  // One row per account and Help & Support update or roadmap item reacted to,
+  // kept with the update or item: user history, bounded by accounts times a
+  // few dozen updates. A planning threshold.
+  support_update_reactions: { warning: 500_000, degraded: 2_500_000 },
+  support_roadmap_reactions: { warning: 200_000, degraded: 1_000_000 },
   // What each edit of a comment replaced, up to 2,000 characters a row, kept
   // for moderators and append-only by grant: nothing prunes it. An account at
   // the mutation limit can add 4,320 rows a day, so this is the notice that a

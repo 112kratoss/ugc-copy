@@ -8,6 +8,7 @@ import {
     ListFilter,
     Loader2,
     MessageSquare,
+    MessageSquareOff,
     MoreVertical,
     Pencil,
     Pin,
@@ -63,6 +64,11 @@ import { getCurrentInternalPath } from '@/lib/share';
 import { readPostCommentSort, usePostCommentSort } from '@/lib/post-comment-sort-memory';
 import { hasSupabaseAuthCookie } from '@/lib/supabase-auth-cookie';
 import { useViewerSessionCheck } from '@/lib/viewer-session-check';
+
+import {
+    SUPPORT_COMMENTS_LOCKED_CODE,
+    SUPPORT_HUB_WORDS,
+} from '../../ugc-mobile/lib/support-hub-policy/support-hub-policy';
 
 const SORT_OPTIONS: Array<{ value: PostCommentSort; label: string; description: string }> = [
     // Top is the server's order: the most liked first, then the most replied to.
@@ -159,7 +165,7 @@ function toFailure(kind: CommentRequestKind, error: unknown): CommentRequestFail
         : describeCommentRequestFailure(kind, null);
 }
 
-type CommentErrorBody = { error?: unknown; retryAfterSeconds?: unknown };
+type CommentErrorBody = { error?: unknown; code?: unknown; retryAfterSeconds?: unknown };
 
 export default function PostComments({
     postId,
@@ -198,6 +204,9 @@ export default function PostComments({
     const [nextOffset, setNextOffset] = useState<number | null>(0);
     const [resolvedCreatorId, setResolvedCreatorId] = useState(postCreatorId);
     const [totalCount, setTotalCount] = useState(commentCount);
+    // The post takes no new comment, as its thread's read says (a Help & Support update whose
+    // comments the console turned off): the comments stay readable, and the composer and Reply go.
+    const [commentsLocked, setCommentsLocked] = useState(false);
     const [hasLoaded, setHasLoaded] = useState(false);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<CommentRequestFailure | null>(null);
@@ -368,6 +377,7 @@ export default function PostComments({
             ));
             setNextOffset(page.pageInfo.hasMore ? page.pageInfo.nextOffset : null);
             setResolvedCreatorId(page.postCreatorId ?? postCreatorId);
+            setCommentsLocked(page.commentsLocked === true);
             setHasLoaded(true);
             publishCount(page.commentCount);
         } catch (error) {
@@ -493,6 +503,7 @@ export default function PostComments({
         setReplyTo(null);
         setReplyPrefix('');
         setComposerOpen(false);
+        setCommentsLocked(false);
         setReportTarget(null);
         setReportDetails('');
         setReportReason('spam');
@@ -593,7 +604,7 @@ export default function PostComments({
 
     const submitComment = useCallback(async () => {
         const body = draft.trim();
-        if (!body || submitting || !accessToken) return;
+        if (!body || submitting || !accessToken || commentsLocked) return;
 
         setSubmitting(true);
         setActionError(null);
@@ -615,6 +626,13 @@ export default function PostComments({
                 comment?: PostComment;
                 commentCount?: number;
             };
+            if (response.status === 403 && data.code === SUPPORT_COMMENTS_LOCKED_CODE) {
+                // Turned off after the thread was read: the thread says so where the composer was,
+                // in place of an error, and a screen reader is told why the comment did not go.
+                setCommentsLocked(true);
+                setStatusMessage(SUPPORT_HUB_WORDS.commentsLockedRefusal);
+                return;
+            }
             if (!response.ok || !data.comment) {
                 throw new CommentRequestError(
                     describeCommentRequestFailure(kind, response.status, data)
@@ -664,6 +682,7 @@ export default function PostComments({
     }, [
         accessToken,
         authHeaders,
+        commentsLocked,
         deliveryId,
         draft,
         postId,
@@ -982,10 +1001,12 @@ export default function PostComments({
     // so a draft is never left without its way to send or drop it.
     const composerActive = composerOpen || draft.length > 0 || replyTo !== null;
     const showInitialLoading = loading && !hasLoaded && rows.length === 0;
+    // A post that takes no comment says so where the composer goes, and does not ask for a first one.
     const showEmpty = hasLoaded
         && rows.length === 0
         && nextOffset === null
-        && !loadError;
+        && !loadError
+        && !commentsLocked;
     const sortItems: StudioOverflowMenuItem[] = SORT_OPTIONS.map((option) => ({
         key: option.value,
         label: option.label,
@@ -999,7 +1020,9 @@ export default function PostComments({
     // document is its place on the page, so Tab follows what the eye sees.
     const composer = (
         <div className={`post-comments__composer ${isPanel ? 'px-4 py-3' : ''}`}>
-            {user ? (
+            {commentsLocked ? (
+                <CommentsOffNote />
+            ) : user ? (
                 <div className="flex flex-col gap-2">
                     {replyTo ? (
                         <p className="truncate text-xs text-[var(--ui-text-muted)]">
@@ -1568,7 +1591,7 @@ export default function PostComments({
                                                         <span className="sr-only">Loved by the creator</span>
                                                     </span>
                                                 ) : null}
-                                                {user ? (
+                                                {user && !commentsLocked ? (
                                                     <CommentAction
                                                         label="Reply"
                                                         accessibleLabel={`Reply to ${display.authorLabel}`}
@@ -1672,6 +1695,16 @@ function SignInLink({ href }: { href: string }) {
         >
             Sign in
         </Link>
+    );
+}
+
+/** The composer's place on a post that takes no new comment: its comments stay readable. */
+function CommentsOffNote() {
+    return (
+        <p className="flex min-h-12 items-center gap-2 rounded-2xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-4 text-sm font-bold text-[var(--ui-text-muted)]">
+            <MessageSquareOff className="h-4 w-4" aria-hidden="true" />
+            {SUPPORT_HUB_WORDS.commentsOff}
+        </p>
     );
 }
 

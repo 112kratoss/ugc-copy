@@ -1435,6 +1435,11 @@ export interface PostCommentsResponse {
   postId: string;
   postCreatorId: string | null;
   commentCount: number;
+  /**
+   * The post takes no new comment (the console's switch on a Help & Support
+   * update); its comments stay readable. Missing from a server before it.
+   */
+  commentsLocked?: boolean;
   comments: PostComment[];
   pageInfo: {
     hasMore: boolean;
@@ -1982,7 +1987,9 @@ export type MobileNotificationType =
   | 'post_saved'
   | 'post_remixed'
   | 'post_shared'
-  | 'support_reply';
+  | 'support_reply'
+  | 'support_update'
+  | 'support_roadmap_shipped';
 
 export interface MobileNotification {
   id: string;

@@ -46,11 +46,15 @@ import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme } from '@/lib/theme';
 import { UNLOCKED_RECIPES_LABEL, UNLOCKED_RECIPES_PATH } from '@/lib/recipe-unlocked-notice';
 import { SUPPORT_CONVERSATION_PATH } from '@/lib/support-conversation-policy/support-conversation-policy';
+import { SUPPORT_HUB_WORDS } from '@/lib/support-hub-policy/support-hub-policy';
 import { useAppTheme } from '@/lib/theme-context';
 import type { ProfileResponse } from '@/lib/types';
 
 /** Below this the drag is still ambiguous with a tap or a vertical scroll. */
 const DRAWER_DRAG_CLAIM_DISTANCE = 8;
+/** A row's unread dot, before its chevron. */
+const MENU_ROW_DOT_SIZE = 8;
+const HELP_AND_SUPPORT_LABEL = 'Help & Support';
 // Keeps the panel's drop shadow past the screen edge while it is closed.
 const DRAWER_HIDDEN_SLOP = 64;
 const IS_TEST_ENVIRONMENT = typeof process !== 'undefined' && process.env.NODE_ENV === 'test';
@@ -73,6 +77,11 @@ interface HomeSideMenuProps {
    */
   totalSalesUsdCents: number | null;
   onSignOut: () => Promise<void>;
+  /**
+   * An update in Help & Support is newer than this phone's last look at
+   * Updates: a dot on the Help & Support row. False until that is known.
+   */
+  supportUpdatesUnseen?: boolean;
 }
 
 export function HomeSideMenu({
@@ -83,6 +92,7 @@ export function HomeSideMenu({
   credits,
   totalSalesUsdCents,
   onSignOut,
+  supportUpdatesUnseen = false,
 }: HomeSideMenuProps) {
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
@@ -417,8 +427,16 @@ export function HomeSideMenu({
               <View style={{ height: 1, backgroundColor: theme.colors.borderSubtle, marginVertical: 4 }} />
               <MenuRow icon={<Settings size={21} color={theme.colors.text} />} label="Settings" chosen={handoff.chosen === '/settings'} onPress={() => openScreen('/settings')} />
               {/* Straight into the support chat (owner, 2026-11-26): its screen
-                  answers a guest with sign-in and the email beside it. */}
-              <MenuRow icon={<CircleHelp size={21} color={theme.colors.text} />} label="Help & Support" chosen={handoff.chosen === SUPPORT_CONVERSATION_PATH} onPress={() => openScreen(SUPPORT_CONVERSATION_PATH)} />
+                  answers a guest with sign-in and the email beside it. The dot
+                  says an update is waiting under Help & Support's Updates. */}
+              <MenuRow
+                icon={<CircleHelp size={21} color={theme.colors.text} />}
+                label={HELP_AND_SUPPORT_LABEL}
+                accessibilityLabel={supportUpdatesUnseen ? `${HELP_AND_SUPPORT_LABEL}, ${SUPPORT_HUB_WORDS.unreadUpdates}` : HELP_AND_SUPPORT_LABEL}
+                dot={supportUpdatesUnseen}
+                chosen={handoff.chosen === SUPPORT_CONVERSATION_PATH}
+                onPress={() => openScreen(SUPPORT_CONVERSATION_PATH)}
+              />
             </View>
 
             <View style={{ flex: 1, minHeight: 16 }} />
@@ -456,11 +474,17 @@ export function HomeSideMenu({
 function MenuRow({
   icon,
   label,
+  accessibilityLabel,
+  dot = false,
   chosen,
   onPress,
 }: {
   icon: React.ReactNode;
   label: string;
+  /** Spoken in the label's place, when the row says more than its word (an unread dot). */
+  accessibilityLabel?: string;
+  /** Something new behind the row: a dot in the badge colour before the chevron. */
+  dot?: boolean;
   /** Its screen is being built under the drawer: drawn as pressed until the drawer leaves. */
   chosen: boolean;
   onPress: () => void;
@@ -469,7 +493,7 @@ function MenuRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 52,
@@ -489,6 +513,18 @@ function MenuRow({
       <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.text, fontSize: 15, lineHeight: 20, fontWeight: '700' }}>
         {label}
       </Text>
+      {dot ? (
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={{
+            width: MENU_ROW_DOT_SIZE,
+            height: MENU_ROW_DOT_SIZE,
+            borderRadius: appTheme.radii.pill,
+            backgroundColor: theme.colors.badge,
+          }}
+        />
+      ) : null}
       <ChevronRight size={18} color={theme.colors.muted} />
     </Pressable>
   );

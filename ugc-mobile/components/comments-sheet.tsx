@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import { router } from 'expo-router';
-import { Check, Heart, MoreHorizontal, Pin, SendHorizontal, ThumbsDown, ThumbsUp } from 'lucide-react-native';
+import { Check, Heart, MessageCircleOff, MoreHorizontal, Pin, SendHorizontal, ThumbsDown, ThumbsUp } from 'lucide-react-native';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { AccessibilityInfo, type AccessibilityState, ActivityIndicator, Animated, Easing, FlatList, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent, Platform, Pressable, Text, TextInput, View, useWindowDimensions } from 'react-native';
@@ -52,10 +52,13 @@ import {
   hasUnsavedCommentEdit,
   incrementParentReplyCountInPages,
   incrementReplyCountInList,
+  isCommentThreadLocked,
+  isCommentsLockedRefusal,
   isLongComment,
   isPostCreatorComment,
   keepFirstCommentPage,
   leadCommentPagesWith,
+  lockCommentPages,
   mapCommentInList,
   mapCommentInPages,
   markCommentRemovedInList,
@@ -84,6 +87,7 @@ import { haptic } from '@/lib/haptics';
 import { verticalHitSlop } from '@/lib/hit-target';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { useMenuHandoff } from '@/lib/menu-handoff';
+import { SUPPORT_HUB_WORDS } from '@/lib/support-hub-policy/support-hub-policy';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import type { CommentReportReason } from '@/lib/api-client';
@@ -115,7 +119,8 @@ type CommentRowActions = {
   viewerUserId: string | null;
   onReact: CommentReactionHandler;
   onHeart: CommentActionHandler;
-  onReply: CommentActionHandler;
+  /** Null while the post's comments are off: a reply is a new comment, so no row offers one. */
+  onReply: CommentActionHandler | null;
 };
 type CommentMenuBuilder = (comment: PostComment) => NativeMenuModel;
 type AuthorOpenHandler = (username: string) => void;
@@ -359,6 +364,10 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   const loadError = commentsUnavailable ? getCommentsLoadErrorCopy(commentsQuery.error) : null;
   // Closed is an answer, not a failure: no retry, and no composer inviting a comment.
   const commentsClosed = loadError ? !loadError.canRetry : false;
+  // Turned off by the console (a Help & Support update's switch): the comments
+  // stay readable and nothing offers to write one or a reply. An edit of one's
+  // own comment stays, as on the web: the lock refuses only a new comment.
+  const commentsLocked = isCommentThreadLocked(commentsQuery.data?.pages);
 
   const publishCommentCount = useCallback((nextCount: number) => {
     const result = { postId, commentCount: nextCount };
@@ -756,6 +765,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       publishCommentCount(response.commentCount);
     } catch (error) {
       haptic.error();
+      // Turned off since the thread was read: the composer gives way to
+      // "Comments are off" at once, and the next read confirms it.
+      if (isCommentsLockedRefusal(error)) {
+        queryClient.setQueryData<InfiniteData<PostCommentsResponse>>(commentsQueryKey, lockCommentPages);
+        markThreadStale();
+      }
       const copy = getCommentPostErrorCopy(error, Boolean(parentId));
       if (copy.signIn) {
         void showConfirmDialog({ title: copy.title, message: copy.message, confirmLabel: 'Sign in' })
@@ -910,8 +925,8 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     viewerUserId: user?.id ?? null,
     onReact: reactToComment,
     onHeart: heartComment,
-    onReply: startReply,
-  }), [heartComment, reactToComment, resolvedPostCreatorId, startReply, user?.id]);
+    onReply: commentsLocked ? null : startReply,
+  }), [commentsLocked, heartComment, reactToComment, resolvedPostCreatorId, startReply, user?.id]);
 
   const openCommentActions = useCallback((comment: PostComment) => {
     const menu = commentMenu(comment);
@@ -956,10 +971,11 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     && !commentsUnavailable;
 
   const focusComposer = useCallback(() => {
-    if (!enabled || commentsUnavailable) return;
+    // Comments off: nothing to write, so no sign-in to ask for either.
+    if (!enabled || commentsUnavailable || commentsLocked) return;
     if (!requireSignIn(replyTo)) return;
     composerRef.current?.focus();
-  }, [commentsUnavailable, enabled, replyTo, requireSignIn]);
+  }, [commentsLocked, commentsUnavailable, enabled, replyTo, requireSignIn]);
 
   const scrollToComments = useCallback((options: { focus?: boolean } = {}) => {
     commentsListRef.current?.scrollToOffset({
@@ -1044,9 +1060,12 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
       <Text style={{ color: theme.colors.text, ...appTheme.type.body, fontWeight: '800' }}>
         No comments yet
       </Text>
-      <Text style={{ color: theme.colors.faint, ...appTheme.type.bodySm }}>
-        Be the first to share what you think about this post.
-      </Text>
+      {/* No invitation where nobody can answer it: the foot says comments are off. */}
+      {commentsLocked ? null : (
+        <Text style={{ color: theme.colors.faint, ...appTheme.type.bodySm }}>
+          Be the first to share what you think about this post.
+        </Text>
+      )}
     </View>
   );
 
@@ -1101,7 +1120,32 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
     />
   );
 
-  const composer = enabled && !commentsClosed ? (
+  // In the composer's place, a thread whose comments are off says so, except
+  // while an edit is open: that is written in the composer, and goes through.
+  const commentsOff = commentsLocked && !editing ? (
+    <View
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={SUPPORT_HUB_WORDS.commentsOff}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: appTheme.spacing.compact,
+        borderTopWidth: 1,
+        borderTopColor: theme.colors.borderStrong,
+        backgroundColor: presentation === 'inline' ? theme.colors.app : 'transparent',
+        paddingHorizontal: appTheme.spacing.panel,
+        paddingTop: appTheme.spacing.gap,
+        paddingBottom: Math.max(bottomInset, appTheme.spacing.panel),
+      }}
+    >
+      <MessageCircleOff size={appTheme.icon.sm} color={theme.colors.muted} />
+      <Text style={{ color: theme.colors.muted, ...appTheme.type.bodySm }}>{SUPPORT_HUB_WORDS.commentsOff}</Text>
+    </View>
+  ) : null;
+
+  const composer = enabled && !commentsClosed ? commentsOff ?? (
     <View
       style={{
         borderTopWidth: 1,
@@ -1612,6 +1656,7 @@ function CommentRowView({
   const disliked = comment.viewerReaction === 'dislike';
   const likeCountLabel = getCommentLikeCountLabel(comment);
   const mayHeart = canHeartComment(comment, rowActions.postCreatorId, rowActions.viewerUserId);
+  const onReply = rowActions.onReply;
   // A removed comment has no author, and the profile route needs a handle.
   const authorUsername = display.isDeleted ? null : comment.author?.username ?? null;
   // Their page is read once the finger has rested on either (`creatorProfilePress`).
@@ -1835,15 +1880,17 @@ function CommentRowView({
                 <Heart size={16} color={theme.colors.primary} fill={theme.colors.primary} />
               </View>
             ) : null}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`Reply to ${display.authorLabel}`}
-              onPress={() => rowActions.onReply(comment)}
-              hitSlop={verticalHitSlop(32)}
-              style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
-            >
-              <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
-            </Pressable>
+            {onReply ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Reply to ${display.authorLabel}`}
+                onPress={() => onReply(comment)}
+                hitSlop={verticalHitSlop(32)}
+                style={({ pressed }) => ({ minHeight: 32, paddingHorizontal: 10, justifyContent: 'center', opacity: pressed ? appTheme.opacity.pressed : 1 })}
+              >
+                <Text style={{ color: theme.colors.faint, ...appTheme.type.caption, fontWeight: '800' }}>Reply</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
       </View>

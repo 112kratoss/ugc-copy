@@ -20,15 +20,14 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from 'react';
 
 import {
   APP_NAV_ITEMS,
+  APP_SHELL_HELP_HREF,
   type AppNavClickHandler,
   CREATE_MENU_ITEMS,
   getActiveAppNavItem,
-  getAppShellHelpHref,
   getAppShellTitle,
   getCreateMenuHref,
   getReselectableTabId,
@@ -49,11 +48,9 @@ import DeferredAppShellAccount from './DeferredAppShellAccount';
 import { AppShellSearch, AppShellSearchButton } from '@/components/AppShellSearch';
 import AlertsBadge from '@/components/AlertsBadge';
 import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
-import { readAppShellAuthentication, subscribeToAppShellAuthentication } from './app-shell-auth-state';
-import { useSupabaseAuthCookieHint } from './useSupabaseAuthCookieHint';
+import { useSupportUpdatesUnread } from '@/lib/support-updates-unread';
 
-/** The server's answer for the account island's session check: not made yet. */
-const readNoAppShellAuthentication = () => null;
+import { SUPPORT_HUB_WORDS } from '../../ugc-mobile/lib/support-hub-policy/support-hub-policy';
 
 // The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
 // (its search field, the bell, the Create menu, the account menu), so the side
@@ -365,6 +362,17 @@ function Brand({
   );
 }
 
+/** Help & feedback's mark for an update not seen yet: a coral dot on the icon's corner, which moves nothing. */
+function SupportUpdatesDot() {
+  return (
+    <span
+      aria-hidden
+      data-support-updates-dot
+      className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-[var(--ui-primary)] ring-2 ring-[var(--ui-bg-app)]"
+    />
+  );
+}
+
 const AppShellFrame = memo(function AppShellFrame({
   isNotFoundRoute,
   children,
@@ -390,17 +398,10 @@ const AppShellFrame = memo(function AppShellFrame({
   }
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
-  // The server draws the contact page's address, which no cookie can be read for; the browser
-  // swaps in the chat's once hydrated when it holds a session cookie (getAppShellHelpHref). Once
-  // the account island has checked the session its answer decides instead: a cookie whose session
-  // has ended goes to the contact page, and a sign-in later in the visit to the chat.
-  const hasSessionCookie = useSupabaseAuthCookieHint();
-  const sessionChecked = useSyncExternalStore(
-    subscribeToAppShellAuthentication,
-    readAppShellAuthentication,
-    readNoAppShellAuthentication,
-  );
-  const helpHref = getAppShellHelpHref(sessionChecked ?? hasSessionCookie);
+  // Help & feedback's dot: an update in Help & Support newer than this device's last look there,
+  // read once a browser session while the browser is idle and drawn in the browser alone
+  // (src/lib/support-updates-unread.ts). Not asked where the shell draws no navigation.
+  const supportUpdatesUnread = useSupportUpdatesUnread(!isMinimalAppChromePath(pathname));
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);
@@ -560,14 +561,16 @@ const AppShellFrame = memo(function AppShellFrame({
         </nav>
 
         <Link
-          href={helpHref}
+          href={APP_SHELL_HELP_HREF}
           prefetch={false}
           className="ui-focus-ring mx-3 mb-4 flex min-h-12 items-center gap-3 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] pl-2 pr-4 py-2 text-[13px] font-bold text-[var(--ui-text-secondary)] transition hover:border-[var(--ui-border-default)] hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)]"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ui-surface-inset)] text-[var(--ui-text-secondary)]">
+          <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-[var(--ui-surface-inset)] text-[var(--ui-text-secondary)]">
             <HelpCircle className="h-4 w-4" aria-hidden />
+            {supportUpdatesUnread ? <SupportUpdatesDot /> : null}
           </span>
           <span>Help & feedback</span>
+          {supportUpdatesUnread ? <span className="sr-only">{`, ${SUPPORT_HUB_WORDS.unreadUpdates}`}</span> : null}
         </Link>
       </aside>
 
@@ -724,13 +727,17 @@ const AppShellFrame = memo(function AppShellFrame({
             </nav>
 
             <Link
-              href={helpHref}
+              href={APP_SHELL_HELP_HREF}
               prefetch={false}
               onClick={() => setMobileOpen(false)}
               className="ui-focus-ring mt-8 flex min-h-12 items-center gap-3 rounded-full border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-2)] px-3 text-sm font-bold text-[var(--ui-text-secondary)]"
             >
-              <HelpCircle className="h-[18px] w-[18px]" aria-hidden />
+              <span className="relative flex">
+                <HelpCircle className="h-[18px] w-[18px]" aria-hidden />
+                {supportUpdatesUnread ? <SupportUpdatesDot /> : null}
+              </span>
               Help & feedback
+              {supportUpdatesUnread ? <span className="sr-only">{`, ${SUPPORT_HUB_WORDS.unreadUpdates}`}</span> : null}
             </Link>
           </div>
         </div>

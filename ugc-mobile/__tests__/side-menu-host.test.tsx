@@ -35,6 +35,15 @@ vi.mock('@tanstack/react-query', () => ({
   },
 }));
 
+// Help & Support's unread dot (`lib/support-updates-seen.ts`, tested on its own): what it was asked, and its answer.
+const unseen = vi.hoisted(() => ({ asked: [] as Array<{ api: unknown; enabled: boolean }>, value: true }));
+vi.mock('@/lib/support-updates-seen', () => ({
+  useSupportUpdatesUnseen: (options: { api: unknown; enabled: boolean }) => {
+    unseen.asked.push(options);
+    return unseen.value;
+  },
+}));
+
 import { TabBarSideMenu } from '../components/workspace-side-menu';
 import {
   createSideMenuStore,
@@ -164,6 +173,21 @@ describe('the side menu drawn by the tab bar', () => {
     expect(props.credits).toBe(1200);
     expect(props.totalSalesUsdCents).toBe(1250);
     expect(props.onSignOut).toBe(signOut);
+  });
+
+  it("gives the drawer Help & Support's unread dot, asking for the newest update only while it is up", () => {
+    unseen.asked.length = 0;
+    const store = createSideMenuStore();
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(renderTabs(store, { withScreen: false }).element);
+    });
+    expect(unseen.asked.at(-1)?.enabled).toBe(false);
+
+    renderer.act(() => store.open());
+    expect(unseen.asked.at(-1)?.enabled).toBe(true);
+    expect(unseen.asked.at(-1)?.api).toEqual({ getProfile: expect.any(Function) });
+    expect(drawer(tree)[0].props.supportUpdatesUnseen).toBe(true);
   });
 
   it('draws nothing without the tabs layout, and a screen there keeps the menu itself', () => {

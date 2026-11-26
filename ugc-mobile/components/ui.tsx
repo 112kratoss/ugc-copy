@@ -634,6 +634,8 @@ const SEGMENT_TRACK_BORDER = 1;
  * height through its slop: a 48pt hit region on a 38pt capsule.
  */
 const SEGMENT_THUMB_HEIGHT = appTheme.touch.default - 2 * (SEGMENT_INSET + SEGMENT_TRACK_BORDER);
+/** A segment's unread dot (Help & Support's Updates): the badge colour, beside its label. */
+const SEGMENT_DOT_SIZE = 8;
 /**
  * A tab segment's role on a platform. iOS gives "tab" no trait, so VoiceOver read
  * one as its bare label; a button with the selected state reads "Selected, Sign
@@ -666,6 +668,13 @@ export type SegmentedControlOption<Value extends string> = {
   label: string;
   /** Spoken in the label's place when the drawn word needs its context ("Switch to sign up"). */
   accessibilityLabel?: string;
+  /**
+   * Something new behind a segment the reader is not on (Help & Support's
+   * Updates): a dot in the badge colour after its label. It is not drawn on
+   * the segment in use, and says nothing itself: the segment's
+   * `accessibilityLabel` carries the words ("Updates, New updates").
+   */
+  dot?: boolean;
 };
 
 /**
@@ -737,6 +746,11 @@ export function SegmentedControl<Value extends string>({
     >
       {options.map((option) => {
         const active = option.value === value;
+        const label = (
+          <AppText selectable={false} variant="label" color={active ? 'onPrimary' : 'muted'} numberOfLines={1} style={option.dot && !active ? { flexShrink: 1 } : undefined}>
+            {option.label}
+          </AppText>
+        );
         return (
           <Pressable
             key={option.value}
@@ -762,9 +776,21 @@ export function SegmentedControl<Value extends string>({
               paddingHorizontal: fill ? appTheme.spacing.compact : appTheme.spacing.gap,
             })}
           >
-            <AppText selectable={false} variant="label" color={active ? 'onPrimary' : 'muted'} numberOfLines={1}>
-              {option.label}
-            </AppText>
+            {option.dot && !active ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: appTheme.spacing.unit, maxWidth: '100%' }}>
+                {label}
+                <View
+                  accessibilityElementsHidden
+                  importantForAccessibility="no-hide-descendants"
+                  style={{
+                    width: SEGMENT_DOT_SIZE,
+                    height: SEGMENT_DOT_SIZE,
+                    borderRadius: appTheme.radii.pill,
+                    backgroundColor: theme.colors.badge,
+                  }}
+                />
+              </View>
+            ) : label}
           </Pressable>
         );
       })}

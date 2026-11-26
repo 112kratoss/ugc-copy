@@ -71,7 +71,7 @@ describe('app shell navigation', () => {
     expect(getAppShellTitle('/create-image')).toBe('Create');
     expect(getAppShellTitle('/create-workflow')).toBe('Workflow Canvas');
     expect(getAppShellTitle('/templates/ghost-rider')).toBe('Templates');
-    // The support page heads itself ("Message support"): the top bar names nothing over it.
+    // The support page heads itself ("Help & Support"): the top bar names nothing over it.
     expect(getAppShellTitle('/support')).toBeNull();
   });
 

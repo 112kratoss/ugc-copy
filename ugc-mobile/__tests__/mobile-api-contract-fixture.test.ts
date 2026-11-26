@@ -622,6 +622,11 @@ const extendedOperationCases: Array<{
   { key: 'editSupportMessage', call: (api) => api.editSupportMessage('message-1', 'My video failed twice.') },
   { key: 'deleteSupportMessage', call: (api) => api.deleteSupportMessage('message-1') },
   { key: 'reactToSupportMessage', call: (api) => api.reactToSupportMessage('message-1', '👍') },
+  // Help & Support's Updates and Roadmap (owner, 2026-11-26).
+  { key: 'getSupportUpdates', call: (api) => api.getSupportUpdates({ cursor: 'cursor-1', limit: 20 }) },
+  { key: 'reactToSupportUpdate', call: (api) => api.reactToSupportUpdate('post-1', '👍') },
+  { key: 'getSupportRoadmap', call: (api) => api.getSupportRoadmap() },
+  { key: 'reactToSupportRoadmapItem', call: (api) => api.reactToSupportRoadmapItem('item-1', '🙏') },
   { key: 'revealNsfwPost', call: (api) => api.revealNsfwPost('post-1') },
   { key: 'getGenerationDetails', call: (api) => api.getGenerationDetails('generation-1') },
   { key: 'deleteGeneration', call: (api) => api.deleteGeneration('generation-1') },

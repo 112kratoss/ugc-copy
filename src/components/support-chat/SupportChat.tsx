@@ -767,6 +767,7 @@ export function SupportChat({
   emptyTitle,
   emptyBody,
   closedNote = null,
+  composerRequest = null,
   className,
 }: {
   chat: SupportChatController;
@@ -782,6 +783,12 @@ export function SupportChat({
   emptyBody: string;
   /** Drawn under the thread while the conversation is resolved. */
   closedNote?: string | null;
+  /**
+   * Opens the composer to be written in while the chat stays mounted: each new
+   * `nonce` puts `text` in an empty composer (a message already started, or an
+   * edit, is kept) and the focus after it. Help & Support's "Suggest a feature".
+   */
+  composerRequest?: { text: string; nonce: number } | null;
   className?: string;
 }) {
   const { state, pending, error, unreadMark } = chat;
@@ -814,6 +821,24 @@ export function SupportChat({
   useEffect(() => () => {
     if (draftUrlRef.current) URL.revokeObjectURL(draftUrlRef.current);
   }, []);
+
+  // A request to write ("Suggest a feature"), taken as it is drawn, once per nonce: its text goes
+  // into an empty composer only (a message already started, or an edit, is kept), then the focus
+  // follows it once that text is drawn.
+  const [takenRequest, setTakenRequest] = useState<number | null>(null);
+  const [focusRequested, setFocusRequested] = useState(0);
+  if (composerRequest && composerRequest.nonce !== takenRequest) {
+    setTakenRequest(composerRequest.nonce);
+    if (!editing && !draft.trim()) setDraft(composerRequest.text);
+    setFocusRequested((count) => count + 1);
+  }
+  useEffect(() => {
+    if (focusRequested === 0) return;
+    const field = fieldRef.current;
+    if (!field) return;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [focusRequested]);
 
   const ready = state.kind === 'ready';
   const messages = useMemo(() => (state.kind === 'ready' ? state.messages : []), [state]);

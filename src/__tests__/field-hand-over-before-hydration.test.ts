@@ -31,6 +31,8 @@ const HAND_OVER = /\buse(FieldValue|Typed)BeforeHydration\(/g;
 const NO_HAND_OVER: Record<string, string> = {
   'src/app/admin/(console)/content/PostModerationControls.tsx':
     'Its reason box opens on a click of Hide, Restore or Take down.',
+  'src/app/admin/(console)/updates/AdminUpdatesConsole.tsx':
+    'Draws no field until the client’s read of /api/admin/support-hub has come back; the server draws its loading line (admin-updates-console.test.tsx holds its HTML to no field).',
   'src/app/admin/(console)/users/[userId]/GenerationModerationControls.tsx':
     'Its reason box opens on a click of Remove or Restore.',
   'src/app/auth/reset-password/page.tsx':

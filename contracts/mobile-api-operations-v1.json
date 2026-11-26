@@ -704,6 +704,26 @@
       "path": "/api/support/messages/:messageId/reaction",
       "auth": "required"
     },
+    "getSupportUpdates": {
+      "method": "GET",
+      "path": "/api/support/updates",
+      "auth": "optional"
+    },
+    "reactToSupportUpdate": {
+      "method": "POST",
+      "path": "/api/support/updates/:postId/reaction",
+      "auth": "required"
+    },
+    "getSupportRoadmap": {
+      "method": "GET",
+      "path": "/api/support/roadmap",
+      "auth": "optional"
+    },
+    "reactToSupportRoadmapItem": {
+      "method": "POST",
+      "path": "/api/support/roadmap/:itemId/reaction",
+      "auth": "required"
+    },
     "revealNsfwPost": {
       "method": "POST",
       "path": "/api/posts/:postId/reveal",

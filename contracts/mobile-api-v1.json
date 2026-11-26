@@ -3135,6 +3135,7 @@
         "postId": "post-1",
         "postCreatorId": "creator-1",
         "commentCount": 2,
+        "commentsLocked": false,
         "comments": [
           {
             "id": "comment-1",
@@ -3209,6 +3210,13 @@
           "editedAt": null,
           "hearted": false,
           "pinned": false
+        }
+      },
+      "errors": {
+        "commentsLocked": {
+          "status": 403,
+          "response": { "error": "Comments are off for this post.", "code": "COMMENTS_LOCKED" },
+          "note": "The post takes no new comment (the console's switch on a Help & Support update); its comments stay readable, and listPostComments says commentsLocked."
         }
       }
     },
@@ -6203,6 +6211,193 @@
           "response": {
             "error": "That message is no longer there.",
             "code": "MESSAGE_NOT_FOUND"
+          }
+        }
+      }
+    },
+    "getSupportUpdates": {
+      "method": "GET",
+      "path": "/api/support/updates",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "vary": "Authorization",
+      "query": {
+        "cursor": "a later page's place, the nextCursor of the page before",
+        "limit": "1 to 20, default 20; the unread dot asks for 1"
+      },
+      "publicScope": {
+        "coverage": "The web's read for a visitor with no session: the answer every visitor gets, read for no reader (myReaction null), which Vercel's CDN may keep for a minute and serve a minute stale while it refreshes. Answered so only to a request with no Authorization header and no Supabase session cookie, and only when it succeeds; any other request that asks for it gets the per-reader read under cacheControl. The app never sends scope.",
+        "query": {
+          "scope": "public"
+        },
+        "cacheControl": "public, max-age=0, s-maxage=60, stale-while-revalidate=60"
+      },
+      "response": {
+        "updates": [
+          {
+            "id": "7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a",
+            "kind": "announcement",
+            "title": "Folders are here",
+            "body": "Group your creations into folders from your profile. Tell us what you think in the comments.",
+            "createdAt": "2026-11-26T12:00:00.000Z",
+            "commentCount": 4,
+            "commentsLocked": false,
+            "reactions": {
+              "👍": 12,
+              "❤️": 3
+            },
+            "myReaction": "👍"
+          }
+        ],
+        "nextCursor": null,
+        "latestAt": "2026-11-26T12:00:00.000Z"
+      },
+      "notes": "Help & Support's Updates: posts of the official account marked as updates, newest first, while people can see them (public, not archived, not hidden by review). kind is announcement or shipped (drawn as Announcement and New). An update opens on the post page, /showcase/:id, where its comments are; commentsLocked means it takes no new comment. reactions counts people per quick reaction (👍 ❤️ 😂 😮 😢 🙏, one each); myReaction is the reader's own with a registered token, else null. latestAt (first page only, null on a later page or with no update) is when the newest was published, which the unread dot compares with the device's last look. Guests and visitors read it too (GUEST_READABLE_REGISTERED_ROUTES)."
+    },
+    "reactToSupportUpdate": {
+      "method": "POST",
+      "path": "/api/support/updates/:postId/reaction",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "emoji": "👍"
+      },
+      "requestVariants": {
+        "remove": {
+          "emoji": null
+        }
+      },
+      "response": {
+        "reactions": {
+          "👍": 13,
+          "❤️": 3
+        },
+        "myReaction": "👍"
+      },
+      "reactions": "One per account per update, from 👍 ❤️ 😂 😮 😢 🙏; another replaces it, null clears it.",
+      "errors": {
+        "unauthorized": {
+          "status": 401,
+          "response": {
+            "error": "Sign in to react.",
+            "code": "UNAUTHORIZED"
+          }
+        },
+        "registrationRequired": {
+          "status": 403,
+          "response": {
+            "error": "Create an account to react.",
+            "code": "REGISTRATION_REQUIRED"
+          }
+        },
+        "invalidReaction": {
+          "status": 400,
+          "response": {
+            "error": "Choose one of the quick reactions.",
+            "code": "INVALID_REACTION"
+          }
+        },
+        "notFound": {
+          "status": 404,
+          "response": {
+            "error": "That update is no longer available.",
+            "code": "NOT_FOUND"
+          }
+        }
+      }
+    },
+    "getSupportRoadmap": {
+      "method": "GET",
+      "path": "/api/support/roadmap",
+      "auth": "optional",
+      "cacheControl": "private, no-store",
+      "vary": "Authorization",
+      "publicScope": {
+        "coverage": "The web's read for a visitor with no session: the answer every visitor gets, read for no reader (myReaction null), which Vercel's CDN may keep for a minute and serve a minute stale while it refreshes. Answered so only to a request with no Authorization header and no Supabase session cookie, and only when it succeeds; any other request that asks for it gets the per-reader read under cacheControl. The app never sends scope.",
+        "query": {
+          "scope": "public"
+        },
+        "cacheControl": "public, max-age=0, s-maxage=60, stale-while-revalidate=60"
+      },
+      "response": {
+        "items": [
+          {
+            "id": "8e9f0a1b-2c3d-4e4f-9a5b-6c7d8e9f0a1b",
+            "title": "Folders for creations",
+            "summary": "Group what you make by project.",
+            "status": "building",
+            "shippedAt": null,
+            "shippedUpdateId": null,
+            "reactions": {
+              "🙏": 40,
+              "👍": 18
+            },
+            "myReaction": null
+          },
+          {
+            "id": "9f0a1b2c-3d4e-4f5a-8b6c-7d8e9f0a1b2c",
+            "title": "Text posts",
+            "summary": "Share a prompt or a guide without media.",
+            "status": "shipped",
+            "shippedAt": "2026-11-20T09:00:00.000Z",
+            "shippedUpdateId": "7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a",
+            "reactions": {
+              "❤️": 9
+            },
+            "myReaction": "❤️"
+          }
+        ]
+      },
+      "notes": "Help & Support's Roadmap, in the console's order: items exploring, building, or shipped within the last 30 days (archived items and older shipped ones are left out). Clients draw Building, Exploring, then Shipped recently; the number of people who reacted is the item's vote. A shipped item names the update that announced it (shippedUpdateId, opened on /showcase/:id). myReaction as for updates."
+    },
+    "reactToSupportRoadmapItem": {
+      "method": "POST",
+      "path": "/api/support/roadmap/:itemId/reaction",
+      "auth": "required",
+      "cacheControl": "private, no-store",
+      "request": {
+        "emoji": "🙏"
+      },
+      "requestVariants": {
+        "remove": {
+          "emoji": null
+        }
+      },
+      "response": {
+        "reactions": {
+          "🙏": 41,
+          "👍": 18
+        },
+        "myReaction": "🙏"
+      },
+      "reactions": "One per account per roadmap item, from 👍 ❤️ 😂 😮 😢 🙏; not on an archived item.",
+      "errors": {
+        "unauthorized": {
+          "status": 401,
+          "response": {
+            "error": "Sign in to react.",
+            "code": "UNAUTHORIZED"
+          }
+        },
+        "registrationRequired": {
+          "status": 403,
+          "response": {
+            "error": "Create an account to react.",
+            "code": "REGISTRATION_REQUIRED"
+          }
+        },
+        "invalidReaction": {
+          "status": 400,
+          "response": {
+            "error": "Choose one of the quick reactions.",
+            "code": "INVALID_REACTION"
+          }
+        },
+        "notFound": {
+          "status": 404,
+          "response": {
+            "error": "That roadmap item is no longer available.",
+            "code": "NOT_FOUND"
           }
         }
       }

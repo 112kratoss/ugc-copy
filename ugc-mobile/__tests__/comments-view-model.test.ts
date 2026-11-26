@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/lib/api-client';
 import {
   ALL_POST_COMMENT_QUERY_KEYS,
+  isCommentThreadLocked,
+  isCommentsLockedRefusal,
+  lockCommentPages,
   COMMENTS_CLOSED_TITLE,
   DEFAULT_POST_COMMENT_SORT,
   DELETED_COMMENT_LABEL,
@@ -678,5 +681,55 @@ describe('comments view model', () => {
         onDelete: noop, onRemove: noop, onReport: noop,
       }))).toEqual([['Report', true]]);
     });
+  });
+});
+
+/**
+ * A post whose comments the console turned off (a Help & Support update's
+ * switch, owner 2026-11-26): the thread's first page says so, and a comment
+ * refused because of it reads in the words both clients use.
+ */
+describe('comments turned off', () => {
+  const lockedPage = (commentsLocked?: boolean): PostCommentsResponse => ({
+    postId: 'post-1',
+    postCreatorId: 'owner-1',
+    commentCount: 1,
+    ...(commentsLocked === undefined ? {} : { commentsLocked }),
+    comments: [],
+    pageInfo: { hasMore: true, nextOffset: 20, limit: 20, offset: 0 },
+  });
+
+  it('reads the lock from the first page, and a server that does not say as comments on', () => {
+    expect(isCommentThreadLocked([lockedPage(true)])).toBe(true);
+    expect(isCommentThreadLocked([lockedPage(false)])).toBe(false);
+    expect(isCommentThreadLocked([lockedPage()])).toBe(false);
+    expect(isCommentThreadLocked(undefined)).toBe(false);
+  });
+
+  it('knows the refusal by its 403 and code, not by its words', () => {
+    expect(isCommentsLockedRefusal(new ApiError('Anything at all.', 403, undefined, undefined, 'COMMENTS_LOCKED'))).toBe(true);
+    expect(isCommentsLockedRefusal(new ApiError('Commenting is unavailable on this post.', 403))).toBe(false);
+    expect(isCommentsLockedRefusal(new ApiError('Comments are off for this post.', 404, undefined, undefined, 'COMMENTS_LOCKED'))).toBe(false);
+    expect(isCommentsLockedRefusal(new Error('COMMENTS_LOCKED'))).toBe(false);
+  });
+
+  it('says a comment refused that way in the words both clients use', () => {
+    expect(getCommentPostErrorCopy(new ApiError('x', 403, undefined, undefined, 'COMMENTS_LOCKED'), false)).toEqual({
+      title: 'Could not post comment',
+      message: 'Comments are off for this post.',
+      signIn: false,
+    });
+    expect(getCommentPostErrorCopy(new ApiError('x', 403, undefined, undefined, 'COMMENTS_LOCKED'), true).message)
+      .toBe('Comments are off for this post.');
+  });
+
+  it('marks the cached thread locked after such a refusal, and leaves one already locked alone', () => {
+    const data: InfiniteData<PostCommentsResponse> = { pages: [lockedPage(false), lockedPage(false)], pageParams: [0, 20] };
+    const locked = lockCommentPages(data);
+    expect(locked?.pages[0].commentsLocked).toBe(true);
+    expect(locked?.pages[1]).toBe(data.pages[1]);
+    expect(locked?.pageParams).toBe(data.pageParams);
+    expect(lockCommentPages(locked)).toBe(locked);
+    expect(lockCommentPages(undefined)).toBeUndefined();
   });
 });

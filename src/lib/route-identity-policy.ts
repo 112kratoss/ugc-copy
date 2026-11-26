@@ -179,6 +179,12 @@ const REGISTERED_ROUTES = [
   '/api/support/conversation/typing',
   '/api/support/messages/[messageId]',
   '/api/support/messages/[messageId]/reaction',
+  // Help & Support's Updates and Roadmap: everyone reads them (their GETs are
+  // in GUEST_READABLE_REGISTERED_ROUTES); a reaction is an account's.
+  '/api/support/updates',
+  '/api/support/updates/[postId]/reaction',
+  '/api/support/roadmap',
+  '/api/support/roadmap/[itemId]/reaction',
 
   // Notifications need somewhere durable to deliver to.
   '/api/mobile/notifications',
@@ -312,6 +318,7 @@ const SERVICE_ROUTES = [
   '/api/admin/moderation/generations',
   '/api/admin/contact',
   '/api/admin/support',
+  '/api/admin/support-hub',
   '/api/cron/account-deletion-resweeps',
   '/api/cron/backend-alert-delivery',
   '/api/cron/backend-jobs',
@@ -374,6 +381,8 @@ const SERVICE_ROUTES = [
 export const GUEST_READABLE_REGISTERED_ROUTES = [
   '/api/showcase/posts/[postId]/comments',
   '/api/posts/[postId]/resource-bundle',
+  '/api/support/updates',
+  '/api/support/roadmap',
 ] as const;
 
 /**

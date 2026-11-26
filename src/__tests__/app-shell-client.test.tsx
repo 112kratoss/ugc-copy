@@ -13,9 +13,11 @@ import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
 import { publishUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
 import { onHomeFeedRefresh } from '@/lib/home-feed-refresh';
+import { resetSupportUpdatesUnreadForTests, SUPPORT_UPDATES_LATEST_SESSION_KEY } from '@/lib/support-updates-unread';
 import { useLeaveGuard } from '@/lib/use-leave-guard';
 
 import { findHomeShellProblems } from '../../scripts/build/check-home-shell-prerender.mjs';
+import { SUPPORT_UPDATES_SEEN_STORAGE_KEY } from '../../ugc-mobile/lib/support-hub-policy/support-hub-policy';
 
 let mockedPathname = '/';
 /** The root layout's selected segment: the route's first segment. */
@@ -1239,7 +1241,7 @@ describe('AppShellClient', () => {
         ['AI agents', '/developers/mcp', null],
         ['Alerts', '/notifications', null],
         ['Profile', '/profile', null],
-        ['Help & feedback', '/contact', null],
+        ['Help & feedback', '/support', null],
       ]);
     });
 
@@ -1326,78 +1328,87 @@ describe('AppShellClient', () => {
     expect(screen.queryByRole('navigation', { name: 'Primary mobile navigation' })).not.toBeInTheDocument();
   });
 
-  // Owner, 2026-11-26: the support option opens the chat. A browser holding a session cookie (a
-  // guest's too, which the chat's page answers with sign-in and the email) gets the chat; one with
-  // none gets the contact page, since the chat's route would only send it to sign-in.
+  // Owner, 2026-11-26: Help & Support is everyone's (its Chat tab asks a visitor to sign in, its
+  // Updates and Roadmap are read by anyone), so Help & feedback opens it for every browser. Until
+  // then a browser with no session went to the contact page, which the page's footnote still links.
   describe('Help & feedback', () => {
     const COOKIE = 'sb-shellref-auth-token';
+    const shell = () => (
+      <AppShellClient>
+        <div>Creator</div>
+      </AppShellClient>
+    );
+
+    beforeEach(() => {
+      resetSupportUpdatesUnreadForTests();
+    });
 
     afterEach(() => {
       document.cookie = `${COOKIE}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+      window.localStorage.removeItem(SUPPORT_UPDATES_SEEN_STORAGE_KEY);
+      window.sessionStorage.removeItem(SUPPORT_UPDATES_LATEST_SESSION_KEY);
+      resetSupportUpdatesUnreadForTests();
       vi.unstubAllEnvs();
     });
 
-    function helpHrefs() {
+    /** The sidebar's link and, once the phone layout's menu is open, the drawer's. */
+    function helpLinks() {
       const sidebar = within(screen.getByRole('complementary', { name: 'Primary navigation' }))
-        .getByRole('link', { name: 'Help & feedback' }).getAttribute('href');
+        .getByRole('link', { name: /^Help & feedback/ });
       fireEvent.click(screen.getByRole('button', { name: /^Open navigation/ }));
       const drawer = within(screen.getByRole('dialog', { name: 'Navigation' }))
-        .getByRole('link', { name: 'Help & feedback' }).getAttribute('href');
+        .getByRole('link', { name: /^Help & feedback/ });
       return [sidebar, drawer];
     }
 
-    it('opens the support chat from the sidebar and the drawer in a browser holding a session', () => {
+    it('opens Help & Support from the sidebar and the drawer, with a session cookie or without', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      mockedPathname = '/create-video';
+      for (const withCookie of [false, true]) {
+        if (withCookie) document.cookie = `${COOKIE}=base64-session; path=/`;
+        const { unmount } = render(shell());
+        expect(helpLinks().map((link) => link.getAttribute('href')), withCookie ? 'with a cookie' : 'without').toEqual(['/support', '/support']);
+        unmount();
+      }
+    });
+
+    it('keeps Help & Support whatever the account check finds', () => {
       vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
       document.cookie = `${COOKIE}=base64-session; path=/`;
       mockedPathname = '/create-video';
-      render(
-        <AppShellClient>
-          <div>Creator</div>
-        </AppShellClient>
-      );
+      render(shell());
 
-      expect(helpHrefs()).toEqual(['/support', '/support']);
-    });
-
-    it('opens the contact page in a browser holding none', () => {
-      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
-      mockedPathname = '/create-video';
-      render(
-        <AppShellClient>
-          <div>Creator</div>
-        </AppShellClient>
-      );
-
-      expect(helpHrefs()).toEqual(['/contact', '/contact']);
-    });
-
-    // A cookie is only a hint: once the account island finds its session over, the chat's route
-    // would send the visitor to sign-in, so the contact page it is.
-    it('opens the contact page once the account check finds the cookie’s session over', () => {
-      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
-      document.cookie = `${COOKIE}=base64-session; path=/`;
-      mockedPathname = '/create-video';
-      render(
-        <AppShellClient>
-          <div>Creator</div>
-        </AppShellClient>
-      );
       act(() => publishAppShellAuthentication(false));
-
-      expect(helpHrefs()).toEqual(['/contact', '/contact']);
+      const sidebarLink = within(screen.getByRole('complementary', { name: 'Primary navigation' }))
+        .getByRole('link', { name: 'Help & feedback' });
+      expect(sidebarLink).toHaveAttribute('href', '/support');
+      act(() => publishAppShellAuthentication(true));
+      expect(sidebarLink).toHaveAttribute('href', '/support');
     });
 
-    it('opens the chat after a sign-in later in the visit, before the cookie is read again', () => {
-      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
-      mockedPathname = '/create-video';
-      render(
-        <AppShellClient>
-          <div>Creator</div>
-        </AppShellClient>
-      );
-      act(() => publishAppShellAuthentication(true));
+    // The plan's unread dot: an update newer than this device's last look at Updates.
+    it('marks both links with a dot, said to a screen reader, while an update is newer than the last look', () => {
+      window.sessionStorage.setItem(SUPPORT_UPDATES_LATEST_SESSION_KEY, JSON.stringify({ latestAt: '2026-11-26T12:00:00.000Z' }));
+      window.localStorage.setItem(SUPPORT_UPDATES_SEEN_STORAGE_KEY, '2026-11-20T09:00:00.000Z');
+      render(shell());
 
-      expect(helpHrefs()).toEqual(['/support', '/support']);
+      for (const link of helpLinks()) {
+        expect(link.querySelector('[data-support-updates-dot]')).not.toBeNull();
+        expect(link).toHaveAccessibleName(/^Help & feedback, ?New updates$/);
+        expect(link).toHaveAttribute('href', '/support');
+      }
+    });
+
+    it('draws no dot once the newest update is seen, nor in the server\'s HTML', () => {
+      window.sessionStorage.setItem(SUPPORT_UPDATES_LATEST_SESSION_KEY, JSON.stringify({ latestAt: '2026-11-26T12:00:00.000Z' }));
+      expect(renderToString(shell())).not.toContain('data-support-updates-dot');
+
+      window.localStorage.setItem(SUPPORT_UPDATES_SEEN_STORAGE_KEY, '2026-11-26T12:00:00.000Z');
+      render(shell());
+      for (const link of helpLinks()) {
+        expect(link.querySelector('[data-support-updates-dot]')).toBeNull();
+        expect(link).toHaveAccessibleName('Help & feedback');
+      }
     });
   });
 

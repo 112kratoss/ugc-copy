@@ -1795,3 +1795,76 @@ describe('PostComments', () => {
         expect(screen.getByRole('alert')).not.toHaveTextContent(/JSON|Unexpected token/);
     });
 });
+
+// A Help & Support update whose comments the console turned off (plan:
+// docs/plans/help-support-updates-roadmap-plan-2026-11-26.md): the thread's read says
+// `commentsLocked`, its comments stay readable, and a comment sent anyway is refused 403
+// COMMENTS_LOCKED.
+describe('PostComments on a post that takes no new comment', () => {
+    beforeEach(() => {
+        authState.session = null;
+        authState.user = null;
+        authState.isLoading = false;
+        authState.sessionCheckStartedAt = null;
+        window.sessionStorage.clear();
+        forgetPostCommentSortsForTests();
+        forgetAccountProfilesForTests();
+        profileRead.mockReset();
+        profileRead.mockResolvedValue({ data: null, error: null });
+        window.history.replaceState(null, '', '/showcase/post-1');
+        vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+            callback(0);
+            return 1;
+        });
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it('says comments are off where the composer goes, without Reply, and keeps the comments readable', async () => {
+        signIn();
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...page([comment()]), commentsLocked: true })));
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+        expect(await screen.findByText('A thoughtful comment')).toBeInTheDocument();
+        expect(screen.getByText('Comments are off')).toBeInTheDocument();
+        expect(screen.queryByRole('textbox', { name: 'Write a comment' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /^Reply to / })).not.toBeInTheDocument();
+        // Likes are not comments: they stay.
+        expect(screen.getByRole('button', { name: "Like @creator's comment" })).toBeInTheDocument();
+    });
+
+    it('asks no visitor to sign in to comment, and no one for a first comment', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...page([]), commentsLocked: true })));
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={0} />);
+
+        expect(await screen.findByText('Comments are off')).toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: /Sign in to join/i })).not.toBeInTheDocument();
+        expect(screen.queryByText(/No comments yet/i)).not.toBeInTheDocument();
+    });
+
+    it('turns the thread off, in place of an error, when a comment is refused as locked', async () => {
+        signIn();
+        const posts: unknown[] = [];
+        vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+            if (init?.method === 'POST') {
+                posts.push(JSON.parse(String(init.body)));
+                return jsonResponse({ error: 'Comments are off for this post.', code: 'COMMENTS_LOCKED' }, 403);
+            }
+            return jsonResponse({ ...page([comment()]), commentsLocked: false });
+        }));
+        render(<PostComments postId="post-1" postCreatorId="post-owner" commentCount={1} />);
+
+        fireEvent.change(await screen.findByRole('textbox', { name: 'Write a comment' }), { target: { value: 'Late to this' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+
+        expect(await screen.findByText('Comments are off')).toBeInTheDocument();
+        expect(posts).toEqual([{ body: 'Late to this', parentId: null }]);
+        expect(screen.queryByRole('textbox', { name: 'Write a comment' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(screen.getByRole('status')).toHaveTextContent('Comments are off for this post.');
+        expect(screen.queryByRole('button', { name: /^Reply to / })).not.toBeInTheDocument();
+    });
+});

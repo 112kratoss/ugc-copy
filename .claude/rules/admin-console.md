@@ -12,7 +12,7 @@ Moved unchanged from `AGENTS.md` on 2026-10-18 so it loads only where it applies
 A browser-only operator console living in the same Next.js app under the
 `src/app/admin/(console)/` route group; `/admin/login` sits outside the group so
 it renders without the console chrome. Areas: overview (reuses the
-`/api/ops/*` collectors), moderation queue, support, users & credits, revenue,
+`/api/ops/*` collectors), moderation queue, support, updates and the roadmap, users & credits, revenue,
 payouts, referrals, content, operator activity, system.
 
 - **Support** (`/admin/support`, owner 2026-11-21: "first do a simple version";
@@ -44,6 +44,36 @@ payouts, referrals, content, operator activity, system.
   that could not be read says so above the chat, and support deleting or
   editing a reply takes away or rewords the account's alert about it. The web's
   `/contact` form stays for visitors without an account.
+
+- **Updates** (`/admin/updates`, owner 2026-11-26: Help & Support's three tabs,
+  Chat · Updates · Roadmap; plan `docs/plans/help-support-updates-roadmap-plan-2026-11-26.md`):
+  `GET`/`POST /api/admin/support-hub` (`admin-support-hub-route-adapter-service.ts`,
+  `admin-support-hub-service.ts`). Publishing an update makes a public text post of
+  the official account (the profile holding the reserved handle `magicbooklet`;
+  none, and publishing refuses) through the composer's own create
+  (`createOwnerPostForRoute`, the path an agent's text post takes), then marks it
+  with `set_support_update` (`posts.support_update_kind`, announcement or shipped;
+  a post that cannot be marked is archived again). The console names the post's
+  id for the update being written, the same on every try, so a retry (a lost
+  answer, a draft the composer could not make public) never posts it twice; a
+  try that was taken down answers `DRAFT_TAKEN_DOWN` and the console starts a
+  new post. The operator chooses who hears: Quiet (the dot only) or Alert (an
+  in-app alert to every registered, active account). There is no push (#939's
+  review, 2026-11-27): a push of news needs an opt-in of its own under App Store
+  guideline 4.5.4, which the app does not ask for. An announced update's alerts
+  go out behind the response, `support_update_alert_batch` a batch at a time,
+  each account once by the alert's dedupe key; the run stops at 40 s, pauses
+  while the update is down, and "Continue sending" resumes it. An update's
+  comments can be turned off (`posts.comments_locked`; the trigger on
+  `post_comments` and the comment service refuse a new one, 403
+  `COMMENTS_LOCKED`; edits stay). Take down, Put back up and Edit go through the
+  owner's own post services (`archiveOwnerPostForRoute`,
+  `restoreOwnerPostForRoute`, `updateOwnerPostForRoute`), so the cached feeds
+  and the post page every alert opens follow at once, and an update keeps a
+  post's limits (100-character title, 2,000-character text). The roadmap's
+  items are kept here (Exploring, Building; ordered by hand; archived to leave
+  it); "Mark shipped" names the published update that announced the item, and
+  `ship_support_roadmap_item` alerts everyone who reacted, in the app, once.
 
 - **Auth is a single master operator**, not per-person accounts: `ADMIN_USERNAME`
   plus a scrypt `ADMIN_PASSWORD_HASH`, an HMAC session cookie signed with

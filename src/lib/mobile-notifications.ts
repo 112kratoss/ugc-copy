@@ -38,7 +38,9 @@ export type MobileNotificationType =
   | 'post_saved'
   | 'post_remixed'
   | 'post_shared'
-  | 'support_reply';
+  | 'support_reply'
+  | 'support_update'
+  | 'support_roadmap_shipped';
 
 export interface NormalizedMobilePushTokenPayload {
   expoPushToken: string;
@@ -220,7 +222,9 @@ function asNotificationType(value: unknown): MobileNotificationType {
     type === 'post_saved' ||
     type === 'post_remixed' ||
     type === 'post_shared' ||
-    type === 'support_reply'
+    type === 'support_reply' ||
+    type === 'support_update' ||
+    type === 'support_roadmap_shipped'
   ) {
     return type;
   }
