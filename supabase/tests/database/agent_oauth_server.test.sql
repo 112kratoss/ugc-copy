@@ -65,15 +65,17 @@ select is(
   (select count(*)::int from pg_proc as fn
     where fn.pronamespace = 'public'::regnamespace and fn.proname like 'agent_oauth_%'
       and has_function_privilege('service_role', fn.oid, 'EXECUTE')),
-  9,
-  'the service role can execute all nine'
+  12,
+  'the service role can execute all twelve: the nine that change state and the three pure checks of 20261126151150'
 );
 select is(
   (select count(*)::int from pg_proc as fn
     where fn.pronamespace = 'public'::regnamespace and fn.proname like 'agent_oauth_%'
-      and (not fn.prosecdef or fn.proconfig is null or not ('search_path=""' = any (fn.proconfig)))),
+      and (fn.proconfig is null or not ('search_path=""' = any (fn.proconfig))
+           or (not fn.prosecdef and fn.proname not in (
+             'agent_oauth_redirect_uri_ok', 'agent_oauth_redirect_uris_ok', 'agent_oauth_credential_fingerprint')))),
   0,
-  'every one is a definer with an empty search_path'
+  'every one has an empty search_path, and all but the three pure checks are definers'
 );
 
 set local role authenticated;
@@ -324,10 +326,11 @@ select throws_ok(
 );
 
 -- With no client named: every live grant of the account, and nobody else's.
-insert into public.agent_oauth_grants (id, user_id, client_id, surface) values
-  ('ae100000-0000-4000-8000-000000000001', 'ad300000-0000-4000-8000-000000000003', 'client-full', 'full'),
-  ('ae200000-0000-4000-8000-000000000002', 'ad300000-0000-4000-8000-000000000003', 'client-posts', 'posts'),
-  ('ae300000-0000-4000-8000-000000000003', 'ad200000-0000-4000-8000-000000000002', 'client-full', 'full');
+-- The fixture accounts have no password, so each grant carries the fingerprint of none (20261126151150).
+insert into public.agent_oauth_grants (id, user_id, client_id, surface, credential_fingerprint) values
+  ('ae100000-0000-4000-8000-000000000001', 'ad300000-0000-4000-8000-000000000003', 'client-full', 'full', public.agent_oauth_credential_fingerprint(null)),
+  ('ae200000-0000-4000-8000-000000000002', 'ad300000-0000-4000-8000-000000000003', 'client-posts', 'posts', public.agent_oauth_credential_fingerprint(null)),
+  ('ae300000-0000-4000-8000-000000000003', 'ad200000-0000-4000-8000-000000000002', 'client-full', 'full', public.agent_oauth_credential_fingerprint(null));
 insert into public.agent_oauth_tokens (token_hash, kind, grant_id, expires_at) values
   (repeat('L', 43), 'access', 'ae100000-0000-4000-8000-000000000001', now() + interval '1 hour'),
   (repeat('M', 43), 'refresh', 'ae200000-0000-4000-8000-000000000002', now() + interval '90 days'),

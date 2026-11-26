@@ -19,7 +19,7 @@ const store = vi.hoisted(() => {
     grantId: string | null; expiresAt: string;
   };
   type Grant = { id: string; userId: string; clientId: string; surface: 'full' | 'posts'; createdAt: string; revokedAt: string | null; reason: string | null };
-  type Token = { hash: string; kind: 'access' | 'refresh'; grantId: string; expiresAt: number; usedAt: number | null };
+  type Token = { hash: string; kind: 'access' | 'refresh'; grantId: string; expiresAt: number; usedAt: number | null; createdAt: number };
   const state = {
     now: Date.parse('2026-11-26T12:00:00.000Z'),
     clients: new Map<string, AgentOAuthClient>(),
@@ -43,8 +43,8 @@ const store = vi.hoisted(() => {
 vi.mock('@/lib/agent-oauth-store', () => {
   const { state, revokeGrant } = store;
   const issue = (grantId: string, accessHash: string, refreshHash: string, accessTtl: number, refreshTtl: number) => {
-    state.tokens.set(accessHash, { hash: accessHash, kind: 'access', grantId, expiresAt: state.now + accessTtl * 1000, usedAt: null });
-    state.tokens.set(refreshHash, { hash: refreshHash, kind: 'refresh', grantId, expiresAt: state.now + refreshTtl * 1000, usedAt: null });
+    state.tokens.set(accessHash, { hash: accessHash, kind: 'access', grantId, expiresAt: state.now + accessTtl * 1000, usedAt: null, createdAt: state.now });
+    state.tokens.set(refreshHash, { hash: refreshHash, kind: 'refresh', grantId, expiresAt: state.now + refreshTtl * 1000, usedAt: null, createdAt: state.now });
   };
   return {
     findAgentOAuthClient: vi.fn(async (_admin: unknown, clientId: string) => state.clients.get(clientId) ?? null),
@@ -105,6 +105,9 @@ vi.mock('@/lib/agent-oauth-store', () => {
         revokeGrant(grant.id, 'reuse');
         return { outcome: 'reuse_detected', grantId: grant.id, userId: grant.userId };
       }
+      // Twelve refresh tokens of one grant an hour (20261126151150): the next is told to wait.
+      const thisHour = [...state.tokens.values()].filter((row) => row.grantId === grant.id && row.kind === 'refresh' && row.createdAt > state.now - 3_600_000);
+      if (thisHour.length >= 12) return { outcome: 'rate_limited', grantId: grant.id, userId: grant.userId };
       token.usedAt ??= state.now;
       issue(grant.id, input.accessHash, input.newRefreshHash, input.accessTtlSeconds, input.refreshTtlSeconds);
       return { outcome: 'rotated', grantId: grant.id, userId: grant.userId, clientId: grant.clientId, surface: grant.surface };
@@ -505,6 +508,21 @@ describe('the token endpoint: refresh', () => {
     expect(store.state.tokens.size).toBe(0);
     // The newest pair died with the grant: whoever held it must connect again.
     expect((await refusal(exchangeAgentToken(refreshForm(second.refresh_token), options))).error).toBe('invalid_grant');
+  });
+
+  it('tells a grant refreshed twelve times in the hour to wait, and leaves its token good', async () => {
+    let tokens = await connect();
+    for (let refresh = 1; refresh <= 11; refresh += 1) {
+      advance(60);
+      tokens = await exchangeAgentToken(refreshForm(tokens.refresh_token), options);
+    }
+    const refused = await refusal(exchangeAgentToken(refreshForm(tokens.refresh_token), options));
+    expect(refused).toMatchObject({ error: 'temporarily_unavailable', status: 429 });
+    // Not a refusal of the token: it is unused, the grant stands, and it works once the hour moves on.
+    expect(store.state.tokens.get(hashAgentSecret(tokens.refresh_token))!.usedAt).toBeNull();
+    expect(store.state.grants.get('grant-1')!.revokedAt).toBeNull();
+    advance(3600);
+    await expect(exchangeAgentToken(refreshForm(tokens.refresh_token), options)).resolves.toMatchObject({ token_type: 'Bearer' });
   });
 
   it('leaves a grant untouched when another client presents its refresh token', async () => {

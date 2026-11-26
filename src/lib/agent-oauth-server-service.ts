@@ -331,6 +331,16 @@ export async function exchangeAgentToken(
       });
       throw INVALID_GRANT('The refresh token is not valid. Connect again.');
     }
+    if (rotated.outcome === 'rate_limited') {
+      // Twelve refreshes of one grant an hour (the migration says why). The token is untouched:
+      // the client waits and uses it again.
+      logBackendWarning('agent_oauth_refresh_rate_limited', {
+        clientId: client.clientId,
+        userId: rotated.userId,
+        grantId: rotated.grantId,
+      });
+      throw new AgentOAuthError('temporarily_unavailable', 'This connection is refreshing too often. Wait before trying again.', 429);
+    }
     if (rotated.outcome !== 'rotated') throw INVALID_GRANT('The refresh token is not valid.');
     logBackendInfo('agent_oauth_token_issued', {
       grant: 'refresh_token',

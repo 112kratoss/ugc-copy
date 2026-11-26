@@ -1,14 +1,15 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellAccount from '@/components/AppShellAccount';
 import AppShellAccountFallback from '@/components/AppShellAccountFallback';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
-import { resetFeedbackState } from '@/components/feedback-state';
+import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
 import { APP_SHELL_CREDITS_DIGITS_STORAGE_KEY } from '@/lib/app-shell-account-restore';
 import { OWN_PROFILE_COLUMNS } from '@/lib/browser-account-reads';
 import { wasSignedOutInBrowser } from '@/lib/browser-sign-out';
+import { AGENT_ACCESS_NOT_ENDED_CODE } from '@/lib/mobile-push-unregister-service';
 import { resetShowcaseFeedEventQueueForTests, sendShowcaseFeedEvent } from '@/app/showcase/ShowcaseFeedInteraction';
 import { FEED_EVENT_OUTBOX_STORAGE_KEY } from '@/app/showcase/feed-event-outbox';
 import type { ShowcaseFeedItem } from '@/lib/showcase';
@@ -924,6 +925,51 @@ describe('AppShellAccount', () => {
         expect(order.indexOf('retire')).toBeLessThan(order.indexOf('signOut'));
       } finally {
         vi.unstubAllGlobals();
+      }
+    });
+
+    // The same request ends the apps connected through the app's own authorization server, which
+    // are not sessions (mobile-push-unregister-service.ts). When the server says it could not end
+    // them, the shell asks once more, signs out all the same, and says what is left.
+    const AGENTS_LEFT = 'You’re signed out everywhere, but your connected apps could not be disconnected. Sign in and disconnect them under Connected apps in your profile settings.';
+    const notEnded = () => new Response(JSON.stringify({ error: 'Failed to disconnect the account\'s connected apps.', code: AGENT_ACCESS_NOT_ENDED_CODE }), { status: 500 });
+
+    it('says so after the sign-out when the account\'s connected apps could not be disconnected', async () => {
+      const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => notEnded());
+      vi.stubGlobal('fetch', fetchMock);
+      try {
+        const dialog = await chooseSignOutEverywhere();
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+
+        await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+        // Asked twice, then the sign-out ran: every device is out, and the person knows what is not.
+        expect(fetchMock.mock.calls.filter(([url]) => url === '/api/mobile/notifications/unregister')).toHaveLength(2);
+        expect(mocks.signOut).toHaveBeenCalledWith({ scope: 'global' });
+        expect(readFeedbackSnapshot().toasts.map(({ tone, message }) => ({ tone, message }))).toContainEqual({ tone: 'error', message: AGENTS_LEFT });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('says nothing of connected apps when the second ask ends them, or when the request failed for another reason', async () => {
+      for (const answers of [
+        [notEnded(), new Response(JSON.stringify({ success: true }), { status: 200 })],
+        [new Response(JSON.stringify({ error: 'Failed to unregister mobile push token.' }), { status: 500 })],
+        [new Response(JSON.stringify({ success: true }), { status: 200 })],
+      ]) {
+        resetFeedbackState();
+        mocks.router.push.mockReset();
+        const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(async () => answers.shift() ?? new Response('{}', { status: 200 }));
+        vi.stubGlobal('fetch', fetchMock);
+        try {
+          const dialog = await chooseSignOutEverywhere();
+          fireEvent.click(within(dialog).getByRole('button', { name: 'Sign out everywhere' }));
+          await waitFor(() => expect(mocks.router.push).toHaveBeenCalledWith('/login'));
+          expect(readFeedbackSnapshot().toasts.map(({ message }) => message)).not.toContain(AGENTS_LEFT);
+        } finally {
+          vi.unstubAllGlobals();
+          cleanup();
+        }
       }
     });
 

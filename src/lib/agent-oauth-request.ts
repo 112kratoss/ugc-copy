@@ -205,6 +205,11 @@ export function buildAuthorizationResponseUrl(
   state: string | null,
 ): string {
   const url = new URL(redirectUri);
+  // A registered redirect URI is https, or http on a loopback host (the table holds that). The
+  // answer is never built for anything else, whatever a row came to hold.
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error('The redirect URI is not an http(s) address.');
+  }
   if ('code' in answer) {
     url.searchParams.set('code', answer.code);
   } else {

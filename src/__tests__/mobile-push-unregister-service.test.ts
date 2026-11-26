@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { unregisterMobilePushTokenForRoute } from '@/lib/mobile-push-unregister-service';
+import { AGENT_ACCESS_NOT_ENDED_CODE, unregisterMobilePushTokenForRoute } from '@/lib/mobile-push-unregister-service';
 
 function createRateLimitClient(allowed = true) {
   return {
@@ -272,9 +272,10 @@ describe('mobile push token unregister service', () => {
       userSupabase: user.client,
     })).resolves.toEqual({
       ok: false,
-      body: { error: 'Failed to disconnect the account\'s connected apps.' },
+      body: { error: 'Failed to disconnect the account\'s connected apps.', code: 'AGENT_ACCESS_NOT_ENDED' },
       status: 500,
     });
+    expect(AGENT_ACCESS_NOT_ENDED_CODE).toBe('AGENT_ACCESS_NOT_ENDED');
     expect(user.updateCalls).toHaveLength(1);
   });
 

@@ -10,6 +10,9 @@ import {
 
 type RouteBody = Record<string, unknown>;
 
+/** The account-wide request retired the push tokens but could not end the account's connected apps. */
+export const AGENT_ACCESS_NOT_ENDED_CODE = 'AGENT_ACCESS_NOT_ENDED';
+
 export type MobilePushUnregisterRouteResult =
   | { ok: true; body: { success: true } }
   | {
@@ -156,7 +159,9 @@ export async function unregisterMobilePushTokenForRoute(
     if (!agentAccessEnded) {
       return {
         ok: false,
-        body: { error: 'Failed to disconnect the account\'s connected apps.' },
+        // The code is what the web reads to tell the person, after the sign-out, that their
+        // connected apps are still connected (`AppShellAccount.tsx`).
+        body: { error: 'Failed to disconnect the account\'s connected apps.', code: AGENT_ACCESS_NOT_ENDED_CODE },
         status: 500,
       };
     }

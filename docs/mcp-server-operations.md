@@ -130,10 +130,18 @@ holds it. A new redirect URI for an existing client (ChatGPT's per-account callb
 - One client for everyone: `disable --client-id <id> --apply`.
 - One creator, every app: "Sign out everywhere", on the web or in the app. Both send the
   account-wide `POST /api/mobile/notifications/unregister` (`scope: 'account'`) first, and the
-  server ends the account's grants there. Best effort, like the push tokens it retires: a failure
-  logs `agent_access_sign_out_everywhere_failed` and the sign-out goes on.
+  server ends the account's grants there, whatever the flag says. A failure logs
+  `agent_access_sign_out_everywhere_failed` and answers 500 with `code: AGENT_ACCESS_NOT_ENDED`;
+  the web asks once more, signs out all the same, and tells the person their connected apps are
+  still connected. An installed phone app logs it and goes on.
 - A Disconnect or a sign-out everywhere also closes any request of that account not yet
   exchanged for a grant, so an Allow pressed a moment earlier produces nothing.
+- A password change or reset ends every app connected under the old password, at the app's next
+  call or refresh (`revoked_reason = 'credentials_changed'`): the account-recovery answer, and it
+  needs nothing from any client. Accounts with no password (Google, Apple) are unaffected.
+- Limits a client can meet: a grant is refreshed twelve times an hour (the next is 429 with
+  `Retry-After: 300`, logged as `agent_oauth_refresh_rate_limited`, and changes nothing), and an
+  account holds twenty live grants per client (one more ends the oldest, `superseded`).
 - Everyone: the kill switch. To end every grant without switching the server off:
   `select public.agent_oauth_revoke_grant(id, 'operator') from public.agent_oauth_grants where revoked_at is null;`
 

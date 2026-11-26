@@ -206,6 +206,13 @@ describe('/oauth/authorize', () => {
     expect(denied.searchParams.get('state')).toBe('a b&c');
     expect(denied.hash).toBe('');
   });
+
+  it('builds no answer for an address that is not http(s), whatever a row came to hold', () => {
+    for (const redirectUri of ['javascript:alert(1)', 'data:text/html,x', 'myapp://callback', 'file:///etc/hosts']) {
+      expect(() => buildAuthorizationResponseUrl(redirectUri, { code: 'c' }, null), redirectUri).toThrow(/not an http\(s\) address/);
+      expect(() => buildAuthorizationResponseUrl(redirectUri, { error: 'access_denied' }, 's'), redirectUri).toThrow();
+    }
+  });
 });
 
 describe('/oauth/token request', () => {
