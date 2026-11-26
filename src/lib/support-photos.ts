@@ -3,7 +3,7 @@ import 'server-only';
 import { randomUUID } from 'node:crypto';
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import sharp from 'sharp';
+import sharp from '@/lib/image-decoder';
 
 import { logBackendWarning } from '@/lib/backend-logger';
 import { getPreviewThumbhash } from '@/lib/media-preview-metadata';

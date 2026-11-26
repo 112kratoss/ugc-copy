@@ -2,7 +2,7 @@ import 'server-only';
 
 import path from 'node:path';
 
-import sharp from 'sharp';
+import sharp from '@/lib/image-decoder';
 
 import {
   MediaTemplateError,

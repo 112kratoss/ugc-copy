@@ -9,7 +9,7 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 
 import ffmpegStaticPath from 'ffmpeg-static';
-import sharp from 'sharp';
+import sharp from '@/lib/image-decoder';
 
 // Bound the intermediate full-resolution JPEG before sharp produces the preview.
 export const VIDEO_POSTER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
