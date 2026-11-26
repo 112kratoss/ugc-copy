@@ -448,6 +448,10 @@ describe('route identity policy', () => {
     expect([...GUEST_READABLE_REGISTERED_ROUTES]).toEqual([
       '/api/showcase/posts/[postId]/comments',
       '/api/posts/[postId]/resource-bundle',
+      // Help & Support's Updates and Roadmap: everyone reads them; a reaction
+      // has a path of its own, registered.
+      '/api/support/updates',
+      '/api/support/roadmap',
     ]);
 
     for (const route of GUEST_READABLE_REGISTERED_ROUTES) {

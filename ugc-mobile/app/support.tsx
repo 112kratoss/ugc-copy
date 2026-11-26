@@ -2,7 +2,7 @@ import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { router, Stack } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import {
   AlertCircle,
   ArrowDown,
@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   Animated,
   FlatList,
+  Keyboard,
   Linking,
   PanResponder,
   Pressable,
@@ -37,7 +38,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { MediaLightbox, type LightboxMediaItem } from '@/components/media-lightbox';
-import { AppText, IconButton, PrimaryButton, Screen, SecondaryButton, SectionTitle, StatusBlock } from '@/components/ui';
+import { SupportRoadmapTab } from '@/components/support-hub-roadmap';
+import { SupportUpdatesTab } from '@/components/support-hub-updates';
+import {
+  AppText,
+  IconButton,
+  PrimaryButton,
+  Screen,
+  SecondaryButton,
+  SectionTitle,
+  SegmentedControl,
+  StatusBlock,
+} from '@/components/ui';
 import { showActionSheet, type ActionSheetAction } from '@/lib/action-sheet';
 import { ApiError } from '@/lib/api-client';
 import { useAppForeground } from '@/lib/app-foreground';
@@ -101,7 +113,14 @@ import {
   supportMessageSheetTitle,
   supportSendFailureWords,
 } from '@/lib/support-conversation-view-model';
+import {
+  SUPPORT_HUB_WORDS,
+  readSupportHubTab,
+  type SupportHubTab,
+} from '@/lib/support-hub-policy/support-hub-policy';
+import { supportFeatureIdeaDraft, supportHubMountedTabs, supportHubTabOptions } from '@/lib/support-hub-view-model';
 import { supportMailUrl } from '@/lib/support-mail';
+import { useSupportUpdatesUnseen } from '@/lib/support-updates-seen';
 import {
   keepSupportPhoto,
   letGoSupportPhoto,
@@ -181,6 +200,97 @@ function pendingPhotoOf(photo: PickedSupportPhoto): SupportPendingPhoto {
   return { localUri: photo.uri, width: photo.width, height: photo.height };
 }
 
+/** "Suggest a feature" asked the chat to start its composer: a new key for each press. */
+type SupportChatPrefill = { key: number };
+
+/** The header of the hub's own tabs; the chat draws its own while it is in front for an account. */
+const HUB_HEADER_OPTIONS = { headerTitle: SUPPORT_HUB_WORDS.title };
+
+/**
+ * Help & Support: Chat, Updates and Roadmap (owner, 2026-11-26; plan:
+ * docs/plans/help-support-updates-roadmap-plan-2026-11-26.md), a segmented
+ * control under the header. It opens on the chat, as the side menu's Help &
+ * Support and Settings' Help & support open it, or on the tab a link names
+ * (`/support?tab=updates`). Each tab is built the first time it is opened and
+ * kept, hidden, while another is in front: the chat keeps its draft, its photo
+ * and its place in the thread, and reads and marks its messages only while it
+ * is the one shown. The composer is the chat's, so it shows on Chat only.
+ */
+export default function SupportScreen() {
+  const { api, user } = useAuth();
+  const theme = useAppTheme();
+  const params = useLocalSearchParams<{ tab?: string | string[] }>();
+  const linkedTab = readSupportHubTab(params.tab);
+  const [tab, setTab] = useState<SupportHubTab>(linkedTab);
+  const [mounted, setMounted] = useState<readonly SupportHubTab[]>(() => [linkedTab]);
+  const [prefill, setPrefill] = useState<SupportChatPrefill | null>(null);
+  // The dot on Updates: asked while another tab is in front (Updates itself marks them seen).
+  const unseenUpdates = useSupportUpdatesUnseen({ api, enabled: tab !== 'updates' });
+
+  // A link that names another tab while the screen is up moves to it.
+  const [followedTab, setFollowedTab] = useState(linkedTab);
+  if (followedTab !== linkedTab) {
+    setFollowedTab(linkedTab);
+    setTab(linkedTab);
+    setMounted((current) => supportHubMountedTabs(current, linkedTab));
+  }
+
+  const selectTab = (next: SupportHubTab) => {
+    // The chat's keyboard does not stay up over a tab with no field.
+    Keyboard.dismiss();
+    setTab(next);
+    setMounted((current) => supportHubMountedTabs(current, next));
+  };
+
+  const suggestFeature = () => {
+    setPrefill((current) => ({ key: (current?.key ?? 0) + 1 }));
+    selectTab('chat');
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+      {tab === 'chat' && user ? null : <Stack.Screen options={HUB_HEADER_OPTIONS} />}
+      <View
+        style={{
+          paddingHorizontal: appTheme.spacing.screen,
+          paddingTop: appTheme.spacing.compact,
+          paddingBottom: appTheme.spacing.compact,
+        }}
+      >
+        <SegmentedControl
+          role="tab"
+          accessibilityLabel={SUPPORT_HUB_WORDS.tabsLabel}
+          options={supportHubTabOptions({ unseenUpdates })}
+          value={tab}
+          onChange={selectTab}
+        />
+      </View>
+      <View style={{ flex: 1 }}>
+        {mounted.includes('chat') ? (
+          <SupportTabPane shown={tab === 'chat'}>
+            <SupportChat active={tab === 'chat'} prefill={prefill} />
+          </SupportTabPane>
+        ) : null}
+        {mounted.includes('updates') ? (
+          <SupportTabPane shown={tab === 'updates'}>
+            <SupportUpdatesTab active={tab === 'updates'} />
+          </SupportTabPane>
+        ) : null}
+        {mounted.includes('roadmap') ? (
+          <SupportTabPane shown={tab === 'roadmap'}>
+            <SupportRoadmapTab onSuggestFeature={suggestFeature} />
+          </SupportTabPane>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+/** A tab's page: laid out and heard only while it is the one in front. */
+function SupportTabPane({ shown, children }: { shown: boolean; children: ReactNode }) {
+  return <View style={{ flex: 1, display: shown ? 'flex' : 'none' }}>{children}</View>;
+}
+
 /**
  * Message support: the account's one conversation with support, which the
  * operator answers from the web console, worked as a chat app (owner,
@@ -194,15 +304,18 @@ function pendingPhotoOf(photo: PickedSupportPhoto): SupportPendingPhoto {
  * photo in the thread opens full screen in the app's media lightbox, with the
  * thread's other photos a swipe away. A pushed screen with its own composer
  * rather than a sheet: a field may not sit in an RN Modal (`hig-modality.test.ts`).
+ *
+ * Help & Support's Chat tab: `active` while it is the tab in front. Hidden, it
+ * neither reads the thread again nor marks it read, and draws no header.
  */
-export default function SupportScreen() {
+function SupportChat({ active, prefill }: { active: boolean; prefill: SupportChatPrefill | null }) {
   const { api, user } = useAuth();
   const theme = useAppTheme();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const isFocused = useIsFocused();
   const foreground = useAppForeground();
-  const visible = isFocused && foreground;
+  const visible = isFocused && foreground && active;
   const userId = user?.id ?? null;
   const queryKey = supportConversationQueryKey(userId);
   const [tracker] = useState(() => createSupportPollTracker());
@@ -284,13 +397,24 @@ export default function SupportScreen() {
   }, []);
 
   // A reply may have come while the screen was away: read again on each
-  // arrival, past the first, whose read is the query's own.
+  // arrival, past the first, whose read is the query's own. Coming back to
+  // the Chat tab from another counts as an arrival too.
   useFocusEffect(useCallback(() => {
-    if (!userId) return;
+    if (!userId || !active) return;
     const state = queryClient.getQueryState(supportConversationQueryKey(userId));
     if (!state || state.data === undefined || state.fetchStatus !== 'idle') return;
     void queryClient.invalidateQueries({ queryKey: supportConversationQueryKey(userId) });
-  }, [queryClient, userId]));
+  }, [active, queryClient, userId]));
+
+  // "Suggest a feature" on the Roadmap tab: the composer starts with the
+  // idea's words, once per press, never over words being written or an edit.
+  const appliedPrefillRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!prefill || !active || appliedPrefillRef.current === prefill.key) return;
+    appliedPrefillRef.current = prefill.key;
+    setDraft((current) => supportFeatureIdeaDraft({ draft: current, editing: Boolean(editing) }) ?? current);
+    fieldRef.current?.focus();
+  }, [active, editing, prefill]);
 
   // The divider above the first unread message is placed once, as the thread opens.
   useEffect(() => {
@@ -694,7 +818,8 @@ export default function SupportScreen() {
   }
 
   const typing = supportOtherSideTyping(data?.conversation ?? null, 'user');
-  const header = <Stack.Screen options={{ headerTitle: () => <SupportHeaderTitle typing={typing} /> }} />;
+  // Only the tab in front sets the header: the hub draws Help & Support's for the others.
+  const header = active ? <Stack.Screen options={{ headerTitle: () => <SupportHeaderTitle typing={typing} /> }} /> : null;
 
   if (!data) {
     const failed = conversation.isError;

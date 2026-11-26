@@ -11,6 +11,7 @@ import type {
 } from '@/lib/types';
 import { ApiError } from './api-client';
 import { formatCompactCount, formatRelativeTime } from './home-view-model';
+import { SUPPORT_COMMENTS_LOCKED_CODE, SUPPORT_HUB_WORDS } from './support-hub-policy/support-hub-policy';
 
 export const POST_COMMENTS_PAGE_SIZE = 20;
 export const POST_COMMENT_MAX_LENGTH = 2000;
@@ -693,6 +694,31 @@ function errorStatus(error: unknown) {
   return error instanceof ApiError ? error.status : null;
 }
 
+/**
+ * Whether the thread takes no new comment: the console turned its comments
+ * off (a Help & Support update's switch). Its comments stay readable, and the
+ * thread's first page says so (`commentsLocked`).
+ */
+export function isCommentThreadLocked(pages: readonly PostCommentsResponse[] | undefined): boolean {
+  return pages?.[0]?.commentsLocked === true;
+}
+
+/** A comment the server refused because the post's comments were turned off after the thread was read. */
+export function isCommentsLockedRefusal(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403 && error.code === SUPPORT_COMMENTS_LOCKED_CODE;
+}
+
+/** The thread's pages once a refusal has said its comments are off: the composer goes until a read says otherwise. */
+export function lockCommentPages(
+  data: InfiniteData<PostCommentsResponse> | undefined,
+): InfiniteData<PostCommentsResponse> | undefined {
+  if (!data?.pages?.length || data.pages[0].commentsLocked === true) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page, index) => (index === 0 ? { ...page, commentsLocked: true } : page)),
+  };
+}
+
 /** How long a 429 asked the client to wait, when its body said. */
 function retryAfterSeconds(error: unknown) {
   if (!(error instanceof ApiError) || error.status !== 429) return null;
@@ -761,6 +787,10 @@ export interface CommentPostErrorCopy {
 export function getCommentPostErrorCopy(error: unknown, isReply: boolean): CommentPostErrorCopy {
   const status = errorStatus(error);
   if (status === 401) return { title: 'Your session ended', message: 'Sign in to post.', signIn: true };
+  // The post's comments were turned off after the thread was read: in the words both clients use.
+  if (isCommentsLockedRefusal(error)) {
+    return { title: 'Could not post comment', message: SUPPORT_HUB_WORDS.commentsLockedRefusal, signIn: false };
+  }
   if (status === 404 && !isReply) return { title: COMMENTS_CLOSED_TITLE, signIn: false };
   if (status === 429) {
     return {

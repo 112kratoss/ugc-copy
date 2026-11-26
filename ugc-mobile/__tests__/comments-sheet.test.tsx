@@ -190,6 +190,7 @@ vi.mock('expo-router', () => ({
 vi.mock('lucide-react-native', () => ({
   Check: (props: MockProps) => React.createElement('icon-check', props),
   Heart: (props: MockProps) => React.createElement('icon-heart', props),
+  MessageCircleOff: (props: MockProps) => React.createElement('icon-comments-off', props),
   MoreHorizontal: (props: MockProps) => React.createElement('icon-more', props),
   Pin: (props: MockProps) => React.createElement('icon-pin', props),
   SendHorizontal: (props: MockProps) => React.createElement('icon-send', props),
@@ -1766,5 +1767,100 @@ describe('likes, the heart, the pin and edits', () => {
     expect(after.pages[0].comments.map((item) => [item.id, item.pinned])).toEqual([
       ['comment-1', true], ['old-pin', true],
     ]);
+  });
+});
+
+/**
+ * A post whose comments the console turned off (a Help & Support update's
+ * switch, owner 2026-11-26): its comments stay readable, and nothing offers to
+ * write one. The thread's first page says so (`commentsLocked`), and a comment
+ * refused because the switch was turned meanwhile says so too.
+ */
+describe('comments turned off', () => {
+  const mine = () => comment({
+    id: 'mine',
+    author: { id: 'viewer-1', username: 'viewer', displayName: 'Viewer', avatarUrl: null },
+  });
+
+  it('says comments are off in the composer\'s place, and offers no reply or edit, the thread still readable', () => {
+    pages = [{ ...page([comment(), mine()]), commentsLocked: true }];
+    const { tree } = renderInline();
+
+    expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(0);
+    const off = tree.root.find((node) => String(node.type) === 'view' && node.props.accessibilityLabel === 'Comments are off');
+    expect(off.props).toMatchObject({ accessible: true, accessibilityRole: 'text' });
+    expect(texts(tree.root)).toEqual(expect.arrayContaining(['This prompt is unreal.', 'Comments are off']));
+    expect(pressables(tree.root, 'Reply to @batman')).toHaveLength(0);
+    expect(pressables(tree.root, 'Reply to @viewer')).toHaveLength(0);
+    // Likes stay: they are not comments.
+    expect(pressables(tree.root, "Like @batman's comment")).toHaveLength(1);
+    // An edit is written in the composer: the author keeps Delete only.
+    expect(commentOptions(tree.root, '@viewer').actions.map((action) => action.label)).toEqual(['Delete']);
+  });
+
+  it('says the same in the reel\'s sheet', () => {
+    pages = [{ ...page([comment()]), commentsLocked: true }];
+    const tree = renderSheet();
+    expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(0);
+    expect(texts(tree.root)).toContain('Comments are off');
+  });
+
+  it('invites nobody to be the first on an empty thread whose comments are off', () => {
+    pages = [{ ...page([]), commentsLocked: true }];
+    const { tree } = renderInline();
+    expect(texts(tree.root)).toContain('No comments yet');
+    expect(texts(tree.root)).not.toContain('Be the first to share what you think about this post.');
+  });
+
+  it('asks no guest to sign in for a thread nobody can write in', () => {
+    authUser = null;
+    pages = [{ ...page([comment()]), commentsLocked: true }];
+    const { ref } = renderInline();
+    renderer.act(() => ref.current?.scrollToComments());
+    renderer.act(() => ref.current?.focusComposer());
+    expect(routerPush).not.toHaveBeenCalled();
+    expect(composerFocus).not.toHaveBeenCalled();
+  });
+
+  it('keeps the composer for a thread whose comments are on, and for a server that does not say', () => {
+    pages = [{ ...page([comment()]), commentsLocked: false }];
+    expect(renderInline().tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(1);
+    pages = [page([comment()])];
+    expect(renderInline().tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(1);
+  });
+
+  it('gives the composer way to "Comments are off" when a comment is refused because they were turned off meanwhile', async () => {
+    pages = [page([comment()])];
+    createPostComment.mockRejectedValueOnce(
+      new ApiError('Comments are off for this post.', 403, { error: 'Comments are off for this post.', code: 'COMMENTS_LOCKED' }, undefined, 'COMMENTS_LOCKED'),
+    );
+    const { tree } = renderInline();
+
+    await postFromComposer(tree.root, 'Late to the party');
+
+    expect(alert).toHaveBeenCalledWith('Could not post comment', 'Comments are off for this post.');
+    // The thread's cached pages now say its comments are off, and every order is read again.
+    const locked = querySetData.mock.calls
+      .map(([, update]) => (typeof update === 'function' ? update({ pages, pageParams: [0] }) : update))
+      .find((data) => data?.pages?.[0]?.commentsLocked === true);
+    expect(locked?.pages[0].comments).toEqual(pages![0].comments);
+    expect(queryInvalidate).toHaveBeenCalledWith(expect.objectContaining({ refetchType: 'none' }));
+
+    pages = locked.pages;
+    renderer.act(() => {
+      tree.update(
+        <PostComments
+          authReturnTo="/post/post-1"
+          postId="post-1"
+          postCreatorId="owner-1"
+          commentCount={0}
+          contentHeader={<TextFixture value="Post content" />}
+          enabled
+          presentation="inline"
+        />,
+      );
+    });
+    expect(tree.root.findAll((node) => String(node.type) === 'textinput')).toHaveLength(0);
+    expect(texts(tree.root)).toContain('Comments are off');
   });
 });

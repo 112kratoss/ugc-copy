@@ -18,6 +18,7 @@ import Payouts from '@/app/admin/(console)/payouts/page';
 import Referrals from '@/app/admin/(console)/referrals/page';
 import Moderation from '@/app/admin/(console)/moderation/page';
 import History from '@/app/admin/(console)/moderation/history/page';
+import Updates from '@/app/admin/(console)/updates/page';
 
 const pages = [
   { name: 'overview', run: () => Overview() },
@@ -31,6 +32,7 @@ const pages = [
   { name: 'referrals', run: () => Referrals({ searchParams: Promise.resolve({}) }) },
   { name: 'moderation', run: () => Moderation() },
   { name: 'moderation history', run: () => History({ searchParams: Promise.resolve({}) }) },
+  { name: 'updates', run: () => Updates() },
 ];
 
 describe('admin pages stop before privileged reads when authorization is denied', () => {

@@ -84,6 +84,23 @@ export const SUPPORT_SIGNAL_RATE_LIMIT = {
   windowSeconds: 10 * 60,
 } as const;
 
+// Help & Support's Updates and Roadmap lists, keyed by the reader, or by the
+// network for a visitor without an account: a person paging and coming back,
+// and the unread dot's one-row read on each launch, fit easily.
+export const SUPPORT_HUB_READ_RATE_LIMIT = {
+  scope: 'support-hub:read',
+  limit: 300,
+  windowSeconds: 10 * 60,
+} as const;
+
+// Reactions on updates and roadmap items, keyed by the account: a person
+// changing their mind a few times on each, not a script.
+export const SUPPORT_HUB_REACTION_RATE_LIMIT = {
+  scope: 'support-hub:reaction',
+  limit: 120,
+  windowSeconds: 10 * 60,
+} as const;
+
 // Browsers can emit several violations during one page load, so this is high
 // enough for diagnostics while still bounding a public unauthenticated sink.
 export const CSP_REPORT_RATE_LIMIT = {

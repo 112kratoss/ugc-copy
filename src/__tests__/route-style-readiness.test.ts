@@ -63,7 +63,9 @@ const PUBLIC_ROUTE_DIRECTORIES = new Set([
 ]);
 // Every other route folder: the signed-in surfaces, each with a layout that
 // links the supplement. The image, video and motion creators draw for a
-// signed-out visitor too, up to Generate (2026-10-28), and keep it. Search was
+// signed-out visitor too, up to Generate (2026-10-28), and keep it, as Help &
+// Support does since 2026-11-26 (a visitor reads its Updates and Roadmap; its
+// chat, the bulk of the page, is the account's, and it is not indexed). Search was
 // one of them until 2026-11-24: its results are public, so it is in the public
 // list and globals.css scans it. A folder in neither list fails: one left out used to
 // count as signed-in, so a new public page built on a signed-in layout passed

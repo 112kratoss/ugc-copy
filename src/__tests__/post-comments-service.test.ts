@@ -1126,3 +1126,48 @@ describe('post comments service', () => {
     });
   });
 });
+
+// Help & Support updates: the console can turn a post's comments off. The thread stays
+// readable and says so; a new comment is refused before the insert, and the insert's own
+// refusal (the console locking the post meanwhile) reads the same.
+describe('a post whose comments are off', () => {
+  const lockedPost = { ...PUBLIC_POST, comments_locked: true };
+
+  it('says so with its thread', async () => {
+    const { client } = createClient({ posts: [lockedPost] });
+    const result = await listPostCommentsForRoute({ postId: POST_ID, viewerUserId: null, createAdminSupabase: () => client });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.body.commentsLocked).toBe(true);
+
+    const open = createClient();
+    const unlocked = await listPostCommentsForRoute({ postId: POST_ID, viewerUserId: null, createAdminSupabase: () => open.client });
+    if (unlocked.ok) expect(unlocked.body.commentsLocked).toBe(false);
+  });
+
+  it('refuses a new comment before writing anything', async () => {
+    const { client, state } = createClient({ posts: [lockedPost] });
+    const result = await createPostCommentForRoute({
+      postId: POST_ID,
+      authorUserId: AUTHOR_ID,
+      readBody: async () => ({ body: 'hello' }),
+      createAdminSupabase: () => client,
+      checkRelationshipBlocked: async () => false,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, body: { error: 'Comments are off for this post.', code: 'COMMENTS_LOCKED' } });
+    expect(state.rpcCalls.some((call) => call.name === 'create_post_comment')).toBe(false);
+  });
+
+  it('reads the insert\'s refusal the same way', async () => {
+    const { client } = createClient({ rpcErrors: { create_post_comment: 'Comments are locked on this post' } });
+    const result = await createPostCommentForRoute({
+      postId: POST_ID,
+      authorUserId: AUTHOR_ID,
+      readBody: async () => ({ body: 'hello' }),
+      createAdminSupabase: () => client,
+      checkRelationshipBlocked: async () => false,
+    });
+
+    expect(result).toMatchObject({ ok: false, status: 403, body: { code: 'COMMENTS_LOCKED' } });
+  });
+});

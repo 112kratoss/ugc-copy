@@ -467,8 +467,9 @@ function RootLayoutNav() {
                 <Stack.Screen name="delete-account" options={{ title: 'Delete Account' }} />
                 {/* A message is pulled right to reply to it, as in a chat
                     app: the full-screen back pan would take that drag (see
-                    post/new above), so only the edge swipe goes back here. */}
-                <Stack.Screen name="support" options={{ title: 'Message Support', fullScreenGestureEnabled: false }} />
+                    post/new above), so only the edge swipe goes back here.
+                    Help & Support holds the chat, Updates and Roadmap. */}
+                <Stack.Screen name="support" options={{ title: 'Help & Support', fullScreenGestureEnabled: false }} />
                 <Stack.Screen name="ai-data-sharing" options={{ title: 'AI Data Sharing' }} />
                 <Stack.Screen name="blocked-users" options={{ title: 'Blocked Users' }} />
                 </Stack>

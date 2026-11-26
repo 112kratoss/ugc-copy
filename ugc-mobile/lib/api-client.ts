@@ -125,6 +125,16 @@ import type {
   SupportReadRequest,
   SupportReadResponse,
 } from './support-conversation-policy/support-conversation-policy';
+import {
+  readSupportHubReactionResponse,
+  readSupportRoadmapResponse,
+  readSupportUpdatesPage,
+  type SupportHubReactionEmoji,
+  type SupportHubReactionRequest,
+  type SupportHubReactionResponse,
+  type SupportRoadmapResponse,
+  type SupportUpdatesPage,
+} from './support-hub-policy/support-hub-policy';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
 import type { SeedanceAssetKind } from './model-catalog/seedance-assets';
 import type { PlaybackMetricsReport } from './playback-metrics';
@@ -156,6 +166,17 @@ export function isRequestTimeoutError(error: unknown): boolean {
     && error.details !== null
     && (error.details as { timedOut?: unknown }).timedOut === true
     && (error.details as { sent?: unknown }).sent !== false;
+}
+
+/**
+ * Reads a successful answer with its shared reader, or fails as a request
+ * would: an answer the reader cannot take (a server from before the route, a
+ * page served in its place) is no answer, never an empty one.
+ */
+function readAnswer<T>(body: unknown, reader: (value: unknown) => T | null, what: string): T {
+  const value = reader(body);
+  if (value === null) throw new ApiError(`${what} could not be read.`, 502, body);
+  return value;
 }
 
 /**
@@ -1380,6 +1401,52 @@ export function createApiClient({
         method: 'POST',
         body: JSON.stringify({ emoji }),
       }),
+    /**
+     * Help & Support's Updates (owner, 2026-11-26): the official account's
+     * update posts, newest first, a page at a time (`cursor` is the page
+     * before's `nextCursor`; `limit` 1 to 20, which the unread dot sets to 1).
+     * Everyone reads them, a guest with its own token, so `myReaction` is the
+     * reader's; the first page's `latestAt` is when the newest came out. Read
+     * with readSupportUpdatesPage.
+     */
+    getSupportUpdates: async (params: { cursor?: string | null; limit?: number } = {}): Promise<SupportUpdatesPage> => {
+      const body = await request<unknown>(`/api/support/updates${buildQuery({
+        cursor: params.cursor ?? undefined,
+        limit: params.limit,
+      })}`);
+      return readAnswer(body, readSupportUpdatesPage, 'Updates');
+    },
+    /**
+     * Sets the account's reaction on an update, or takes it away (`null`):
+     * one per account, from the six quick reactions. Answered with the
+     * update's counts and the account's reaction (readSupportHubReactionResponse).
+     * Registered accounts only; a guest is asked to sign up before it is sent.
+     */
+    reactToSupportUpdate: async (postId: string, emoji: SupportHubReactionEmoji | null): Promise<SupportHubReactionResponse> => {
+      const body = await request<unknown>(`/api/support/updates/${encodeURIComponent(postId)}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji } satisfies SupportHubReactionRequest),
+      });
+      return readAnswer(body, readSupportHubReactionResponse, 'The reaction');
+    },
+    /**
+     * Help & Support's Roadmap: what is being built, explored and shipped
+     * recently, in the console's order, with each item's reactions (the
+     * number of people is its vote). Read by guests too. Read with
+     * readSupportRoadmapResponse.
+     */
+    getSupportRoadmap: async (): Promise<SupportRoadmapResponse> => {
+      const body = await request<unknown>('/api/support/roadmap');
+      return readAnswer(body, readSupportRoadmapResponse, 'The roadmap');
+    },
+    /** Sets the account's reaction on a roadmap item, or takes it away (`null`), as for an update. */
+    reactToSupportRoadmapItem: async (itemId: string, emoji: SupportHubReactionEmoji | null): Promise<SupportHubReactionResponse> => {
+      const body = await request<unknown>(`/api/support/roadmap/${encodeURIComponent(itemId)}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji } satisfies SupportHubReactionRequest),
+      });
+      return readAnswer(body, readSupportHubReactionResponse, 'The reaction');
+    },
     /**
      * Called while still a guest, immediately before the sign-in that will
      * replace this session. Returns a one-time ticket to persist securely.

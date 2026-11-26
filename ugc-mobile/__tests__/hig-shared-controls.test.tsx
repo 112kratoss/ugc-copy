@@ -201,6 +201,30 @@ describe('the segmented control', () => {
       expect(segment.props.accessibilityState.disabled).toBe(true);
     }
   });
+
+  // Help & Support's Updates tab (owner, 2026-11-26): something new behind a segment.
+  it('draws a dot in the badge colour after the label of a segment not in use, which the segment\'s words speak for', () => {
+    const withDot = [
+      { value: 'top', label: 'Top' },
+      { value: 'newest', label: 'New', dot: true, accessibilityLabel: 'New, New updates' },
+    ] as const;
+    const dotsIn = (segment: renderer.ReactTestInstance) => segment.findAll((node) => node.type === 'view'
+      && flatStyle(node.props.style).backgroundColor === colors.badge);
+
+    const { segments } = control({ options: withDot });
+    const [dot] = dotsIn(segments[1]);
+    expect(flatStyle(dot.props.style)).toMatchObject({ width: 8, height: 8, borderRadius: appTheme.radii.pill });
+    expect(flatStyle(dot.props.style)).not.toHaveProperty('borderCurve');
+    expect(dot.props).toMatchObject({ accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' });
+    expect(segments[1].props.accessibilityLabel).toBe('New, New updates');
+    // Still one label in the label role, truncating rather than pushing the dot out.
+    const [label] = segments[1].findAll((node) => node.type === 'text');
+    expect(flatStyle(label.props.style)).toMatchObject({ ...appTheme.type.label, flexShrink: 1 });
+    expect(dotsIn(segments[0])).toHaveLength(0);
+
+    // On the segment in use the reader is already there: no dot.
+    expect(dotsIn(control({ options: withDot, value: 'newest' }).segments[1])).toHaveLength(0);
+  });
 });
 
 /**

@@ -51,6 +51,11 @@ export interface PostCommentsPage {
     postId: string;
     postCreatorId: string | null;
     commentCount: number;
+    /**
+     * The post takes no new comment (the console's switch on a Help & Support update): the thread
+     * stays readable. Left out by a server from before the switch.
+     */
+    commentsLocked?: boolean;
     comments: PostComment[];
     pageInfo: {
         hasMore: boolean;

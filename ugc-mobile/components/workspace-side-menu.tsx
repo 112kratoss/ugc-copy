@@ -4,11 +4,14 @@ import { memo } from 'react';
 import { HomeSideMenu } from '@/components/home-side-menu';
 import { useAuth } from '@/lib/auth';
 import { useSideMenuHost, useSideMenuHostOpen } from '@/lib/side-menu-host';
+import { useSupportUpdatesUnseen } from '@/lib/support-updates-seen';
 
 /**
  * The workspace side menu with what it shows: the account, the balance and the
  * tracked earnings. The profile is read while the menu is up; Home keeps it
- * warm under the same key, so the menu opened from Home has it at once.
+ * warm under the same key, so the menu opened from Home has it at once. While
+ * it is up it also asks when Help & Support's newest update came out (at most
+ * once a minute, never holding the menu back), for the dot on Help & Support.
  */
 export function WorkspaceSideMenu({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { api, credits, signOut, user } = useAuth();
@@ -18,6 +21,7 @@ export function WorkspaceSideMenu({ visible, onClose }: { visible: boolean; onCl
     queryFn: () => api.getProfile(),
     staleTime: 1000 * 60 * 5,
   });
+  const supportUpdatesUnseen = useSupportUpdatesUnseen({ api, enabled: visible });
 
   // The seller total rides on the profile; unknown until the profile has answered.
   const totalSalesUsdCents = profileQuery.data?.sales?.earningsUsdCents ?? null;
@@ -31,6 +35,7 @@ export function WorkspaceSideMenu({ visible, onClose }: { visible: boolean; onCl
       credits={credits}
       totalSalesUsdCents={totalSalesUsdCents}
       onSignOut={signOut}
+      supportUpdatesUnseen={supportUpdatesUnseen}
     />
   );
 }

@@ -61,6 +61,7 @@ function emptyPage() {
       postId: POST_ID,
       postCreatorId: 'creator-1',
       commentCount: 0,
+      commentsLocked: false,
       comments: [],
       pageInfo: { hasMore: false, nextOffset: null, limit: 20, offset: 0 },
     },

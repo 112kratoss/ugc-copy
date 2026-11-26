@@ -178,6 +178,9 @@ const SEARCH_POPULARITY = 'model and tool keys of at most 80 characters, ids and
 const SEARCH_PHRASES_STATE = 'one row holding when the phrases were last rebuilt: a flag and a time';
 const SEARCH_DENYLIST = 'single words an operator withdrew from suggestions, each with a note: never a path';
 const COMMENT_REACTIONS = 'a like or a dislike, one of two words held to that by a check: never a path';
+const SUPPORT_HUB_REACTIONS = 'one of six quick reactions, held to that by a check: never a path';
+const SUPPORT_ROADMAP = 'the operator\'s roadmap: short titles and lines typed in the console, never a stored path';
+const SUPPORT_UPDATE_BROADCASTS = 'an announced update\'s alert words and how far its alerts have gone: never a stored path';
 const QUEUED_PROVIDER_REQUEST = 'a queued start: signed links to inputs that are recorded elsewhere, kept only while the start waits';
 const UPLOAD_BOOKKEEPING = 'upload bookkeeping: read for the exclusions, never a reference';
 const RECIPE_SWEEP = "the recipe-copy sweep's own bookkeeping: its folders are excluded";
@@ -272,6 +275,11 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   showcase_feed_read_ahead_counters: TELEMETRY,
   showcase_media_revocations: UPLOAD_BOOKKEEPING,
   showcase_saves: NO_TEXT,
+  // Help & Support's Updates and Roadmap: reactions, the operator's roadmap and an update's alert fan-out.
+  support_roadmap_items: SUPPORT_ROADMAP,
+  support_roadmap_reactions: SUPPORT_HUB_REACTIONS,
+  support_update_broadcasts: SUPPORT_UPDATE_BROADCASTS,
+  support_update_reactions: SUPPORT_HUB_REACTIONS,
   upload_byte_global_counters: NO_TEXT,
   upload_byte_reservations: UPLOAD_BOOKKEEPING,
   upload_byte_user_counters: NO_TEXT,

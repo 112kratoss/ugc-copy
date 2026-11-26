@@ -57,21 +57,45 @@ const query = vi.hoisted(() => ({
   isFetching: false,
   refetch: vi.fn(),
 }));
+// What the chat asked of its query on each render: whether it reads the thread again, and how often.
+const queryOptions = vi.hoisted(() => [] as Array<{ queryKey: readonly unknown[]; refetchInterval?: unknown }>);
 const queryClient = vi.hoisted(() => ({
   setQueryData: vi.fn(),
   getQueryState: vi.fn(() => undefined),
   invalidateQueries: vi.fn(async () => undefined),
   cancelQueries: vi.fn(async () => undefined),
 }));
+// The route's `tab`, and the unread dot's answer (`lib/support-updates-seen.ts`, tested on its own).
+const route = vi.hoisted(() => ({ params: {} as Record<string, string | undefined> }));
+const unseen = vi.hoisted(() => ({ value: false, asked: [] as Array<{ enabled: boolean }> }));
+const keyboard = vi.hoisted(() => ({ dismiss: vi.fn() }));
 
 vi.mock('@react-navigation/native', () => ({ useFocusEffect: () => undefined, useIsFocused: () => true }));
 vi.mock('@tanstack/react-query', () => ({
-  useQuery: () => query,
+  useQuery: (options: { queryKey: readonly unknown[]; refetchInterval?: unknown }) => {
+    queryOptions.push(options);
+    return query;
+  },
   useQueryClient: () => queryClient,
 }));
 vi.mock('expo-router', () => ({
   router: routerState,
   Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
+  useLocalSearchParams: () => route.params,
+}));
+// The Updates and Roadmap tabs have suites of their own (support-hub-tabs.test.tsx): here they are host
+// elements whose props say what the hub gave them.
+vi.mock('@/components/support-hub-updates', () => ({
+  SupportUpdatesTab: (props: MockProps) => React.createElement('support-updates-tab', props),
+}));
+vi.mock('@/components/support-hub-roadmap', () => ({
+  SupportRoadmapTab: (props: MockProps) => React.createElement('support-roadmap-tab', props),
+}));
+vi.mock('@/lib/support-updates-seen', () => ({
+  useSupportUpdatesUnseen: (options: { enabled: boolean }) => {
+    unseen.asked.push(options);
+    return unseen.value;
+  },
 }));
 vi.mock('lucide-react-native', () => Object.fromEntries(
   ['AlertCircle', 'ArrowDown', 'Ban', 'Check', 'CheckCheck', 'Clock3', 'ImageOff', 'ImagePlus', 'LifeBuoy', 'Lock', 'Pencil', 'Reply', 'Send', 'X']
@@ -121,6 +145,7 @@ vi.mock('react-native', () => {
       data.map((item) => React.createElement(React.Fragment, { key: item.key }, renderItem({ item }))),
       ListFooterComponent,
     ),
+    Keyboard: keyboard,
     Linking: { openURL: openUrl },
     Pressable: ({ children, style, ...props }: MockProps) => React.createElement(
       'pressable',
@@ -143,6 +168,7 @@ vi.mock('@/components/ui', () => ({
   Screen: ({ children, ...props }: MockProps) => React.createElement('screen', props, children),
   SecondaryButton: (props: MockProps) => React.createElement('secondary-button', props),
   SectionTitle: (props: MockProps) => React.createElement('section-title', props),
+  SegmentedControl: (props: MockProps) => React.createElement('segmented-control', props),
   StatusBlock: (props: MockProps) => React.createElement('status-block', props),
 }));
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
@@ -283,6 +309,10 @@ beforeEach(() => {
   authState.user = { id: 'account-1' };
   query.data = conversation;
   query.isError = false;
+  queryOptions.length = 0;
+  route.params = {};
+  unseen.value = false;
+  unseen.asked.length = 0;
   photoFiles.live.clear();
   appVersion.label = null;
   appVersion.runtime = { runtimeVersion: null, channel: null };
@@ -900,5 +930,157 @@ describe('photos in Message support', () => {
     expect(drawnText(tree)).toContain('That file could not be read as a photo. Send a JPEG, PNG, WebP or GIF.');
     expect(drawnText(tree)).not.toContain('IMG_0002.HEIC');
     expect(upload.picked).not.toHaveBeenCalled();
+  });
+});
+
+/** The segmented control under the header. */
+function tabControl(tree: renderer.ReactTestRenderer) {
+  return tree.root.findByType('segmented-control' as never);
+}
+
+function chooseTab(tree: renderer.ReactTestRenderer, tab: 'chat' | 'updates' | 'roadmap') {
+  act(() => { (tabControl(tree).props.onChange as (value: string) => void)(tab); });
+}
+
+/** Whether the tab page holding a node is laid out (`flex`) or hidden (`none`). */
+function paneDisplay(node: renderer.ReactTestInstance): string | undefined {
+  for (let current = node.parent; current; current = current.parent) {
+    const style = current.props?.style as { display?: string } | undefined;
+    if (String(current.type) === 'view' && style && 'display' in style) return style.display;
+  }
+  return undefined;
+}
+
+/** What the chat last asked of its thread's query. */
+function chatQueryOptions() {
+  return queryOptions.filter((options) => options.queryKey[0] === 'support-conversation').at(-1);
+}
+
+// Owner, 2026-11-26: Help & Support has three tabs, Chat, Updates and Roadmap, and still opens on Chat.
+describe('Help & Support tabs', () => {
+  it('opens on the chat, with Chat, Updates and Roadmap as tabs under the header', () => {
+    const tree = render();
+    const control = tabControl(tree);
+
+    expect(control.props.role).toBe('tab');
+    expect(control.props.accessibilityLabel).toBe('Help & Support sections');
+    expect(control.props.value).toBe('chat');
+    expect((control.props.options as Array<{ value: string; label: string }>).map((option) => [option.value, option.label]))
+      .toEqual([['chat', 'Chat'], ['updates', 'Updates'], ['roadmap', 'Roadmap']]);
+    // The chat as it was, its composer included; the other tabs are built when first opened.
+    expect(paneDisplay(tree.root.findByType('text-input' as never))).toBe('flex');
+    expect(tree.root.findAllByType('support-updates-tab' as never)).toHaveLength(0);
+    expect(tree.root.findAllByType('support-roadmap-tab' as never)).toHaveLength(0);
+  });
+
+  it('opens on the tab its link names, and reads anything else as the chat', () => {
+    route.params = { tab: 'updates' };
+    const tree = render();
+    expect(tabControl(tree).props.value).toBe('updates');
+    expect(tree.root.findByType('support-updates-tab' as never).props.active).toBe(true);
+    // The chat is not built (no thread read, no composer) until it is opened.
+    expect(tree.root.findAllByType('text-input' as never)).toHaveLength(0);
+    expect(chatQueryOptions()).toBeUndefined();
+    act(() => tree.unmount());
+
+    route.params = { tab: 'settings' };
+    expect(tabControl(render()).props.value).toBe('chat');
+  });
+
+  it('keeps the chat and its draft behind another tab, the composer hidden, and puts the keyboard away', () => {
+    const tree = render();
+    typeDraft(tree, 'Half a question');
+
+    chooseTab(tree, 'updates');
+    expect(keyboard.dismiss).toHaveBeenCalledTimes(1);
+    expect(paneDisplay(tree.root.findByType('text-input' as never))).toBe('none');
+    expect(paneDisplay(tree.root.findByType('support-updates-tab' as never))).toBe('flex');
+    expect(tree.root.findByType('support-updates-tab' as never).props.active).toBe(true);
+
+    chooseTab(tree, 'chat');
+    expect(paneDisplay(tree.root.findByType('text-input' as never))).toBe('flex');
+    expect(tree.root.findByType('text-input' as never).props.value).toBe('Half a question');
+    // Updates stays built, hidden and no longer in front.
+    expect(paneDisplay(tree.root.findByType('support-updates-tab' as never))).toBe('none');
+    expect(tree.root.findByType('support-updates-tab' as never).props.active).toBe(false);
+  });
+
+  it('reads the thread again and marks it read only while the chat is in front', async () => {
+    const tree = render();
+    expect(typeof chatQueryOptions()?.refetchInterval).toBe('function');
+
+    chooseTab(tree, 'updates');
+    expect(chatQueryOptions()?.refetchInterval).toBe(false);
+
+    // A reply that arrives while Updates is in front is not marked read unseen.
+    query.data = {
+      ...conversation,
+      messages: [...conversation.messages, message({ id: 'm5', author: 'staff', body: 'Any luck?', createdAt: iso(1) })],
+    };
+    await act(async () => { tree.update(React.createElement(SupportScreen)); });
+    expect(authState.api.markSupportConversationRead).not.toHaveBeenCalled();
+
+    chooseTab(tree, 'chat');
+    await act(async () => undefined);
+    expect(authState.api.markSupportConversationRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the chat's header on Chat and Help & Support's on the other tabs", () => {
+    const tree = render();
+    const headers = () => tree.root.findAllByType('stack-screen' as never);
+    expect(headers()).toHaveLength(1);
+    expect(typeof (headers()[0].props.options as { headerTitle: unknown }).headerTitle).toBe('function');
+
+    chooseTab(tree, 'roadmap');
+    expect(headers()).toHaveLength(1);
+    expect(headers()[0].props.options).toEqual({ headerTitle: 'Help & Support' });
+  });
+
+  it("starts the chat's composer with the idea's words from the roadmap's Suggest a feature", () => {
+    route.params = { tab: 'roadmap' };
+    const tree = render();
+
+    act(() => { (tree.root.findByType('support-roadmap-tab' as never).props.onSuggestFeature as () => void)(); });
+
+    expect(tabControl(tree).props.value).toBe('chat');
+    expect(keyboard.dismiss).toHaveBeenCalled();
+    expect(tree.root.findByType('text-input' as never).props.value).toBe('Feature idea: ');
+    expect(sendButton(tree).props.disabled).toBe(false);
+  });
+
+  it('never puts the idea\'s words over a draft being written', () => {
+    const tree = render();
+    typeDraft(tree, 'My video failed again');
+    chooseTab(tree, 'roadmap');
+
+    act(() => { (tree.root.findByType('support-roadmap-tab' as never).props.onSuggestFeature as () => void)(); });
+
+    expect(tabControl(tree).props.value).toBe('chat');
+    expect(tree.root.findByType('text-input' as never).props.value).toBe('My video failed again');
+  });
+
+  it('puts the unread dot on Updates, and asks for it only while another tab is in front', () => {
+    unseen.value = true;
+    const tree = render();
+    const updates = (tabControl(tree).props.options as Array<{ value: string; dot?: boolean; accessibilityLabel?: string }>)
+      .find((option) => option.value === 'updates');
+    expect(updates).toMatchObject({ dot: true, accessibilityLabel: 'Updates, New updates' });
+    expect(unseen.asked.at(-1)).toEqual(expect.objectContaining({ api: authState.api, enabled: true }));
+
+    chooseTab(tree, 'updates');
+    expect(unseen.asked.at(-1)).toEqual(expect.objectContaining({ enabled: false }));
+  });
+
+  it('lets a guest read Updates and Roadmap, the chat keeping its sign-in', () => {
+    authState.user = null;
+    const tree = render();
+    expect(tree.root.findByType('section-title' as never).props.title).toBe('Sign in to message support');
+    expect(tree.root.findByType('stack-screen' as never).props.options).toEqual({ headerTitle: 'Help & Support' });
+
+    chooseTab(tree, 'roadmap');
+    expect(tree.root.findByType('support-roadmap-tab' as never)).toBeTruthy();
+    chooseTab(tree, 'updates');
+    expect(tree.root.findByType('support-updates-tab' as never).props.active).toBe(true);
+    expect(tree.root.findByType('stack-screen' as never).props.options).toEqual({ headerTitle: 'Help & Support' });
   });
 });

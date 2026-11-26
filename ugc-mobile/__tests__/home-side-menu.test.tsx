@@ -103,7 +103,7 @@ vi.mock('@/lib/safe-area', () => ({
 }));
 
 import { HomeSideMenu } from '../components/home-side-menu';
-import { appTheme } from '../lib/theme';
+import { appTheme, themes } from '../lib/theme';
 
 function renderMenu(
   totalSalesUsdCents: number | null,
@@ -111,7 +111,8 @@ function renderMenu(
     onClose = vi.fn(),
     onSignOut = async () => undefined,
     signedIn = true,
-  }: { onClose?: () => void; onSignOut?: () => Promise<void>; signedIn?: boolean } = {},
+    supportUpdatesUnseen,
+  }: { onClose?: () => void; onSignOut?: () => Promise<void>; signedIn?: boolean; supportUpdatesUnseen?: boolean } = {},
 ) {
   container.routeKey = 'index-key';
   container.listeners.clear();
@@ -126,6 +127,7 @@ function renderMenu(
         credits={1200}
         totalSalesUsdCents={totalSalesUsdCents}
         onSignOut={onSignOut}
+        supportUpdatesUnseen={supportUpdatesUnseen}
       />,
     );
   });
@@ -313,3 +315,42 @@ describe('HomeSideMenu hand-off', () => {
   });
 });
 
+
+/**
+ * Owner, 2026-11-26: Help & Support gains Updates. While one is newer than
+ * this phone's last look there, a dot on the Help & Support row says so; the
+ * row still opens the chat, where the Updates tab carries the same dot.
+ */
+describe('HomeSideMenu unread updates dot', () => {
+  const helpRow = (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'pressable'
+    && String(node.props.accessibilityLabel).startsWith('Help & Support'));
+  // The drawer draws in the app's scheme; under test that is the default one, dark.
+  const dots = (tree: renderer.ReactTestRenderer) => helpRow(tree).findAll((node) => String(node.type) === 'view'
+    && (node.props.style as { backgroundColor?: string } | undefined)?.backgroundColor === themes.dark.colors.badge);
+
+  it('draws no dot, and says nothing more, until an update is unseen', () => {
+    const tree = renderMenu(1250);
+    expect(helpRow(tree).props.accessibilityLabel).toBe('Help & Support');
+    expect(helpRow(tree).findAll((node) => String(node.type) === 'view' && node.props.accessibilityElementsHidden === true)).toHaveLength(0);
+    expect(dots(tree)).toHaveLength(0);
+  });
+
+  it('draws a dot in the badge colour on Help & Support, and says "New updates" to a screen reader', () => {
+    const tree = renderMenu(1250, { supportUpdatesUnseen: true });
+    const row = helpRow(tree);
+    expect(row.props.accessibilityLabel).toBe('Help & Support, New updates');
+    const [dot] = row.findAll((node) => String(node.type) === 'view' && node.props.accessibilityElementsHidden === true);
+    expect(dot.props.importantForAccessibility).toBe('no-hide-descendants');
+    expect(dot.props.style).toMatchObject({ width: 8, height: 8, borderRadius: appTheme.radii.pill });
+    expect(dots(tree)).toEqual([dot]);
+    // No other row carries one.
+    expect(tree.root.findAll((node) => String(node.type) === 'view' && node.props.accessibilityElementsHidden === true)).toHaveLength(1);
+  });
+
+  it('still opens the support chat itself from the row with the dot', () => {
+    routerState.push.mockClear();
+    const tree = renderMenu(1250, { supportUpdatesUnseen: true });
+    renderer.act(() => helpRow(tree).props.onPress());
+    expect(routerState.push).toHaveBeenCalledWith('/support');
+  });
+});

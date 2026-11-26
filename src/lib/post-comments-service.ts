@@ -79,6 +79,8 @@ export type PostCommentsPage = {
   postId: string;
   postCreatorId: string | null;
   commentCount: number;
+  /** True when the post takes no new comment; the thread stays readable. */
+  commentsLocked: boolean;
   comments: PostCommentItem[];
   pageInfo: {
     hasMore: boolean;
@@ -118,7 +120,13 @@ type PostReference = {
   id: string;
   user_id: string | null;
   comment_count: number;
+  /** A post the console locked takes no new comment (a Help & Support update's switch). */
+  comments_locked?: boolean | null;
 };
+
+/** The words of a comment refused on a locked post, the same in both clients. */
+export const POST_COMMENTS_LOCKED_ERROR = 'Comments are off for this post.';
+const POST_COMMENTS_LOCKED_RAISE = /Comments are locked on this post/;
 
 export type PostCommentsRouteResult<TBody> =
   | { ok: true; status: 200 | 201; body: TBody }
@@ -127,7 +135,7 @@ export type PostCommentsRouteResult<TBody> =
       status: 400 | 401 | 403 | 404 | 429 | 500;
       body: {
         error: string;
-        code?: 'RATE_LIMITED';
+        code?: 'RATE_LIMITED' | 'COMMENTS_LOCKED';
         retryAfterSeconds?: number;
         limit?: number;
         resetAt?: string;
@@ -193,7 +201,7 @@ async function findCommentablePost(
 ): Promise<{ post: PostReference | null; error: unknown | null }> {
   const { data, error } = await adminSupabase
     .from('posts')
-    .select('id, user_id, comment_count')
+    .select('id, user_id, comment_count, comments_locked')
     .eq('id', postId)
     .eq('visibility', 'public')
     .is('archived_at', null)
@@ -540,6 +548,7 @@ export async function listPostCommentsForRoute({
       postId: post.id,
       postCreatorId: post.user_id ?? null,
       commentCount: Math.max(0, post.comment_count ?? 0),
+      commentsLocked: post.comments_locked === true,
       comments: visibleRows.map((row) => toPostCommentItem(row, profiles, viewerReactions)),
       pageInfo: {
         hasMore,
@@ -639,6 +648,10 @@ export async function createPostCommentForRoute({
     return { ok: false, status: 403, body: { error: 'Commenting is unavailable on this post.' } };
   }
 
+  if (post.comments_locked === true) {
+    return { ok: false, status: 403, body: { error: POST_COMMENTS_LOCKED_ERROR, code: 'COMMENTS_LOCKED' } };
+  }
+
   if (parentId) {
     const { data: parent, error: parentError } = await adminSupabase
       .from('post_comments')
@@ -682,6 +695,10 @@ export async function createPostCommentForRoute({
   });
 
   if (error) {
+    // The console locked the post between the read above and the insert.
+    if (POST_COMMENTS_LOCKED_RAISE.test(error.message ?? '')) {
+      return { ok: false, status: 403, body: { error: POST_COMMENTS_LOCKED_ERROR, code: 'COMMENTS_LOCKED' } };
+    }
     logBackendError('failed_to_create_post_comment', { error });
     return { ok: false, status: 500, body: { error: 'Failed to post comment.' } };
   }

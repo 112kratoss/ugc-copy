@@ -767,6 +767,9 @@ export function SupportChat({
   emptyTitle,
   emptyBody,
   closedNote = null,
+  initialDraft = '',
+  autoFocusComposer = false,
+  onDraftChange,
   className,
 }: {
   chat: SupportChatController;
@@ -782,11 +785,17 @@ export function SupportChat({
   emptyBody: string;
   /** Drawn under the thread while the conversation is resolved. */
   closedNote?: string | null;
+  /** What the composer opens with (Help & Support's "Suggest a feature", or a message written before another tab was opened). */
+  initialDraft?: string;
+  /** Puts the focus in the composer as the chat opens, after its text. */
+  autoFocusComposer?: boolean;
+  /** The message being written, as it changes: never an edit's text, while the unsent message waits aside. */
+  onDraftChange?: (draft: string) => void;
   className?: string;
 }) {
   const { state, pending, error, unreadMark } = chat;
   const confirm = useConfirmation();
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialDraft);
   const [replyTo, setReplyTo] = useState<SupportQuotedMessage | null>(null);
   const [editing, setEditing] = useState<SupportMessage | null>(null);
   // An edit on its way to the server: the composer keeps its text until the answer.
@@ -808,12 +817,32 @@ export function SupportChat({
   const atBottomRef = useRef(true);
   const placedRef = useRef(false);
   const seenRef = useRef<{ total: number; others: number }>({ total: 0, others: 0 });
-  // Typing that reached the field before the page's script ran.
-  useTypedBeforeHydration(fieldRef, { drawn: '', enabled: true, onTyped: setDraft });
+  // Typing that reached the field before the page's script ran. A chat that opens on text of its
+  // own is opened by a press in the page, never by its server HTML.
+  useTypedBeforeHydration(fieldRef, { drawn: initialDraft, enabled: !initialDraft, onTyped: setDraft });
 
   useEffect(() => () => {
     if (draftUrlRef.current) URL.revokeObjectURL(draftUrlRef.current);
   }, []);
+
+  // The focus in the composer after its text, as a chat opened to be written in opens.
+  useEffect(() => {
+    if (!autoFocusComposer) return;
+    const field = fieldRef.current;
+    if (!field) return;
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [autoFocusComposer]);
+
+  // The message being written, told to the page around the chat. While an edit is written the
+  // unsent message waits aside, and that is what it is told.
+  const onDraftChangeRef = useRef(onDraftChange);
+  useEffect(() => {
+    onDraftChangeRef.current = onDraftChange;
+  }, [onDraftChange]);
+  useEffect(() => {
+    onDraftChangeRef.current?.(editing ? draftBeforeEditRef.current : draft);
+  }, [draft, editing]);
 
   const ready = state.kind === 'ready';
   const messages = useMemo(() => (state.kind === 'ready' ? state.messages : []), [state]);

@@ -301,6 +301,10 @@ const expectedEndpointKeys = [
   'editSupportMessage',
   'deleteSupportMessage',
   'reactToSupportMessage',
+  'getSupportUpdates',
+  'reactToSupportUpdate',
+  'getSupportRoadmap',
+  'reactToSupportRoadmapItem',
   'mergeGuestAccount',
 ] as const;
 
