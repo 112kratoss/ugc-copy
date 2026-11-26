@@ -121,9 +121,11 @@ there would let anyone lock a client out. No token, code, secret or consent toke
   authenticated the caller itself tell the services who it is, with no assertion header.
 - `oauth-protected-resource-metadata.ts`: `authorization_servers` follows the flag.
 - `oauth-consent-service.ts`, `/oauth/consent`: the page loads an `mbar_` request on the server
-  and answers through `/api/oauth/consent`; a GoTrue id keeps the old client-side path until `app`.
+  and answers through `/api/oauth/consent`; a GoTrue id kept the old client-side path until
+  `app`, where it is answered as unavailable.
 - `connected-apps.ts`, `ConnectedApps.tsx`: list and revoke the app's grants through
-  `/api/oauth/grants`, merged with Supabase's until its server is off.
+  `/api/oauth/grants`, merged with Supabase's. With Supabase's server off its grants API answers
+  as disabled, which the list reads as none; the code still asks until the follow-up removes it.
 - `route-identity-policy.ts`: `/api/oauth/consent` and `/api/oauth/grants` are `registered`.
 - `mobile-push-unregister-service.ts`: "Sign out everywhere" ends every grant of the account on
   the app's server. Both clients already send `POST /api/mobile/notifications/unregister` with
@@ -241,8 +243,13 @@ grants are untouched until then.
    does not save). Its metadata, authorize and token endpoints answer 404; Auth is healthy.
 9. Checked at 16:57 UTC: no session with an OAuth client, no consent; the app's metadata 200, a
    request from a registered client goes to the consent page, `/api/mcp` and `/api/mcp/posts`
-   challenge with 401. An access JWT Supabase issued before step 7 had at most the rest of its
-   hour to run, and nothing behind it.
+   challenge with 401. Connected apps on `/profile/edit` loads for a signed-in account with
+   Supabase's server off ("No apps connected"). An access JWT Supabase issued before step 7 had
+   at most the rest of its hour to run, and nothing behind it.
+
+There is no rollback by the flag any more: `supabase`, or the variable lost, now means every
+agent call is answered 401 (Supabase issues nothing). Going back would mean switching Supabase's
+server on again, `both`, and every agent signing in afresh.
 
 Not done by the cutover: reconnecting each client. Every creator's agents sign in again on their
 next call (two accounts, both the owner's). The Claude connectors-directory listing and ChatGPT
