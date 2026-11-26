@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
+import { endAllAgentAccess } from '@/lib/agent-access-sign-out';
 import { rememberAppShellCreditDigits } from '@/lib/app-shell-account-restore';
 import { isSessionRefusal } from '@/lib/auth-error-copy';
 import { checkSessionUser, forgetAccountReads, readOwnProfile } from '@/lib/browser-account-reads';
@@ -529,6 +530,19 @@ export default function AppShellAccount({
     });
     if (!confirmed) return;
     setIsSigningOutEverywhere(true);
+    // Agents first, before anything of this browser's is touched: an app connected through the
+    // app's own authorization server is not one of the account's sessions, so the sign-out below
+    // would leave it acting as the account. If that cannot be confirmed, nothing has changed and
+    // the person is told, as when the sign-out itself fails.
+    const { data: current } = await supabase.auth.getSession().catch(() => ({ data: { session: null } }));
+    if (!(await endAllAgentAccess({ accessToken: current.session?.access_token }))) {
+      setIsSigningOutEverywhere(false);
+      pushToast({
+        tone: 'error',
+        message: 'Could not sign out of all devices. You’re still signed in here; check your connection and try again.',
+      });
+      return;
+    }
     const userId = session?.user?.id;
     // While this session can still send them.
     if (userId) await releaseFeedEventsForSignOut(userId);

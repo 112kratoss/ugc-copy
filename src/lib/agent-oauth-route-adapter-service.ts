@@ -9,6 +9,7 @@ import { AgentOAuthError, isClientId } from '@/lib/agent-oauth-request';
 import {
   decideAgentConsent,
   disconnectAgentClient,
+  disconnectEveryAgentClient,
   exchangeAgentToken,
   listAgentGrants,
   revokeAgentToken,
@@ -376,13 +377,20 @@ async function handleGrantsRevoke(request: Request, dependencies: AgentOAuthRout
   const user = await requireWebAccount(request, resolved);
   if (user instanceof NextResponse) return user;
   const body = await readJsonBody(request);
+  // One app by its client id, or `all: true` for every app ("Sign out everywhere"): never both.
   const clientId = body?.clientId;
-  if (!isClientId(clientId)) return json({ error: 'clientId is required.', code: 'INVALID_REQUEST' }, 400);
+  const all = body?.all === true;
+  if (all ? clientId !== undefined : !isClientId(clientId)) {
+    return json({ error: 'clientId is required, or all: true alone.', code: 'INVALID_REQUEST' }, 400);
+  }
   if (!isAppAuthorizationServerEnabled(resolved.env)) return json({ revoked: 0 });
   try {
     const admin = resolved.admin();
     await resolved.rateLimit(admin, { ...AGENT_OAUTH_CONSENT_RATE_LIMIT, key: user.id });
-    return json({ revoked: await disconnectAgentClient(admin, { userId: user.id, clientId }) });
+    const revoked = all
+      ? await disconnectEveryAgentClient(admin, { userId: user.id })
+      : await disconnectAgentClient(admin, { userId: user.id, clientId: clientId as string });
+    return json({ revoked });
   } catch (error) {
     if (error instanceof BackendRateLimitError) {
       return json({ error: error.message, code: 'RATE_LIMITED', retryAfterSeconds: error.retryAfterSeconds }, 429);

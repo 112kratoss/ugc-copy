@@ -119,4 +119,9 @@ describe('agent_oauth_server migration', () => {
     expect(revoke).toContain('set revoked_at = now(), revoked_reason = p_reason');
     expect(revoke).toContain('delete from public.agent_oauth_tokens where grant_id = p_grant_id');
   });
+
+  it('ends one client\'s grants or, with no client named, every grant of the account', () => {
+    const revokeGrants = sql.slice(sql.indexOf('create function public.agent_oauth_revoke_grants'), sql.indexOf('create function public.agent_oauth_revoke_token'));
+    expect(revokeGrants).toMatch(/where user_id = p_user_id\s+and \(p_client_id is null or client_id = p_client_id\)\s+and revoked_at is null/u);
+  });
 });

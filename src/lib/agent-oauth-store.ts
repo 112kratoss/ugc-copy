@@ -345,10 +345,10 @@ export async function readAgentTokenAdmission(admin: SupabaseClient, tokenHash: 
   };
 }
 
-/** Ends every live grant an account gave a client; the number ended. */
+/** Ends every live grant an account gave a client, or with no client every one it gave; the number ended. */
 export async function revokeAgentOAuthGrants(
   admin: SupabaseClient,
-  input: { userId: string; clientId: string; reason: 'user' | 'operator' },
+  input: { userId: string; clientId: string | null; reason: 'user' | 'operator' },
 ): Promise<number> {
   const { data, error } = await admin.rpc('agent_oauth_revoke_grants', {
     p_user_id: input.userId,

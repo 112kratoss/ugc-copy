@@ -113,6 +113,11 @@ export async function startAgentAuthorization(
       location: buildAuthorizationResponseUrl(check.redirectUri, { error: check.error, description: check.description }, check.state),
     };
   }
+  // Housekeeping rides on the one endpoint anybody can call: requests nobody answered, and
+  // tokens long expired, a bounded batch. Its failure is not the caller's.
+  await purgeExpiredAgentOAuthRows(options.admin).catch((error: unknown) => {
+    logBackendWarning('agent_oauth_purge_failed', { error });
+  });
   const id = mintAgentSecret(AGENT_AUTHORIZATION_ID_PREFIX);
   await insertAgentOAuthAuthorization(options.admin, {
     id,
@@ -369,10 +374,6 @@ export async function exchangeAgentToken(
     grantId: issued.grantId,
     surface: issued.surface,
   });
-  // A new connection is rare enough to carry the housekeeping; its failure is not the client's.
-  await purgeExpiredAgentOAuthRows(admin).catch((error: unknown) => {
-    logBackendWarning('agent_oauth_purge_failed', { error });
-  });
   return tokenResponse(accessToken, refreshToken);
 }
 
@@ -432,5 +433,16 @@ export async function listAgentGrants(admin: SupabaseClient, userId: string): Pr
 export async function disconnectAgentClient(admin: SupabaseClient, input: { userId: string; clientId: string }): Promise<number> {
   const revoked = await revokeAgentOAuthGrants(admin, { ...input, reason: 'user' });
   if (revoked > 0) logBackendInfo('agent_oauth_grant_revoked', { clientId: input.clientId, userId: input.userId, by: 'user', grants: revoked });
+  return revoked;
+}
+
+/**
+ * "Sign out everywhere": every live grant of the account ends, whichever client holds it. An
+ * agent's access was a session of the account's while Supabase issued its token, so signing out
+ * of every device ended it; the consent page still says so, and this keeps it true.
+ */
+export async function disconnectEveryAgentClient(admin: SupabaseClient, input: { userId: string }): Promise<number> {
+  const revoked = await revokeAgentOAuthGrants(admin, { userId: input.userId, clientId: null, reason: 'user' });
+  if (revoked > 0) logBackendInfo('agent_oauth_grant_revoked', { userId: input.userId, by: 'user', all: true, grants: revoked });
   return revoked;
 }

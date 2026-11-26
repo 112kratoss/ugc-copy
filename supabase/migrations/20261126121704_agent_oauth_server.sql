@@ -162,7 +162,8 @@ begin
 end;
 $$;
 
--- Connected apps' Disconnect: every live grant an account gave a client.
+-- Connected apps' Disconnect: every live grant an account gave a client. With no client named,
+-- every live grant of the account: "Sign out everywhere" ends what acts as the account too.
 create function public.agent_oauth_revoke_grants(p_user_id uuid, p_client_id text, p_reason text)
 returns integer
 language plpgsql
@@ -175,7 +176,9 @@ declare
 begin
   for v_grant in
     select id from public.agent_oauth_grants
-     where user_id = p_user_id and client_id = p_client_id and revoked_at is null
+     where user_id = p_user_id
+       and (p_client_id is null or client_id = p_client_id)
+       and revoked_at is null
      for update
   loop
     if public.agent_oauth_revoke_grant(v_grant.id, p_reason) then

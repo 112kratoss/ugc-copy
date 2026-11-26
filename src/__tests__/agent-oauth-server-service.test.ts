@@ -109,10 +109,11 @@ vi.mock('@/lib/agent-oauth-store', () => {
       issue(grant.id, input.accessHash, input.newRefreshHash, input.accessTtlSeconds, input.refreshTtlSeconds);
       return { outcome: 'rotated', grantId: grant.id, userId: grant.userId, clientId: grant.clientId, surface: grant.surface };
     }),
-    revokeAgentOAuthGrants: vi.fn(async (_admin: unknown, input: { userId: string; clientId: string; reason: string }) => {
+    revokeAgentOAuthGrants: vi.fn(async (_admin: unknown, input: { userId: string; clientId: string | null; reason: string }) => {
       let count = 0;
       for (const grant of state.grants.values()) {
-        if (grant.userId === input.userId && grant.clientId === input.clientId && revokeGrant(grant.id, input.reason)) count += 1;
+        const named = input.clientId === null || grant.clientId === input.clientId;
+        if (grant.userId === input.userId && named && revokeGrant(grant.id, input.reason)) count += 1;
       }
       return count;
     }),
@@ -140,6 +141,7 @@ const {
   authenticateAgentOAuthClient,
   decideAgentConsent,
   disconnectAgentClient,
+  disconnectEveryAgentClient,
   exchangeAgentToken,
   isAgentAuthorizationId,
   listAgentGrants,
@@ -380,6 +382,7 @@ describe('the token endpoint: authorization code', () => {
     expect(refresh.expiresAt - store.state.now).toBe(90 * 86_400_000);
     expect([...store.state.tokens.keys()]).not.toContain(tokens.access_token);
     expect(store.state.grants.get('grant-1')).toMatchObject({ userId: USER, clientId: PUBLIC_CLIENT, surface: 'full', revokedAt: null });
+    // Housekeeping rode on the authorize request, not on the exchange.
     expect(store.state.purges).toBe(1);
   });
 
@@ -480,7 +483,7 @@ describe('the token endpoint: refresh', () => {
     expect(store.state.tokens.get(hashAgentSecret(first.refresh_token))!.usedAt).toBe(store.state.now);
     expect(store.state.tokens.has(hashAgentSecret(first.access_token))).toBe(true);
     expect(store.state.tokens.get(hashAgentSecret(second.refresh_token))).toMatchObject({ kind: 'refresh', usedAt: null, grantId: 'grant-1' });
-    // No housekeeping on a refresh: that rides on new connections.
+    // No housekeeping on a refresh: that rides on authorize requests.
     expect(store.state.purges).toBe(1);
   });
 
@@ -565,5 +568,20 @@ describe('revocation and Connected apps', () => {
     expect(await disconnectAgentClient(admin, { userId: USER, clientId: PUBLIC_CLIENT })).toBe(0);
     expect(await disconnectAgentClient(admin, { userId: OTHER_USER, clientId: POSTING_CLIENT })).toBe(0);
     expect((await listAgentGrants(admin, USER)).map((grant) => grant.clientId)).toEqual([POSTING_CLIENT]);
+  });
+
+  it('ends every grant of an account at once, and no other account\'s', async () => {
+    const mine = await connect();
+    const minePosting = await connect({ resource: `${SITE}/api/mcp/posts` });
+    const theirsId = await start();
+    const theirs = await exchangeAgentToken(codeForm((await approve(theirsId, OTHER_USER)).code), options);
+
+    expect(await disconnectEveryAgentClient(admin, { userId: USER })).toBe(2);
+    for (const token of [mine.access_token, mine.refresh_token, minePosting.access_token, minePosting.refresh_token]) {
+      expect(store.state.tokens.has(hashAgentSecret(token))).toBe(false);
+    }
+    expect(store.state.tokens.has(hashAgentSecret(theirs.access_token))).toBe(true);
+    expect(await listAgentGrants(admin, USER)).toEqual([]);
+    expect(await disconnectEveryAgentClient(admin, { userId: USER })).toBe(0);
   });
 });

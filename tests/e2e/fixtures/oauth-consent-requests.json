@@ -1,0 +1,53 @@
+{
+  "userId": "workflow-user",
+  "full": {
+    "authorization": {
+      "id": "mbar_e2eFullRequest00000000000000000000000000000",
+      "client_id": "e2e-consent-full-client",
+      "redirect_uri": "http://localhost:8976/callback",
+      "surface": "full",
+      "state": "e2e-state",
+      "user_id": "workflow-user",
+      "consent_token_hash": null,
+      "status": "pending",
+      "expires_at": "2099-01-01T00:00:00.000Z"
+    },
+    "client": {
+      "client_id": "e2e-consent-full-client",
+      "client_name": "E2E Desk Agent",
+      "client_uri": "https://agent.example.test/",
+      "redirect_uris": [
+        "http://localhost:8976/callback"
+      ],
+      "token_endpoint_auth_method": "none",
+      "client_secret_hash": null,
+      "surface": "full",
+      "disabled_at": null
+    }
+  },
+  "posts": {
+    "authorization": {
+      "id": "mbar_e2ePostsRequest0000000000000000000000000000",
+      "client_id": "e2e-consent-posts-client",
+      "redirect_uri": "https://hosted-agent.example.test/api/mcp/auth_callback",
+      "surface": "posts",
+      "state": null,
+      "user_id": "workflow-user",
+      "consent_token_hash": null,
+      "status": "pending",
+      "expires_at": "2099-01-01T00:00:00.000Z"
+    },
+    "client": {
+      "client_id": "e2e-consent-posts-client",
+      "client_name": "E2E Posting Agent",
+      "client_uri": null,
+      "redirect_uris": [
+        "https://hosted-agent.example.test/api/mcp/auth_callback"
+      ],
+      "token_endpoint_auth_method": "client_secret_post",
+      "client_secret_hash": null,
+      "surface": "posts",
+      "disabled_at": null
+    }
+  }
+}

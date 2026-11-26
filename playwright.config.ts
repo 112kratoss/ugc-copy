@@ -25,6 +25,9 @@ const PLACEHOLDER_ENV = {
   REVENUECAT_WEBHOOK_AUTH_TOKEN: 'ci-placeholder-revenuecat-webhook-token',
   // /delete-account's Continue with Apple (delete-account-apple.spec.ts answers Apple's page).
   NEXT_PUBLIC_APPLE_SERVICES_ID: 'ci-placeholder-apple-services-id',
+  // Both authorization servers, so /oauth/consent draws a request of the app's own
+  // (oauth-consent.spec.ts) as well as one of Supabase's (src/lib/agent-oauth-mode.ts).
+  MCP_AUTHORIZATION_SERVER: 'both',
 };
 
 // Every variable the app reads is listed in .env.example. The dev server gets none of them from the

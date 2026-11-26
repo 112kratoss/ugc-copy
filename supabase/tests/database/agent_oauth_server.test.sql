@@ -7,7 +7,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(81);
+select plan(84);
 
 -- ---------------------------------------------------------------------------------------------
 -- Privileges
@@ -322,6 +322,19 @@ select throws_ok(
   $$update public.agent_oauth_grants set revoked_reason = 'because' where user_id = 'ad300000-0000-4000-8000-000000000003'$$,
   '23514', null, 'a revocation names one of the known reasons'
 );
+
+-- With no client named: every live grant of the account, and nobody else's.
+insert into public.agent_oauth_grants (id, user_id, client_id, surface) values
+  ('ae100000-0000-4000-8000-000000000001', 'ad300000-0000-4000-8000-000000000003', 'client-full', 'full'),
+  ('ae200000-0000-4000-8000-000000000002', 'ad300000-0000-4000-8000-000000000003', 'client-posts', 'posts'),
+  ('ae300000-0000-4000-8000-000000000003', 'ad200000-0000-4000-8000-000000000002', 'client-full', 'full');
+insert into public.agent_oauth_tokens (token_hash, kind, grant_id, expires_at) values
+  (repeat('L', 43), 'access', 'ae100000-0000-4000-8000-000000000001', now() + interval '1 hour'),
+  (repeat('M', 43), 'refresh', 'ae200000-0000-4000-8000-000000000002', now() + interval '90 days'),
+  (repeat('N', 43), 'access', 'ae300000-0000-4000-8000-000000000003', now() + interval '1 hour');
+select is(public.agent_oauth_revoke_grants('ad300000-0000-4000-8000-000000000003', null, 'user'), 2, 'with no client named, every live grant of the account ends');
+select is((select count(*)::int from public.agent_oauth_tokens where token_hash in (repeat('L', 43), repeat('M', 43))), 0, 'with every token under them');
+select ok(public.agent_oauth_token_admission(repeat('N', 43)) is not null, 'and another account''s grant goes on');
 
 -- ---------------------------------------------------------------------------------------------
 -- Housekeeping, and the account's end
