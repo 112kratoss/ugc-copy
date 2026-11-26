@@ -284,7 +284,8 @@ export function hidesBottomNav(pathname: string) {
  * chat). A browser holding a session opens the support chat at `/support`, where a guest's
  * session meets the page's sign-in prompt with the email beside it. One holding none opens the
  * contact page: the chat's route would only send it to sign-in, and the contact page has the
- * email, the form and the link to the chat.
+ * email, the form and the link to the chat. The shell answers `hasSession` from the account
+ * island's check once made, and from the session cookie before it.
  */
 export function getAppShellHelpHref(hasSession: boolean): '/support' | '/contact' {
   return hasSession ? '/support' : '/contact';

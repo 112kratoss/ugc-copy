@@ -226,6 +226,10 @@ function render() {
   return tree;
 }
 
+function secondaryButton(tree: renderer.ReactTestRenderer, label: string) {
+  return tree.root.find((node) => String(node.type) === 'secondary-button' && node.props.label === label);
+}
+
 /** Every string drawn, nested text included. */
 function drawnText(tree: renderer.ReactTestRenderer): string[] {
   const out: string[] = [];
@@ -614,8 +618,41 @@ describe('Message support', () => {
     const tree = render();
 
     expect(tree.root.findByType('status-block' as never).props.title).toBe('Your messages could not be loaded');
-    act(() => { (tree.root.findByType('secondary-button' as never).props.onPress as () => void)(); });
+    act(() => { (secondaryButton(tree, 'Try again').props.onPress as () => void)(); });
     expect(query.refetch).toHaveBeenCalled();
+  });
+
+  // Help & Support opens this screen itself (owner, 2026-11-26), the only place the app gives the
+  // support address, so a thread that will not load still leaves the mail.
+  it('offers the mail beside the retry when the conversation could not be read', () => {
+    query.data = undefined;
+    query.isError = true;
+    appVersion.label = 'Version 0.1.9 (64) · update a17f193a';
+    const tree = render();
+
+    act(() => { (secondaryButton(tree, 'Email us instead').props.onPress as () => void)(); });
+
+    const url = new URL(openUrl.mock.calls[0][0] as string);
+    expect(`${url.protocol}${url.pathname}`).toBe('mailto:info@magicbooklet.com');
+    expect(url.searchParams.get('body')).toBe('\n\nVersion 0.1.9 (64) · update a17f193a');
+  });
+
+  it('gives a signed-in account the mail under the privacy note, with the build lines', () => {
+    appVersion.label = 'Version 0.1.9 (64) · update a17f193a';
+    for (const data of [conversation, { ...conversation, messages: [] }]) {
+      openUrl.mockClear();
+      query.data = data;
+      const tree = render();
+      const mail = tree.root.find((node) => String(node.type) === 'pressable'
+        && node.props.accessibilityLabel === 'Prefer email? Write to info@magicbooklet.com');
+
+      expect(mail.props.accessibilityRole).toBe('link');
+      act(() => { (mail.props.onPress as () => void)(); });
+      const url = new URL(openUrl.mock.calls[0][0] as string);
+      expect(`${url.protocol}${url.pathname}`, `${data.messages.length} messages`).toBe('mailto:info@magicbooklet.com');
+      expect(url.searchParams.get('body')).toBe('\n\nVersion 0.1.9 (64) · update a17f193a');
+      act(() => tree.unmount());
+    }
   });
 });
 

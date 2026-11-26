@@ -47,10 +47,11 @@ import { copyToClipboard } from '@/lib/copy-to-clipboard';
 import { formatSupportDetails, readCreatorSession } from '@/lib/creator-session-diagnostics';
 import { showConfirmDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
-import { verticalHitSlop } from '@/lib/hit-target';
+import { MIN_HIT_TARGET_PT, verticalHitSlop } from '@/lib/hit-target';
 import { uploadPickedMedia } from '@/lib/media';
 import {
   SUPPORT_CONVERSATION_PATH,
+  SUPPORT_EMAIL,
   SUPPORT_MESSAGE_COUNTER_FROM,
   SUPPORT_MESSAGE_MAX_LENGTH,
   SUPPORT_REACTION_EMOJIS,
@@ -118,6 +119,31 @@ function supportMailWithDetails() {
     formatAppVersionLabel(readAppVersionParts()),
     formatSupportDetails({ ...readUpdateRuntime(), session: readCreatorSession() }),
   ]);
+}
+
+/**
+ * The mail under the privacy note, as the web's footnote under its thread: Help & Support opens
+ * this screen itself (owner, 2026-11-26), and it is the only place the app gives the address.
+ */
+function SupportMailLine() {
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={`Prefer email? Write to ${SUPPORT_EMAIL}`}
+      accessibilityHint="Opens your email app."
+      onPress={() => void Linking.openURL(supportMailWithDetails())}
+      style={({ pressed }) => ({
+        minHeight: MIN_HIT_TARGET_PT,
+        justifyContent: 'center',
+        paddingHorizontal: 12,
+        opacity: pressed ? appTheme.opacity.pressed : 1,
+      })}
+    >
+      <AppText variant="caption" color="muted" style={{ textAlign: 'center' }}>
+        Prefer email? Write to <AppText variant="caption" color="primary">{SUPPORT_EMAIL}</AppText>
+      </AppText>
+    </Pressable>
+  );
 }
 
 /** How far a message is pulled right to reply to it, and how far it can go. */
@@ -687,6 +713,10 @@ export default function SupportScreen() {
             onPress={() => void conversation.refetch()}
           />
         ) : null}
+        {/* A thread that will not load still leaves the mail: this screen is the only place the app gives the address. */}
+        {failed ? (
+          <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(supportMailWithDetails())} />
+        ) : null}
       </Screen>
     );
   }
@@ -751,6 +781,7 @@ export default function SupportScreen() {
         <Lock size={appTheme.icon.xs} color={theme.colors.muted} />
         <AppText variant="caption" color="muted" style={{ flexShrink: 1, textAlign: 'center' }}>{SUPPORT_WORDS.privacyNote}</AppText>
       </View>
+      <SupportMailLine />
     </View>
   );
 

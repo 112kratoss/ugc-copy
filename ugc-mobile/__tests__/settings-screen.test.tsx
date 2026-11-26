@@ -296,6 +296,18 @@ describe('settings screen (HIG S16)', () => {
     expect(routerPush).toHaveBeenCalledWith('/support');
   });
 
+  // The chat answers a guest with its sign-in prompt and the email, so the row says so.
+  it('tells a guest that Help & support asks for a sign-in, or offers the email', () => {
+    const accountRow = String(rowByTitle(renderScreen(), 'Help & support').props.accessibilityLabel);
+    expect(accountRow).toContain('Write to us here in the app.');
+
+    authState.user = null;
+    const guestRow = rowByTitle(renderScreen(), 'Help & support');
+    expect(String(guestRow.props.accessibilityLabel)).toContain('Sign in to write to us here in the app, or email us without signing in.');
+    renderer.act(() => { (guestRow.props.onPress as () => void)(); });
+    expect(routerPush).toHaveBeenCalledWith('/support');
+  });
+
   it('opens AI data sharing, whose row says whether prompts and media may go to AI services', () => {
     const notAllowed = rowByTitle(renderScreen(), 'AI data sharing');
     expect(notAllowed.props.accessibilityRole).toBe('button');

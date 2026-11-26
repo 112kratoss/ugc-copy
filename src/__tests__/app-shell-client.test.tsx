@@ -7,6 +7,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellClient from '@/components/AppShellClient';
+import { publishAppShellAuthentication, resetAppShellAuthenticationForTests } from '@/components/app-shell-auth-state';
 import { APP_NAV_ITEMS, type AppNavClickHandler } from '@/components/app-shell-nav';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import type { ConfirmationRequest } from '@/components/feedback-state';
@@ -165,6 +166,8 @@ function standMenuOpen(menu: HTMLElement) {
 
 describe('AppShellClient', () => {
   beforeEach(() => {
+    // The account island's session check, which each page load starts without.
+    resetAppShellAuthenticationForTests();
     mockedPathname = '/';
     mockedSegment = null;
     mockedScrollY = 0;
@@ -1366,6 +1369,35 @@ describe('AppShellClient', () => {
       );
 
       expect(helpHrefs()).toEqual(['/contact', '/contact']);
+    });
+
+    // A cookie is only a hint: once the account island finds its session over, the chat's route
+    // would send the visitor to sign-in, so the contact page it is.
+    it('opens the contact page once the account check finds the cookie’s session over', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      document.cookie = `${COOKIE}=base64-session; path=/`;
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      act(() => publishAppShellAuthentication(false));
+
+      expect(helpHrefs()).toEqual(['/contact', '/contact']);
+    });
+
+    it('opens the chat after a sign-in later in the visit, before the cookie is read again', () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://shellref.supabase.co');
+      mockedPathname = '/create-video';
+      render(
+        <AppShellClient>
+          <div>Creator</div>
+        </AppShellClient>
+      );
+      act(() => publishAppShellAuthentication(true));
+
+      expect(helpHrefs()).toEqual(['/support', '/support']);
     });
   });
 

@@ -20,6 +20,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 
 import {
@@ -48,7 +49,11 @@ import DeferredAppShellAccount from './DeferredAppShellAccount';
 import { AppShellSearch, AppShellSearchButton } from '@/components/AppShellSearch';
 import AlertsBadge from '@/components/AlertsBadge';
 import { useUnreadAlertsCount } from '@/components/useUnreadAlertsCount';
+import { readAppShellAuthentication, subscribeToAppShellAuthentication } from './app-shell-auth-state';
 import { useSupabaseAuthCookieHint } from './useSupabaseAuthCookieHint';
+
+/** The server's answer for the account island's session check: not made yet. */
+const readNoAppShellAuthentication = () => null;
 
 // The places to go. Search, Alerts, Create and Invite & Earn are the top bar's
 // (its search field, the bell, the Create menu, the account menu), so the side
@@ -386,8 +391,16 @@ const AppShellFrame = memo(function AppShellFrame({
   const drawerRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   // The server draws the contact page's address, which no cookie can be read for; the browser
-  // swaps in the chat's once hydrated when it holds a session cookie (getAppShellHelpHref).
-  const helpHref = getAppShellHelpHref(useSupabaseAuthCookieHint());
+  // swaps in the chat's once hydrated when it holds a session cookie (getAppShellHelpHref). Once
+  // the account island has checked the session its answer decides instead: a cookie whose session
+  // has ended goes to the contact page, and a sign-in later in the visit to the chat.
+  const hasSessionCookie = useSupabaseAuthCookieHint();
+  const sessionChecked = useSyncExternalStore(
+    subscribeToAppShellAuthentication,
+    readAppShellAuthentication,
+    readNoAppShellAuthentication,
+  );
+  const helpHref = getAppShellHelpHref(sessionChecked ?? hasSessionCookie);
 
   const activeItem = useMemo(() => getActiveAppNavItem(pathname), [pathname]);
   const title = useMemo(() => getAppShellTitle(pathname), [pathname]);

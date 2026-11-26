@@ -125,7 +125,10 @@ export default function SettingsScreen() {
       <SettingsCard
         icon={<CircleHelp size={appTheme.icon.feature} color={theme.colors.text} />}
         title="Help & support"
-        body="Write to us here in the app. We reply in the same conversation and you get a notification."
+        body={user
+          ? 'Write to us here in the app. We reply in the same conversation and you get a notification.'
+          // A guest meets the chat's sign-in prompt, with the email beside it.
+          : 'Sign in to write to us here in the app, or email us without signing in.'}
         onPress={() => router.push(SUPPORT_CONVERSATION_PATH as never)}
       />
 
