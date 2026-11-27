@@ -17,7 +17,7 @@ import { AppState } from 'react-native';
 import * as Updates from 'expo-updates';
 
 import type { MagicbookletApiClient } from './api-client';
-import { subscribeToActivity } from './app-activity';
+import { hasActiveWork, subscribeToActivity } from './app-activity';
 import { claimAppReload, releaseAppReload } from './app-reload-claim';
 import { decideUpdateActionNow, type UpdateDecision } from './app-update-policy';
 import {
@@ -28,6 +28,7 @@ import {
   type AppLifecycleState,
   type BackgroundClock,
 } from './ota-update-gate';
+import { checkAndFetchUpdate, effectiveBackgroundedForMs, shouldCheckForUpdateOnReturn } from './ota-update-check';
 import type { MobileCriticalUpdate } from './types';
 
 export type OtaUpdateGate = {
@@ -51,6 +52,12 @@ export function useOtaUpdateGate(api: Pick<MagicbookletApiClient, 'getAppVersion
   const reloadingRef = useRef(false);
   // The update the server has been asked about, so each is asked about once.
   const askedUpdateIdRef = useRef<string | null>(null);
+  // The check on return (lib/ota-update-check.ts): when the app last came back, whether an update
+  // already waited then, when the server was last asked, and whether it is being asked now.
+  const returnedAtRef = useRef<number | null>(null);
+  const pendingAtReturnRef = useRef(false);
+  const lastCheckAtRef = useRef<number | null>(null);
+  const checkingRef = useRef(false);
 
   // A rollback directive has no id, and is never the server's to flag.
   const pendingUpdateId = isUpdatePending && typeof downloadedUpdate?.updateId === 'string'
@@ -101,13 +108,39 @@ export function useOtaUpdateGate(api: Pick<MagicbookletApiClient, 'getAppVersion
     const decision: UpdateDecision = decideUpdateActionNow({
       isUpdatePending,
       isCritical,
-      backgroundedForMs: clockRef.current.backgroundedForMs,
+      backgroundedForMs: effectiveBackgroundedForMs({
+        backgroundedForMs: clockRef.current.backgroundedForMs,
+        pendingAtReturn: pendingAtReturnRef.current,
+        returnedAtMs: returnedAtRef.current,
+        nowMs: Date.now(),
+      }),
       criticalPromptDismissed: dismissedRef.current,
     });
 
     if (decision === 'apply-silently') reload();
     else if (decision === 'prompt') setCriticalPromptVisible(true);
   }, [isCritical, isRestarting, isUpdatePending, reload]);
+
+  // A return after a long absence asks the update server, never during a purchase, a run or an
+  // upload, and at most once per interval. What it fetches makes `isUpdatePending` true, and the
+  // gate decides on that as on any download. Failures leave the cold start's check.
+  const checkForUpdate = useCallback(() => {
+    const nowMs = Date.now();
+    if (!shouldCheckForUpdateOnReturn({
+      enabled: Updates.isEnabled,
+      isUpdatePending,
+      checking: checkingRef.current,
+      hasActiveWork: hasActiveWork(),
+      backgroundedForMs: clockRef.current.backgroundedForMs,
+      lastCheckAtMs: lastCheckAtRef.current,
+      nowMs,
+    })) return;
+    checkingRef.current = true;
+    lastCheckAtRef.current = nowMs;
+    void checkAndFetchUpdate(Updates).finally(() => {
+      checkingRef.current = false;
+    });
+  }, [isUpdatePending]);
 
   // Three signals, not a timer. A timer would fire mid-generation, get vetoed
   // by the activity lock, and burn battery re-asking; these are the three
@@ -117,12 +150,15 @@ export function useOtaUpdateGate(api: Pick<MagicbookletApiClient, 'getAppVersion
       const previous = clockRef.current;
       clockRef.current = advanceBackgroundClock(previous, next as AppLifecycleState, Date.now());
       if (isReturnFromBackground(previous, next as AppLifecycleState)) {
+        returnedAtRef.current = Date.now();
+        pendingAtReturnRef.current = isUpdatePending;
         askServer();
         evaluate();
+        checkForUpdate();
       }
     });
     return () => subscription.remove();
-  }, [askServer, evaluate]);
+  }, [askServer, checkForUpdate, evaluate, isUpdatePending]);
 
   // A download finishing: the server is asked about it, and its answer
   // arriving is another chance to decide.
