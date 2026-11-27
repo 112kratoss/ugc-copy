@@ -16,6 +16,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { PublicIdentityCard } from '@/components/public-identity-card';
 import { Overlay } from '@/components/overlay-host';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
+import { applyEditedPostToShowcaseFeedLanes, refreshShowcaseFeedTimelines } from '@/lib/showcase-feed-lane-refresh';
 import { showConfirmDialog, showMessageDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
@@ -3046,6 +3047,14 @@ function NewPostComposer() {
       void invalidatePostCaches(queryClient, user?.id);
       if (isEditMode && targetPostId) {
         void invalidateEditedPostCaches(queryClient, user?.id, targetPostId);
+        // The feed lanes are not read again for an edit; their copy of this
+        // post is brought up to date, or leaves if it is no longer public.
+        void applyEditedPostToShowcaseFeedLanes(
+          queryClient,
+          api,
+          targetPostId,
+          response.visibility ?? context?.submittedDraft.visibility,
+        );
       }
       if (targetPostId) {
         setIsNavigationAllowed(true);
@@ -5745,7 +5754,10 @@ async function invalidatePostCaches(queryClient: QueryClient, userId: string | u
     // The header's post count and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
     queryClient.invalidateQueries({ queryKey: ['generations', userId] }),
-    queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+    // Only the Recent timeline is read again, where the new post belongs at
+    // the top. Reading a ranked lane again re-ranked every loaded page of Home
+    // and Explore behind the composer (`showcase-feed-lane-refresh.ts`).
+    refreshShowcaseFeedTimelines(queryClient),
     // Home's shelf asks a member who has never posted to post; after a first
     // post it offers the next thing instead.
     queryClient.invalidateQueries({ queryKey: ['home-shelf'] }),

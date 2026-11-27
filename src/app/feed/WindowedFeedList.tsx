@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 export const FEED_WINDOW_MAX_MOUNTED_CARDS = 24;
 const FEED_WINDOW_INITIAL_CARD_COUNT = 12;
@@ -9,6 +10,38 @@ const FEED_WINDOW_OVERSCAN_PX = 1_280;
 const FEED_WINDOW_HEIGHT_CACHE_MAX_ENTRIES = 240;
 
 const feedCardHeightCache = new Map<string, number>();
+/**
+ * The cards this document has really laid out, of the ones it holds a height
+ * for. A measure alone does not say so: a card that skips its layout off screen
+ * (`content-visibility: auto`) is measured at its placeholder's height from the
+ * moment it is mounted, 1280px from the window, and the browser draws it only
+ * from one and a half windows away (so never, for a reader who jumps past it,
+ * and not yet for one in a window under 853px tall). A card is drawn once it is
+ * measured while laid out (`isLaidOut`).
+ */
+const feedCardDrawnKeys = new Set<string>();
+
+/**
+ * A card that skips its layout off screen puts this attribute on the element
+ * that does, for as long as it may be a placeholder.
+ */
+export const FEED_CARD_PLACEHOLDER_ATTRIBUTE = 'data-feed-card-placeholder';
+
+/**
+ * Whether a mounted card is laid out now, so that its measure is its own
+ * height and not its placeholder's. One with no placeholder is. One with a
+ * placeholder is once the browser renders what is inside it: skipped, none of
+ * its parts is. A browser that cannot say (no `checkVisibility`, or one that
+ * does not know `contentVisibilityAuto` and answers for the box alone) has
+ * every measured card taken as laid out.
+ */
+function isLaidOut(mounted: Element): boolean {
+  const placeholder = mounted.querySelector(`[${FEED_CARD_PLACEHOLDER_ATTRIBUTE}]`);
+  if (!placeholder) return true;
+  const parts = [...placeholder.children];
+  if (parts.length === 0 || typeof parts[0].checkVisibility !== 'function') return true;
+  return parts.some((part) => part.checkVisibility({ contentVisibilityAuto: true }));
+}
 
 export interface WindowedFeedRange {
   startIndex: number;
@@ -66,6 +99,51 @@ export function getWindowedFeedRange({
   return { startIndex, endIndex, offsets, totalHeight };
 }
 
+/**
+ * One mounted card, at its place in the list. `drawnBefore` is decided as the
+ * card mounts and holds for as long as it stays mounted: whether this document
+ * has laid the card out already (it scrolled out of the window and is back, or
+ * the reader left the page and came Back to it). Such a card is placed, and
+ * every card after it, by the height it was drawn at, so it must be laid out
+ * at that height again from its first frame. A card that skips its layout off
+ * screen (`content-visibility: auto`) stands at its placeholder's height until
+ * it is drawn, was measured again at that height, and the cards after it took
+ * other places than the ones the reader left them in (owner's report,
+ * 2026-11-27: Back to Home came back 153 to 918px away from the card that was
+ * left). The feed's cards take `drawnBefore` to lay themselves out in full. A
+ * card only ever measured as a placeholder is not one: what the list holds of
+ * it is the placeholder's height, and in full it would take its own and move
+ * the cards after it the same way (`feedCardDrawnKeys`).
+ */
+function WindowedFeedItem<T>({
+  item,
+  index,
+  itemKey,
+  top,
+  renderItem,
+}: {
+  item: T;
+  index: number;
+  itemKey: string;
+  top: number;
+  renderItem: (item: T, index: number, drawnBefore: boolean) => ReactNode;
+}) {
+  const [drawnBefore] = useState(() => feedCardDrawnKeys.has(itemKey) && feedCardHeightCache.has(itemKey));
+  return (
+    <div
+      data-feed-window-key={itemKey}
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top,
+      }}
+    >
+      {renderItem(item, index, drawnBefore)}
+    </div>
+  );
+}
+
 export default function WindowedFeedList<T>({
   items,
   getKey,
@@ -75,7 +153,8 @@ export default function WindowedFeedList<T>({
 }: {
   items: T[];
   getKey: (item: T) => string;
-  renderItem: (item: T, index: number) => ReactNode;
+  /** `drawnBefore`: this document has measured the card before this mount of it (`WindowedFeedItem`). */
+  renderItem: (item: T, index: number, drawnBefore: boolean) => ReactNode;
   /**
    * Cards with live interaction state, such as an open comment composer. They
    * may sit outside the ordinary bounded viewport range but remain mounted so
@@ -86,6 +165,12 @@ export default function WindowedFeedList<T>({
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
+  // Until the list's first frame is painted, a scroll is the browser putting
+  // the reader back where they were (Back), and the cards at that place are
+  // mounted before the paint. A frame later, as every other scroll is taken,
+  // the first frame after Back drew the feed's first cards far above the
+  // window and nothing in it.
+  const firstFramePendingRef = useRef(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
   // What the last committed viewport mounts. A scroll frame that would mount
   // the same cards is dropped before it reaches React: with 24 cards and an
@@ -173,6 +258,10 @@ export default function WindowedFeedList<T>({
       setViewport(next);
     };
     const scheduleUpdate = () => {
+      if (firstFramePendingRef.current) {
+        flushSync(updateViewport);
+        return;
+      }
       if (frameRef.current !== null) return;
       frameRef.current = window.requestAnimationFrame(updateViewport);
     };
@@ -186,6 +275,13 @@ export default function WindowedFeedList<T>({
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
     };
   }, [gap, items.length, keys, measurementVersion]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      firstFramePendingRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     committedRangeRef.current = viewport.ready
@@ -204,7 +300,10 @@ export default function WindowedFeedList<T>({
         const key = entry.target.getAttribute('data-feed-window-key');
         if (!key) continue;
         const height = entry.target.getBoundingClientRect().height;
-        if (height <= 0 || Math.abs((feedCardHeightCache.get(key) ?? 0) - height) < 1) continue;
+        if (height <= 0) continue;
+        // Drawn: this measure, or the one already held if it is the same, is the card's own.
+        if (isLaidOut(entry.target)) feedCardDrawnKeys.add(key);
+        if (Math.abs((feedCardHeightCache.get(key) ?? 0) - height) < 1) continue;
         feedCardHeightCache.delete(key);
         feedCardHeightCache.set(key, height);
         changed = true;
@@ -214,6 +313,7 @@ export default function WindowedFeedList<T>({
         const oldestKey = feedCardHeightCache.keys().next().value as string | undefined;
         if (!oldestKey) break;
         feedCardHeightCache.delete(oldestKey);
+        feedCardDrawnKeys.delete(oldestKey);
       }
       if (changed) setMeasurementVersion((current) => current + 1);
     });
@@ -242,18 +342,14 @@ export default function WindowedFeedList<T>({
         const item = items[itemIndex];
         const key = keys[itemIndex];
         return (
-          <div
+          <WindowedFeedItem
             key={key}
-            data-feed-window-key={key}
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              top: range.offsets[itemIndex],
-            }}
-          >
-            {renderItem(item, itemIndex)}
-          </div>
+            item={item}
+            index={itemIndex}
+            itemKey={key}
+            top={range.offsets[itemIndex]}
+            renderItem={renderItem}
+          />
         );
       })}
     </div>

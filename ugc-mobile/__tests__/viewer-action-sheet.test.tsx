@@ -27,6 +27,9 @@ const routerState = vi.hoisted(() => ({
 
 const queryClientState = vi.hoisted(() => ({
   invalidateQueries: vi.fn(),
+  // The feed lanes a post action writes its change into: none cached here.
+  getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
+  getQueryState: vi.fn(() => undefined),
   setQueryData: vi.fn(),
   setQueriesData: vi.fn(),
 }));

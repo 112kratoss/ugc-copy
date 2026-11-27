@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import FeedPostCard from '@/app/feed/FeedPostCard';
+import { FEED_CARD_PLACEHOLDER_ATTRIBUTE } from '@/app/feed/WindowedFeedList';
 import {
     flushShowcaseFeedEvents,
     QualifiedImpressionBoundary,
@@ -388,6 +389,31 @@ describe('FeedPostCard click routing', () => {
 
         expect(onOpenPost).toHaveBeenCalledTimes(1);
         expect(onOpenMedia).not.toHaveBeenCalled();
+    });
+});
+
+// Back to Home mounts the feed's cards again. One the feed has measured is
+// placed by that measure, and so is every card after it: as a placeholder
+// (`content-visibility: auto`) it stood at the placeholder's height until it
+// was drawn, was measured again at that height, and the reader's card moved
+// (owner's report, 2026-11-27; tests/e2e/home-back-keeps-place.spec.ts).
+describe("FeedPostCard's layout off screen", () => {
+    it('is a placeholder until drawn, and laid out in full once the feed has drawn it before', () => {
+        renderCard();
+        expect(screen.getByRole('article')).toHaveClass('[content-visibility:auto]', '[contain-intrinsic-size:auto_640px]');
+        // Named as one for the feed's list, which then asks whether its contents are drawn
+        // before taking a measure of it for the card's own height.
+        expect(screen.getByRole('article')).toHaveAttribute(FEED_CARD_PLACEHOLDER_ATTRIBUTE);
+        expect(screen.getByRole('article').children.length).toBeGreaterThan(0);
+        cleanup();
+
+        renderCard({}, { laidOutInFull: true });
+        const card = screen.getByRole('article');
+        expect(card.className).not.toContain('content-visibility');
+        expect(card.className).not.toContain('contain-intrinsic-size');
+        expect(card).not.toHaveAttribute(FEED_CARD_PLACEHOLDER_ATTRIBUTE);
+        // The card's own frame is the same either way.
+        expect(card).toHaveClass('overflow-hidden', 'rounded-3xl');
     });
 });
 

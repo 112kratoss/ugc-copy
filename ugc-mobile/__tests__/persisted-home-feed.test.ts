@@ -9,6 +9,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 vi.mock('expo-constants', () => ({ default: { expoConfig: { version: '0.1.4' } } }));
 
+import { mergeUnderRestoredPage } from '../lib/launch-feed-refresh';
 import { HOME_FEED_CHIPS } from '@/lib/home-feed-view-model';
 import {
   PERSISTED_HOME_FEED_CHIP_ID,
@@ -166,6 +167,23 @@ describe('persistHomeFeed', () => {
     const saved = JSON.parse(storage.values.get(PERSISTED_HOME_FEED_STORAGE_KEY) ?? 'null');
     expect(saved).toMatchObject({ viewerUserId: 'user-1', dataUpdatedAt: FETCHED_AT, pageParam: { offset: 0 } });
     expect(savedIds(storage)).toEqual(['a', 'b']);
+  });
+
+  // A launch whose refresh landed under a page the reader had touched: the
+  // kept posts are that launch's. Saved, they would open every later launch.
+  it('saves the page as the server answered it, without the posts the launch kept on top', async () => {
+    const storage = memoryStorage();
+    const merged = mergeUnderRestoredPage(feedPage(['kept-1', 'both', 'kept-2']), feedPage(['new-1', 'both', 'new-2']));
+    const client = clientWithLane('user-1', { pages: [merged], pageParams: [{ offset: 0 }] });
+
+    await persistHomeFeed(client, 'user-1', environment(storage));
+
+    expect(savedIds(storage)).toEqual(['both', 'new-1', 'new-2']);
+    const saved = JSON.parse(storage.values.get(PERSISTED_HOME_FEED_STORAGE_KEY) ?? 'null');
+    expect(saved.page).not.toHaveProperty('keptRestoredPostIds');
+    // The lane itself still holds them, for the reader who is on them.
+    expect(client.getQueryData<HomeFeedData>(createPersistedHomeFeedQueryKey('user-1'))?.pages[0].items.map((item) => item.id))
+      .toEqual(['kept-1', 'both', 'kept-2', 'new-1', 'new-2']);
   });
 
   it('saves nothing for a lane that has not loaded, or that holds no posts', async () => {

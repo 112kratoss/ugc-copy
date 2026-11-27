@@ -1199,6 +1199,12 @@ export interface ShowcaseFeedResponse {
   };
   /** On a signed-in reader's For you pages: this server ranks a first page ahead without writing it (`lib/explore-read-ahead.ts`). */
   readAheadSupported?: boolean;
+  /**
+   * Set by the app, never sent by the server: the posts a launch kept on top of
+   * this page from the page it restored (`lib/launch-feed-refresh.ts`). They are
+   * that launch's alone, and are left out when the page is saved for the next.
+   */
+  keptRestoredPostIds?: string[];
 }
 
 /** A For you first page ranked ahead and held for the read that shows it; null when there was nothing to hold. */

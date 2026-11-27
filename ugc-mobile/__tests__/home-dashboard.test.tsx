@@ -284,6 +284,12 @@ vi.mock('@/lib/post-view-reporter', () => ({
   reportPostView: postViewReports,
 }));
 
+// The real rule for which read is the launch's; the keep itself is watched.
+vi.mock('@/lib/launch-feed-refresh', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/launch-feed-refresh')>()),
+  keepRestoredPage: vi.fn(),
+}));
+
 vi.mock('@/lib/persisted-home-feed', () => ({
   PERSISTED_HOME_FEED_CHIP_ID: 'for-you',
   cancelScheduledPersistHomeFeed: vi.fn(),
@@ -410,6 +416,7 @@ import { resetAutoplayPreferenceForTests } from '../lib/autoplay-preference';
 import { resetGoneFeedMediaForTests } from '../lib/gone-feed-media';
 import { haptic } from '../lib/haptics';
 import { FEED_PREPARED_WINDOW_STEP_MS } from '../lib/media-performance';
+import { keepRestoredPage } from '../lib/launch-feed-refresh';
 import { schedulePersistHomeFeed } from '../lib/persisted-home-feed';
 import { cancelScheduledPersistHomeShelf, schedulePersistHomeShelf } from '../lib/persisted-home-shelf';
 import { REMIX_LAUNCH_PARAM, REMIX_UNLOCK_REQUIRED_CODE, findRemixLaunch, type RemixLaunch } from '../lib/remix-start';
@@ -1050,6 +1057,54 @@ describe('Home screen', () => {
     expect(queryState.client.setQueryData).not.toHaveBeenCalled();
 
     renderer.act(() => tree.unmount());
+  });
+
+  // Owner, 2026-11-27: a cold start drew the saved page, and seconds later,
+  // after a scroll or a post opened and closed, other posts stood in its place.
+  describe('the read a launch owes the saved page', () => {
+    beforeEach(() => {
+      vi.mocked(keepRestoredPage).mockClear();
+    });
+
+    const touchHome = (tree: renderer.ReactTestRenderer) => {
+      const touched = tree.root.findAll((node) => typeof node.props.onTouchStart === 'function')[0];
+      renderer.act(() => touched.props.onTouchStart());
+    };
+
+    it('keeps the saved page from the first touch: its posts stay and the answer lands under them', () => {
+      queryState.pages = [page([mediaItem('a', 'delivery-launch-a')])];
+      // Fetched by the launch before this one, and being read again.
+      queryState.dataUpdatedAt = 1;
+      queryState.isFetching = true;
+      const { tree } = renderHome();
+      expect(vi.mocked(keepRestoredPage)).not.toHaveBeenCalled();
+
+      touchHome(tree);
+
+      const laneKey = vi.mocked(showcaseFeedLaneQueryOptions).mock.results.at(-1)!.value.queryKey;
+      expect(vi.mocked(keepRestoredPage)).toHaveBeenCalledWith(laneKey);
+      // Nothing is cancelled and nothing is offered: the read goes on, and the lane takes its answer.
+      expect(hostProps(tree, 'new-posts-pill').visible).toBe(false);
+      renderer.act(() => tree.unmount());
+    });
+
+    it('is the only read a touch speaks to: not a page read in this launch, nor a saved page at rest', () => {
+      queryState.pages = [page([mediaItem('a', 'delivery-launch-b')])];
+      // Later than this launch began, whatever clock the suite has set.
+      queryState.dataUpdatedAt = Number.MAX_SAFE_INTEGER;
+      queryState.isFetching = true;
+      const refreshing = renderHome();
+      touchHome(refreshing.tree);
+      renderer.act(() => refreshing.tree.unmount());
+
+      queryState.dataUpdatedAt = 1;
+      queryState.isFetching = false;
+      const resting = renderHome();
+      touchHome(resting.tree);
+
+      expect(vi.mocked(keepRestoredPage)).not.toHaveBeenCalled();
+      renderer.act(() => resting.tree.unmount());
+    });
   });
 
   it('takes the pill’s tap to the top, then cuts the lane to its first page and refetches it, with no refresh control', async () => {

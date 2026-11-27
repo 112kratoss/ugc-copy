@@ -3151,6 +3151,8 @@ describe('ShowcaseClient save actions', () => {
 
     expect(await screen.findByText('Fresh Frame')).toBeInTheDocument();
     expect(screen.queryByText('Kept Frame')).not.toBeInTheDocument();
+    // A grid drawn afresh: its tiles are placeholders until drawn, as on a first visit.
+    expect(screen.getByText('Fresh Frame', { selector: 'h3' }).closest('.min-w-0.flex-col')).toHaveClass('[content-visibility:auto]');
     expect(window.scrollTo).toHaveBeenCalledTimes(1);
     expect(window.scrollTo).toHaveBeenCalledWith({ top: 0 });
     expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled();
@@ -3286,6 +3288,58 @@ describe('ShowcaseClient save actions', () => {
 
     expect(screen.getByText('Server Frame')).toBeInTheDocument();
     expect(screen.queryByText('Kept Frame')).not.toBeInTheDocument();
+  });
+
+  // Back draws the kept grid with new elements, none of them drawn yet. As
+  // placeholders (`content-visibility: auto`) every row above the reader stood
+  // at the placeholder's height, not its own, and the browser put the scroll
+  // back into that longer page: the reader came back a row or more away from
+  // the post they had stopped on (owner's report, 2026-11-27;
+  // tests/e2e/explore-back-keeps-place.spec.ts measures it).
+  it('lays the tiles of a kept grid out in full, and those of a grid drawn afresh as placeholders', () => {
+    const tileOf = (title: string) => screen.getByText(title, { selector: 'h3' }).closest('.min-w-0.flex-col');
+    const lane = (sort: ShowcaseSort, title: string) => (
+      <ShowcaseClient
+        initialFeed={createFeed(createShowcaseItem({ id: `post-${sort}`, generationId: `gen-${sort}`, title }))}
+        initialCategory="all"
+        initialSort={sort}
+        initialTool={null}
+        initialUnlock="all"
+        initialResource="all"
+        sourceToolOptions={SOURCE_TOOL_OPTIONS}
+      />
+    );
+
+    // A first visit: nothing kept, every tile a placeholder until it is drawn.
+    const firstVisit = render(lane('recent', 'Server Frame'));
+    expect(tileOf('Server Frame')).toHaveClass('[content-visibility:auto]', '[contain-intrinsic-size:auto_520px]');
+    firstVisit.unmount();
+
+    writeShowcaseClientSnapshot(buildShowcaseClientCacheKey({
+      viewerId: 'user-1',
+      category: 'all',
+      sort: 'recent',
+      tool: null,
+      unlock: 'all',
+      resource: 'all',
+    }), {
+      feed: createFeed([
+        createShowcaseItem({ id: 'post-kept-1', generationId: 'gen-kept-1', title: 'Kept Frame One' }),
+        createShowcaseItem({ id: 'post-kept-2', generationId: 'gen-kept-2', title: 'Kept Frame Two' }),
+      ]),
+      renderedItemCount: 2,
+      savedItemIds: [],
+    });
+    const back = render(lane('recent', 'Server Frame'));
+    for (const title of ['Kept Frame One', 'Kept Frame Two']) {
+      expect(tileOf(title)).toBeInTheDocument();
+      expect(tileOf(title)?.className).not.toContain('content-visibility');
+      expect(tileOf(title)?.className).not.toContain('contain-intrinsic-size');
+    }
+
+    // Another lane is drawn afresh, from its first row.
+    back.rerender(lane('top-saves', 'Saved Frame'));
+    expect(tileOf('Saved Frame')).toHaveClass('[content-visibility:auto]');
   });
 
   // The filter bar stays on screen deep in the grid. A lane changed from
