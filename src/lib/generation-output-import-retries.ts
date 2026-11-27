@@ -6,6 +6,19 @@ import { logBackendError, logBackendInfo } from '@/lib/backend-logger';
 import { GenerationServiceError } from '@/lib/generation-service-core';
 import { settleGenerationFailed } from '@/lib/generation-settlement';
 import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/lib/mobile-notifications';
+import {
+  classifyGenerationOutputImportError,
+  GENERATION_OUTPUT_IMPORT_GIVE_UP_AFTER_HOURS,
+  GENERATION_OUTPUT_IMPORT_RETRY_EVERY_MINUTES,
+  generationOutputImportWindowEnded,
+} from '@/lib/generation-output-import-window';
+
+export {
+  classifyGenerationOutputImportError,
+  GENERATION_OUTPUT_IMPORT_GIVE_UP_AFTER_HOURS,
+  GENERATION_OUTPUT_IMPORT_RETRY_EVERY_MINUTES,
+  isGenerationOutputImportRetrying,
+} from '@/lib/generation-output-import-window';
 
 /**
  * What happens to a generation whose provider finished but whose file could
@@ -32,10 +45,7 @@ import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/li
  * `refunded` once set, and an import that lands afterwards finds the row
  * failed and settles nothing.
  *
- * The window runs from when the provider finished (or, if that is unknown or
- * later, from when the import was queued). 24 hours: Kie's retention of output
- * files is not recorded in docs/model-api-references/, so the stated ceiling
- * is the binding one; a shorter documented retention would shorten it.
+ * The window and its length are generation-output-import-window.ts.
  *
  * While the window is open the generation is excluded from backend health's
  * GENERATION_STALLED_ACTIVE (isGenerationOutputImportRetrying), and the
@@ -44,29 +54,13 @@ import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/li
  * release but still reaches the owner.
  */
 
-export const GENERATION_OUTPUT_IMPORT_GIVE_UP_AFTER_HOURS = 24;
-export const GENERATION_OUTPUT_IMPORT_RETRY_EVERY_MINUTES = 60;
 export const GENERATION_OUTPUT_IMPORT_RETRY_BATCH_LIMIT = 10;
 
 export const GENERATION_OUTPUT_IMPORT_ABANDONED_MESSAGE =
   'The render finished, but its file could not be saved before the provider removed it. Your credits have been refunded.';
 
 const ACTIVE_GENERATION_STATUSES = ['waiting', 'processing'];
-const RETRYING_IMPORT_STATUSES = new Set(['pending', 'processing', 'failed']);
 const HOUR_MS = 60 * 60 * 1000;
-
-export type GenerationOutputImportErrorClass =
-  | 'host_not_allowed'
-  | 'file_too_large'
-  | 'provider_fetch_failed'
-  | 'storage_failed'
-  | 'other';
-
-type ImportWindowFields = {
-  status?: string | null;
-  provider_completed_at?: string | null;
-  created_at?: string | null;
-};
 
 type ExhaustedImportRow = {
   id: string;
@@ -89,59 +83,8 @@ export type GenerationOutputImportRetrySummary = {
   deferred: number;
 };
 
-function parseMs(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-/** The earlier of when the provider finished and when the import was queued. */
-export function generationOutputImportWindowStartMs(job: ImportWindowFields): number | null {
-  const times = [parseMs(job.provider_completed_at), parseMs(job.created_at)]
-    .filter((ms): ms is number => ms !== null);
-  return times.length > 0 ? Math.min(...times) : null;
-}
-
-function windowEnded(job: ImportWindowFields, nowMs: number): boolean {
-  const start = generationOutputImportWindowStartMs(job);
-  // No usable clock at all: end it rather than hold the credits for ever.
-  if (start === null) return true;
-  return nowMs - start >= GENERATION_OUTPUT_IMPORT_GIVE_UP_AFTER_HOURS * HOUR_MS;
-}
-
-/**
- * Whether a generation is waiting on its output import inside the retry
- * window: its provider finished and the file is still being retried. Takes the
- * import job as PostgREST embeds a one-to-one relation (object, array or null).
- */
-export function isGenerationOutputImportRetrying(
-  embed: ImportWindowFields | ImportWindowFields[] | null | undefined,
-  now: Date,
-): boolean {
-  const job = Array.isArray(embed) ? embed[0] : embed;
-  if (!job || !RETRYING_IMPORT_STATUSES.has(job.status ?? '')) return false;
-  if (generationOutputImportWindowStartMs(job) === null) return false;
-  return !windowEnded(job, now.getTime());
-}
-
-/** The class of a stored import error, worded for the owner's next step. */
-export function classifyGenerationOutputImportError(
-  lastError: string | null | undefined,
-): GenerationOutputImportErrorClass {
-  const text = (lastError ?? '').toLowerCase();
-  if (!text) return 'other';
-  if (/exceeds the allowed size|maximum allowed size|too large|payload too large/.test(text)) return 'file_too_large';
-  if (/not allowlisted/.test(text)) return 'host_not_allowed';
-  if (/remote media|remote response|fetch failed|timed out|timeout|econn|enotfound|socket|aborted|network/.test(text)) {
-    return 'provider_fetch_failed';
-  }
-  if (/storage|bucket|upload|object/.test(text)) return 'storage_failed';
-  return 'other';
-}
-
 function cutoffs(nowMs: number) {
   return {
-    nowIso: new Date(nowMs).toISOString(),
     retryBeforeIso: new Date(nowMs - GENERATION_OUTPUT_IMPORT_RETRY_EVERY_MINUTES * 60 * 1000).toISOString(),
     giveUpBeforeIso: new Date(nowMs - GENERATION_OUTPUT_IMPORT_GIVE_UP_AFTER_HOURS * HOUR_MS).toISOString(),
   };
@@ -254,12 +197,12 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
       continue;
     }
     try {
-      if (windowEnded(row, nowMs)) {
+      if (generationOutputImportWindowEnded(row, nowMs)) {
         summary[await abandon(params.client, row)] += 1;
         continue;
       }
-      const lastAttemptMs = parseMs(row.completed_at);
-      if (lastAttemptMs !== null && lastAttemptMs > retryBeforeMs) {
+      const lastAttemptMs = row.completed_at ? Date.parse(row.completed_at) : Number.NaN;
+      if (Number.isFinite(lastAttemptMs) && lastAttemptMs > retryBeforeMs) {
         summary.skipped += 1;
         continue;
       }

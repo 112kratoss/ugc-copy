@@ -25,6 +25,10 @@ import {
   type FeedRetentionLagReport,
 } from '@/lib/feed-retention-lag';
 import { getMediaUploadReclaimPolicy } from '@/lib/media-upload-reclaim-policy';
+import {
+  isGenerationOutputImportRetrying,
+  type GenerationOutputImportWindowFields,
+} from '@/lib/generation-output-import-window';
 import { PAYMENT_WEBHOOK_PROCESSING_SERVICE_NAMES } from '@/lib/provider-dependency-telemetry';
 
 export type BackendHealthStatus = 'ok' | 'warning' | 'degraded';
@@ -49,6 +53,7 @@ type GenerationStatusRow = {
 type StalledGenerationRow = {
   created_at: string | null;
   cost: number | string | null;
+  generation_output_import_jobs?: GenerationOutputImportWindowFields | GenerationOutputImportWindowFields[] | null;
 };
 
 type QueuedSubmissionEmbed = { queued_at: string | null };
@@ -74,6 +79,22 @@ export function isPendingGenerationWaitingInQueue(row: PendingGenerationWithoutP
   const queuedAt = queued?.queued_at ? Date.parse(queued.queued_at) : Number.NaN;
   return Number.isFinite(queuedAt)
     && now.getTime() - queuedAt < QUEUED_START_OVERDUE_AFTER_MINUTES * 60 * 1000;
+}
+
+/**
+ * A generation whose provider finished and whose output import is still being
+ * retried inside its bounded window (generation-output-import-window.ts) is
+ * not stalled: it ends by itself, delivered or refunded, and is reported on
+ * /api/ops/backend-alerts as GENERATION_OUTPUT_IMPORT_FAILING instead, so it
+ * does not hold a release. Every other active generation older than the
+ * threshold, including one whose window has ended, still counts.
+ *
+ * A full sample excludes nothing: what lies past the cap is unseen, and an
+ * incident that leaves that many renders retrying is worth holding for.
+ */
+function excludeImportRetries(rows: StalledGenerationRow[], now: Date): StalledGenerationRow[] {
+  if (rows.length >= GENERATION_STALLED_SAMPLE_LIMIT) return rows;
+  return rows.filter((row) => !isGenerationOutputImportRetrying(row.generation_output_import_jobs, now));
 }
 
 type GenerationCompletionQueueRow = {
@@ -374,6 +395,11 @@ const JOB_LOOKBACK_HOURS = 48;
 const JOB_RUN_PAGE_SIZE = 1_000;
 const GENERATION_RECENT_WINDOW_MINUTES = 60;
 const GENERATION_STALLED_AFTER_MINUTES = 60;
+/**
+ * The stalled sample. A full sample excludes nothing: rows past the cap are
+ * unseen, so one of them may be stalled for real (see excludeImportRetries).
+ */
+const GENERATION_STALLED_SAMPLE_LIMIT = 200;
 const GENERATION_PENDING_WITHOUT_PROVIDER_TASK_AFTER_MINUTES = 5;
 /** The queue's ten minutes, and the ten between two cron passes that would end an overdue run. */
 const QUEUED_START_OVERDUE_AFTER_MINUTES = 20;
@@ -1374,11 +1400,11 @@ export async function collectBackendHealth(
       .limit(HEALTH_RECENCY_SAMPLE_LIMIT + 1),
     client
       .from('generations')
-      .select('created_at,cost')
+      .select('created_at,cost,generation_output_import_jobs(status,provider_completed_at,created_at)')
       .in('status', ['pending', 'waiting', 'processing'])
       .lt('created_at', stalledBefore)
       .order('created_at', { ascending: true })
-      .limit(50),
+      .limit(GENERATION_STALLED_SAMPLE_LIMIT),
     client
       .from('generations')
       .select('created_at,cost,generation_queued_submissions(queued_at)')
@@ -1473,7 +1499,7 @@ export async function collectBackendHealth(
   const schedulerResult = buildSchedulerHealth();
   const generationResult = buildGenerationHealth(
     healthSample('generations', (recentGenerationsResult.data ?? []) as GenerationStatusRow[], HEALTH_RECENCY_SAMPLE_LIMIT, recentGenerationsResult.count),
-    (stalledGenerationsResult.data ?? []) as StalledGenerationRow[],
+    excludeImportRetries((stalledGenerationsResult.data ?? []) as StalledGenerationRow[], now),
     ((pendingWithoutProviderTaskResult.data ?? []) as PendingGenerationWithoutProviderTaskRow[])
       .filter((row) => !isPendingGenerationWaitingInQueue(row, now)),
   );

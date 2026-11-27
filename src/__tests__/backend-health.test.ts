@@ -559,7 +559,11 @@ describe('collectBackendHealth', () => {
       '2026-06-19T10:00:00.000Z',
     );
     expect(db.builders.generations[0].select).toHaveBeenCalledWith('status,created_at,cost', { count: 'exact' });
-    expect(db.builders.generations[1].select).toHaveBeenCalledWith('created_at,cost');
+    // With its output import, if it has one: a finished render whose file is
+    // still being retried inside its window is not a stalled generation.
+    expect(db.builders.generations[1].select).toHaveBeenCalledWith(
+      'created_at,cost,generation_output_import_jobs(status,provider_completed_at,created_at)',
+    );
     expect(db.builders.generations[1].in).toHaveBeenCalledWith('status', ['pending', 'waiting', 'processing']);
     // With each one's row in the queue of starts, if it has one: waiting there is not a start that died.
     expect(db.builders.generations[2].select).toHaveBeenCalledWith('created_at,cost,generation_queued_submissions(queued_at)');
@@ -1673,6 +1677,61 @@ describe('collectBackendHealth', () => {
       expect.objectContaining({ code: 'JOB_LATEST_RUN_FAILED', severity: 'degraded' }),
       expect.objectContaining({ code: 'GENERATION_STALLED_ACTIVE', severity: 'degraded' }),
     ]));
+  });
+
+  describe('a generation whose provider finished and whose file is still being retried', () => {
+    function stalledHealth(stalledRows: unknown[]) {
+      return collectBackendHealth(createClient({
+        backend_job_runs: recentSuccessfulRunOfEveryJob(),
+        generations: [
+          { error: null, data: [] },
+          { error: null, data: stalledRows },
+          { error: null, data: [] },
+        ],
+      }).client as never, new Date('2026-06-21T10:00:00.000Z'));
+    }
+    const insideWindow = { status: 'failed', provider_completed_at: '2026-06-21T02:00:00.000Z', created_at: '2026-06-21T02:00:05.000Z' };
+
+    it('does not hold a release while the import is retried inside its window', async () => {
+      const health = await stalledHealth([
+        { created_at: '2026-06-21T01:58:00.000Z', cost: 30, generation_output_import_jobs: insideWindow },
+        { created_at: '2026-06-21T07:00:00.000Z', cost: 20, generation_output_import_jobs: [{ ...insideWindow, status: 'pending' }] },
+      ]);
+
+      expect(health.generations).toMatchObject({ stalledActiveCount: 0, stalledActiveCreditCost: 0 });
+      expect(health.issues.map((issue) => issue.code)).not.toContain('GENERATION_STALLED_ACTIVE');
+    });
+
+    it('still degrades for every other stalled generation, and for an import past its window', async () => {
+      const health = await stalledHealth([
+        // Past the 24-hour window: the give-up should have ended it.
+        { created_at: '2026-06-20T08:00:00.000Z', cost: 11, generation_output_import_jobs: { ...insideWindow, provider_completed_at: '2026-06-20T09:00:00.000Z', created_at: '2026-06-20T09:00:00.000Z' } },
+        // No import at all: the provider never finished.
+        { created_at: '2026-06-21T08:00:00.000Z', cost: 7, generation_output_import_jobs: null },
+        // An import that succeeded while the generation stayed active is not a retry.
+        { created_at: '2026-06-21T08:10:00.000Z', cost: 5, generation_output_import_jobs: { ...insideWindow, status: 'succeeded' } },
+        { created_at: '2026-06-21T08:20:00.000Z', cost: 2, generation_output_import_jobs: insideWindow },
+      ]);
+
+      expect(health.generations).toMatchObject({
+        stalledActiveCount: 3,
+        stalledActiveCreditCost: 23,
+        oldestStalledCreatedAt: '2026-06-20T08:00:00.000Z',
+      });
+      expect(health.issues).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'GENERATION_STALLED_ACTIVE', severity: 'degraded', message: expect.stringContaining('3 active generation(s)') }),
+      ]));
+    });
+
+    it('excludes nothing when the sample is full, since a stalled row may sit past the cap', async () => {
+      const rows = Array.from({ length: 200 }, (_, index) => ({
+        created_at: `2026-06-21T0${index % 8}:00:00.000Z`,
+        cost: 1,
+        generation_output_import_jobs: insideWindow,
+      }));
+      const health = await stalledHealth(rows);
+      expect(health.generations.stalledActiveCount).toBe(200);
+    });
   });
 
   it('degrades when the generation completion queue has failed or stale due jobs', async () => {
