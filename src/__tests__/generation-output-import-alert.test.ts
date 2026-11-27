@@ -70,4 +70,44 @@ describe('generation output import alert', () => {
     expect(unreadable).toMatchObject({ available: false });
     expect(generationOutputImportAlertFromStatus(unreadable)).toBeNull();
   });
+
+  it('reads the generations in chunks of at most fifty ids', async () => {
+    const jobs = Array.from({ length: 120 }, (_, index) => ({ status: 'failed', last_error: 'Bucket not found', generation_id: `g-${index}` }));
+    const chunks: string[][] = [];
+    const builder: Record<string, unknown> = {};
+    for (const name of ['select', 'gte', 'in', 'order']) builder[name] = vi.fn(() => builder);
+    builder.limit = vi.fn(async () => ({ data: jobs, error: null }));
+    const client = {
+      from: vi.fn((table: string) => {
+        if (table !== 'generations') return builder;
+        let ids: string[] = [];
+        const read: Record<string, unknown> = {};
+        read.select = vi.fn(() => read);
+        read.in = vi.fn((column: string, values: string[]) => {
+          if (column === 'id') ids = values;
+          return read;
+        });
+        read.limit = vi.fn(async () => {
+          chunks.push(ids);
+          return { data: ids.map((id) => ({ id })), error: null };
+        });
+        return read;
+      }),
+    };
+
+    const status = await collectGenerationOutputImportFailures(client as never, now);
+
+    expect(chunks.map((chunk) => chunk.length)).toEqual([50, 50, 20]);
+    expect(status).toMatchObject({ available: true, count: 120, truncated: false });
+  });
+
+  it('raises a full sample it cannot vouch for, even when none of it is still waiting', () => {
+    const alert = generationOutputImportAlertFromStatus({
+      available: true, error: null, count: 0, truncated: true, byClass: {},
+    });
+    expect(alert).toEqual({
+      code: 'GENERATION_OUTPUT_IMPORT_FAILING',
+      message: expect.stringContaining('could not all be checked'),
+    });
+  });
 });

@@ -25,12 +25,13 @@ import {
 
 export const GENERATION_OUTPUT_IMPORT_ALERT_LOOKBACK_HOURS = 24;
 const SAMPLE_LIMIT = 200;
+const GENERATION_ID_CHUNK = 50;
 
 export type GenerationOutputImportFailureStatus = {
   available: boolean;
   error: string | null;
   count: number;
-  /** The sample hit its cap: the count is a lower bound. */
+  /** The sample hit its cap: the count is a lower bound, and zero is not an all-clear. */
   truncated: boolean;
   byClass: Partial<Record<GenerationOutputImportErrorClass, number>>;
 };
@@ -68,14 +69,19 @@ export async function collectGenerationOutputImportFailures(
     let rows: typeof jobs = [];
     if (jobs.length > 0) {
       const generationIds = [...new Set(jobs.map((job) => job.generation_id))];
-      const active = await client
-        .from('generations')
-        .select('id')
-        .in('id', generationIds)
-        .in('status', ['waiting', 'processing'])
-        .limit(generationIds.length);
-      if (active.error) throw active.error;
-      const activeIds = new Set(((active.data ?? []) as Array<{ id: string }>).map((row) => row.id));
+      const activeIds = new Set<string>();
+      // In chunks: an `in` list of 200 UUIDs is close to common request-line limits.
+      for (let start = 0; start < generationIds.length; start += GENERATION_ID_CHUNK) {
+        const chunk = generationIds.slice(start, start + GENERATION_ID_CHUNK);
+        const active = await client
+          .from('generations')
+          .select('id')
+          .in('id', chunk)
+          .in('status', ['waiting', 'processing'])
+          .limit(chunk.length);
+        if (active.error) throw active.error;
+        for (const row of (active.data ?? []) as Array<{ id: string }>) activeIds.add(row.id);
+      }
       rows = jobs.filter((job) => activeIds.has(job.generation_id));
     }
     const byClass: GenerationOutputImportFailureStatus['byClass'] = {};
@@ -95,7 +101,17 @@ export async function collectGenerationOutputImportFailures(
 export function generationOutputImportAlertFromStatus(
   status: GenerationOutputImportFailureStatus,
 ): { code: 'GENERATION_OUTPUT_IMPORT_FAILING'; message: string } | null {
-  if (!status.available || status.count === 0) return null;
+  if (!status.available) return null;
+  if (status.count === 0) {
+    // A full sample whose rows were all of ended generations may hide newer
+    // failures past the cap: say so rather than go quiet.
+    if (!status.truncated) return null;
+    return {
+      code: 'GENERATION_OUTPUT_IMPORT_FAILING',
+      message: `At least ${SAMPLE_LIMIT} output imports used all their tries in the last ${GENERATION_OUTPUT_IMPORT_ALERT_LOOKBACK_HOURS} hours and could not all be checked; `
+        + 'the ones read belong to renders that already ended. Read generation_output_import_jobs (attempt_count >= 10, status not succeeded) for any still waiting.',
+    };
+  }
   const classes = (Object.entries(status.byClass) as Array<[GenerationOutputImportErrorClass, number]>)
     .sort((a, b) => b[1] - a[1]);
   const detail = classes.map(([errorClass, count]) => `${errorClass}: ${count}`).join(', ');
