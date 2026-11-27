@@ -542,7 +542,11 @@ export default function ShowcaseScreen() {
     () => keyedMasonryData(buildShowcaseMasonry(showcaseItems), laneScope),
     [showcaseItems, laneScope],
   );
-  useKeyedMasonryPlace(feedRef, cards);
+  const settleKeyedMasonryPlace = useKeyedMasonryPlace(feedRef, cards);
+  const handleContentSizeChange = useCallback((contentWidth: number, contentHeight: number) => {
+    keepScrollWithinContent(contentWidth, contentHeight);
+    settleKeyedMasonryPlace();
+  }, [keepScrollWithinContent, settleKeyedMasonryPlace]);
   const showcasePageCount = showcaseQuery.data?.pages.length ?? 0;
   // Keyed off the rendered cards, not the ranked items: a page that is entirely
   // text posts renders nothing, and that has to read as empty, not as loaded.
@@ -1019,7 +1023,7 @@ export default function ShowcaseScreen() {
         onMomentumScrollBegin={() => dispatchActivation({ type: 'momentumBegin' })}
         onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
         onScroll={trackListOffset}
-        onContentSizeChange={keepScrollWithinContent}
+        onContentSizeChange={handleContentSizeChange}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         // FlashList's default keeps whichever post is first on screen in place

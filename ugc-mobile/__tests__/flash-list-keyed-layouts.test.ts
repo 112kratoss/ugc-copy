@@ -154,6 +154,37 @@ describe('a masonry whose tiles follow their posts', () => {
     expect(device.scrollTo(0)).toBe(0);
   });
 
+  it('returns the reader to the end of the grid when posts hidden from there come back', () => {
+    const tiles = deviceTiles(90);
+    const device = createMasonryListDevice(tiles, asFeed('all'));
+    device.scrollToEnd();
+    // The list ends below its last tile: a footer the layout knows nothing of.
+    const footer = 420;
+    device.manager.updateScrollOffset(device.offset() + footer);
+    const end = device.offset();
+    const screenBefore = device.onScreen();
+    const fewer = tiles.filter((_, index) => ![60, 64, 71, 75].includes(index));
+    device.setData(fewer);
+    // The grid is shorter, and the list is at its new end, footer and all.
+    expect(device.offset()).toBeLessThan(end);
+    expect(device.offset()).toBe(device.manager.getMaxScrollOffset() + footer);
+    device.setData(tiles);
+    expect(device.offset()).toBe(end);
+    expect(device.onScreen()).toEqual(screenBefore);
+  });
+
+  it('keeps the reader where they scrolled to when the posts come back later', () => {
+    const { device, tiles, without } = deepInTheGrid(asFeed('all'));
+    device.setData(without);
+    device.scrollTo(device.offset() - 900);
+    const screenBefore = device.onScreen();
+    device.setData(tiles);
+    const screenAfter = device.onScreen();
+    // One column is where it was; the reader was not taken back to the place of the hide.
+    const still = [...screenBefore].filter(([id, at]) => screenAfter.get(id)?.y === at.y);
+    expect(still.length).toBeGreaterThan(0);
+  });
+
   it('closes the gap under a post removed on screen and leaves the other column still', () => {
     const tiles = deviceTiles(90);
     const device = createMasonryListDevice(tiles, asFeed('all'));

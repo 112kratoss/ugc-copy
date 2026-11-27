@@ -83,6 +83,13 @@ type ListState = {
   keys: string[];
   /** Layouts of posts that left, so one that comes back is laid out as it was. */
   left: Map<string, Layout>;
+  /** The last time posts left: which, and where the list was before and after, for their return. */
+  lastLeaving?: { keys: Set<string>; offsetBefore: number; offsetAfter: number };
+  /**
+   * How far past the last tile the list scrolls (its footer and bottom
+   * padding), as seen when a change found the reader down there.
+   */
+  tail: number;
 };
 
 const LEFT_LAYOUTS_KEPT = 400;
@@ -188,7 +195,14 @@ function followPosts(manager: ManagerInternals) {
 
   const previous = stateByManager.get(manager);
   const keys = data.map((item, index) => keyExtractor(item, index));
-  const state: ListState = { scope, keys, left: previous?.scope === scope ? previous.left : new Map() };
+  const sameFeed = previous?.scope === scope;
+  const state: ListState = {
+    scope,
+    keys,
+    left: sameFeed ? previous.left : new Map(),
+    lastLeaving: sameFeed ? previous.lastLeaving : undefined,
+    tail: sameFeed ? previous.tail : 0,
+  };
   stateByManager.set(manager, state);
   if (!layoutManager) return;
   layoutManager[KEEPS_COLUMNS] = true;
@@ -209,6 +223,13 @@ function followPosts(manager: ManagerInternals) {
 
   const before = layoutManager.layouts.slice();
   const spansBefore = layoutManager.spanTracker?.slice();
+  const tracker = manager.engagedIndicesTracker;
+  const offsetBefore = tracker.scrollOffset;
+  const windowHeight = layoutManager.windowSize.height;
+  // The list ends below its last tile, by a footer this layout knows nothing
+  // of. A reader at the very end shows how far: the list is kept within that.
+  const pastTiles = offsetBefore - (Math.max(0, ...layoutManager.columnHeights) - windowHeight);
+  if (pastTiles > 0) state.tail = Math.min(pastTiles, windowHeight);
   const stays = new Set<number>();
   move.from.forEach((index) => {
     if (index >= 0) stays.add(index);
@@ -248,23 +269,44 @@ function followPosts(manager: ManagerInternals) {
   }
   layoutManager.recomputeLayouts(move.firstChanged, after.length - 1);
 
-  // The tiles of a column move as one when posts above the screen go or come
-  // back, and the two columns by different amounts. The list follows the
-  // column that moved least: that column stays where it is on screen, and the
-  // same choice is made on the way back, so an Undo returns the reader exactly.
-  // A post removed on screen leaves the other column, and so the list, still.
-  let shift: number | null = null;
-  anchors.forEach((anchor) => {
-    const moved = before[anchor.index].y - anchor.y;
-    if (shift === null || Math.abs(moved) < Math.abs(shift)) shift = moved;
-  });
-  if (shift === null || Math.abs(shift) < 0.5) return;
-  const tracker = manager.engagedIndicesTracker;
-  const contentHeight = Math.max(0, ...layoutManager.columnHeights);
-  const end = Math.max(-manager.firstItemOffset, contentHeight - layoutManager.windowSize.height);
-  const offset = Math.min(Math.max(-manager.firstItemOffset, tracker.scrollOffset + shift), end);
-  if (Math.abs(offset - tracker.scrollOffset) < 0.5) return;
-  shiftByData.set(data, offset - tracker.scrollOffset);
+  const start = -manager.firstItemOffset;
+  const end = Math.max(start, Math.max(0, ...layoutManager.columnHeights) - windowHeight + state.tail);
+  const leaving = new Set(previous.keys.filter((_, index) => !stays.has(index)));
+  const arriving = keys.filter((_, index) => move.from[index] < 0);
+  const returning = state.lastLeaving;
+  state.lastLeaving = undefined;
+
+  let offset = offsetBefore;
+  if (
+    returning
+    && leaving.size === 0
+    && arriving.length === returning.keys.size
+    && arriving.every((key) => returning.keys.has(key))
+    && Math.abs(offsetBefore - returning.offsetAfter) < 2
+  ) {
+    // The posts that just left are back and the reader has not moved (Undo):
+    // the list goes back to where it was, whatever stopped it short then (the
+    // end of a grid that had become shorter).
+    offset = returning.offsetBefore;
+  } else {
+    // The tiles of a column move as one when posts above the screen go or
+    // come back, and the two columns by different amounts. The list follows
+    // the column that moved least: that column stays where it is on screen. A
+    // post removed on screen leaves the other column, and so the list, still.
+    // Each tile's layout is the one object it had before, now at its new place.
+    let shift = 0;
+    anchors.forEach((anchor, at) => {
+      const moved = before[anchor.index].y - anchor.y;
+      if (at === 0 || Math.abs(moved) < Math.abs(shift)) shift = moved;
+    });
+    offset = offsetBefore + shift;
+  }
+  offset = Math.min(Math.max(start, offset), end);
+  if (leaving.size > 0 && arriving.length === 0 && move.keepsOrder) {
+    state.lastLeaving = { keys: leaving, offsetBefore, offsetAfter: offset };
+  }
+  if (Math.abs(offset - offsetBefore) < 0.5) return;
+  shiftByData.set(data, offset - offsetBefore);
   tracker.scrollOffset = offset;
 }
 

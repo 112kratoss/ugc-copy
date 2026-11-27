@@ -110,6 +110,15 @@ export function createMasonryListDevice(
       }
       return moved;
     },
+    /** The reader scrolls until the grid ends, as far as a scroll view lets them. */
+    scrollToEnd() {
+      for (let pass = 0; pass < 50; pass += 1) {
+        const end = manager.getMaxScrollOffset();
+        if (Math.abs(end - offset()) < 0.5) return;
+        this.scrollTo(end);
+      }
+      throw new Error('the list never reached its end');
+    },
     /** The list is given new data, as a render with a new `data` prop does; returns the on-screen moves. */
     setData(next: readonly DeviceTile[]) {
       return movesDuring(() => {
