@@ -1387,6 +1387,7 @@ export function useMediaZoomStage({
   expectsNeighbours,
   activeVideoUrl = null,
   playerFor,
+  onCloseStart,
   onExit,
 }: {
   screen: ZoomSize;
@@ -1419,6 +1420,12 @@ export function useMediaZoomStage({
    * into the tile hands it back only when it is still the one the tile lent.
    */
   playerFor?: (itemId: string, url: string) => VideoPlayer | null;
+  /**
+   * The close has set off: the reel has gone out of sight, or its window has
+   * begun to shrink, and the screen beneath is what the reader sees round it.
+   * Told once. The reel is popped later, as late as its landing (`onExit`).
+   */
+  onCloseStart?: () => void;
   onExit: () => void;
 }): MediaZoomStageValue {
   const [origin] = useState<ZoomOrigin | null>(() => (
@@ -1500,6 +1507,9 @@ export function useMediaZoomStage({
   postRef.current = activePost;
   const onExitRef = useRef(onExit);
   onExitRef.current = onExit;
+  const onCloseStartRef = useRef(onCloseStart);
+  onCloseStartRef.current = onCloseStart;
+  const closeStartedRef = useRef(false);
   const activeVideoUrlRef = useRef(activeVideoUrl);
   activeVideoUrlRef.current = activeVideoUrl;
   const playerForRef = useRef(playerFor);
@@ -1550,13 +1560,21 @@ export function useMediaZoomStage({
     if (itemId) setZoomSourceHidden(surfaceId, itemId, true);
   }, [nativeZoom, origin]);
 
+  // The close has set off (`onCloseStart`), once, however it closes.
+  const closeSetsOff = useCallback(() => {
+    if (closeStartedRef.current) return;
+    closeStartedRef.current = true;
+    onCloseStartRef.current?.();
+  }, []);
+
   const leave = useCallback(() => {
     if (leftRef.current) return;
     leftRef.current = true;
+    closeSetsOff();
     clearHiddenZoomSources();
     setZoomUnderlayHidden(false);
     onExitRef.current();
-  }, []);
+  }, [closeSetsOff]);
 
   // A picture that flew home alone lets go of its tile a frame or two after it
   // lands (`finishZoomFlight`), and its reel is popped once it has: popped at
@@ -1980,12 +1998,13 @@ export function useMediaZoomStage({
       leave();
       return;
     }
+    closeSetsOff();
     stageOpacity.set(withTiming(0, { duration: PLAIN_FADE_MS }, () => {
       'worklet';
       runOnJS(leave)();
     }));
     setTimeout(leave, PLAIN_FADE_MS + 100);
-  }, [leave, reducedMotion, stageOpacity]);
+  }, [closeSetsOff, leave, reducedMotion, stageOpacity]);
 
   const dismiss = useCallback(() => {
     if (dismissingRef.current || leftRef.current) return;
@@ -2138,6 +2157,7 @@ export function useMediaZoomStage({
           // A video's window waited out of sight for its first frame.
           if (video) stillOpacity.set(1);
           stageOpacity.set(0);
+          closeSetsOff();
           // iOS: the reel is popped now, and the picture sets off once UIKit
           // has put the screen beneath back (`coverZoomCloseSource`). The pop
           // holds the main thread for about 100 ms as it begins, wherever it
@@ -2182,11 +2202,13 @@ export function useMediaZoomStage({
       }
       closeRef.current = { id: flight.id, live, dissolves, popsAtLanding };
       ownFlightRef.current = flight.id;
+      // A live close is moving already: the reel's own window shrinks from here.
+      if (live) closeSetsOff();
       // With no layer to step it the flight has already landed.
       if ((live || popsAtLanding) && !getZoomFlight()) leave();
     });
     measureTile(TILE_REMEASURE_FRAMES);
-  }, [closeDissolves, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
+  }, [closeDissolves, closeSetsOff, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),

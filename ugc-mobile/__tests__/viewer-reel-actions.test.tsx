@@ -101,11 +101,13 @@ const screenState = vi.hoisted(() => ({
 const passThrough = vi.hoisted(() => ({ children }: { children?: unknown }) => children ?? null);
 const nothing = vi.hoisted(() => () => null);
 
-// The stack the reel's route is in, which a close takes that route out of.
+// The stack the reel's route is in, which a close takes that route out of,
+// and every say the reel has had over Android's navigation bar.
 const stackState = vi.hoisted(() => ({
   state: undefined as undefined | { key: string; index: number; routes: { key: string }[] },
   dispatch: vi.fn(),
 }));
+const systemBars = vi.hoisted(() => ({ surfaces: [] as (string | null)[] }));
 
 vi.mock('expo-router', () => ({
   router: routerState,
@@ -122,7 +124,8 @@ vi.mock('expo-router', () => ({
   }),
 }));
 
-vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
+// Its style is what the tests read of the status bar.
+vi.mock('expo-status-bar', () => ({ StatusBar: (props: MockProps) => React.createElement('status-bar', props) }));
 // The reel asks it whether iOS 26's glass is there (its navigation bar's Back).
 vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => glassState.available }));
 
@@ -303,7 +306,9 @@ vi.mock('@/lib/use-creator-follow', async (importOriginal) => ({
 }));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));
-vi.mock('@/lib/system-bars', () => ({ useNavigationBarSurface: () => undefined }));
+vi.mock('@/lib/system-bars', () => ({
+  useNavigationBarSurface: (surface: string | null) => { systemBars.surfaces.push(surface); },
+}));
 vi.mock('@/lib/theme-context', () => ({
   ThemeScope: passThrough,
   useAppTheme: () => ({ colors: { primary: '#ff6b5a' } }),
@@ -506,6 +511,7 @@ beforeEach(() => {
   screenState.callbacksFor = null;
   screenState.zoomOptions = null;
   stackState.state = undefined;
+  systemBars.surfaces.length = 0;
 });
 
 afterEach(() => {
@@ -2042,8 +2048,8 @@ describe('whom the reader follows, for the posts beside the one on screen', () =
   });
 });
 
-/** What the reel handed its zoom stage: how it leaves. */
-const zoomExits = () => screenState.zoomOptions as unknown as { onExit: () => void };
+/** What the reel handed its zoom stage: how it leaves, and what it is told as a close sets off. */
+const zoomExits = () => screenState.zoomOptions as unknown as { onExit: () => void; onCloseStart?: () => void };
 
 // Review of #947: an Android close keeps the reel's route until the picture
 // has landed in its tile, up to half a second after Back. A screen pushed in
@@ -2076,5 +2082,23 @@ describe("the reel's close leaves by its own route", () => {
     act(() => zoomExits().onExit());
     expect(routerState.back).not.toHaveBeenCalled();
     expect(stackState.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+// Review of #947: the reel's light status bar and dark navigation bar stood
+// until its route was removed, after the close had landed: in the light
+// scheme, white icons over the light grid for ~300 ms.
+describe("the reel's say over the system bars", () => {
+  it('ends as its close sets off', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    expect(tree.root.findAllByType('status-bar' as never).map((bar) => bar.props.style)).toEqual(['light']);
+    expect(systemBars.surfaces.at(-1)).toBe('dark');
+
+    expect(zoomExits().onCloseStart).toBeTypeOf('function');
+    act(() => zoomExits().onCloseStart?.());
+
+    expect(tree.root.findAllByType('status-bar' as never)).toHaveLength(0);
+    expect(systemBars.surfaces.at(-1)).toBeNull();
   });
 });

@@ -56,7 +56,7 @@ vi.mock('react-native-safe-area-context', () => ({
 
 /**
  * What happened, in order: the flight's frames switched on and off, the
- * layer's picture let go of the tile, and the reel's exit.
+ * layer's picture let go of the tile, the close setting off, and the reel's exit.
  */
 const timeline = vi.hoisted(() => [] as string[]);
 /** The layer's frame callback, which the tests step as the device's frames would. */
@@ -147,6 +147,7 @@ function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, unco
     recordedAt: Date.now(),
   });
   const exit = vi.fn(() => { timeline.push('reel popped'); });
+  const closeStarts = vi.fn(() => { timeline.push('close set off'); });
   let stage!: ReturnType<typeof useMediaZoomStage>;
   function Reel() {
     stage = useMediaZoomStage({
@@ -159,6 +160,7 @@ function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, unco
       reducedMotion: false,
       ready: true,
       expectsNeighbours: false,
+      onCloseStart: closeStarts,
       onExit: exit,
     });
     return null;
@@ -186,7 +188,7 @@ function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, unco
     if (held && !getHeldZoomPicture()) timeline.push('picture let go');
     held = getHeldZoomPicture();
   });
-  return { tree, exit, dismiss: () => stage.dismiss() };
+  return { tree, exit, closeStarts, dismiss: () => stage.dismiss() };
 }
 
 /** The layer's copy of `picture` has drawn, as expo-image says. */
@@ -210,7 +212,7 @@ function advance(ms: number) {
 
 describe('a picture closing alone, on Android', () => {
   it('sets off from the frame after the copy has drawn, with the reel there, out of sight under it', () => {
-    const { tree, exit, dismiss } = openReel();
+    const { tree, exit, closeStarts, dismiss } = openReel();
 
     renderer.act(() => dismiss());
     const close = getZoomFlight();
@@ -218,12 +220,13 @@ describe('a picture closing alone, on Android', () => {
     expect(close?.geometry.pictureOnly).toBe(true);
     // The reel is still the thing on screen until its picture's copy is up.
     expect(timeline).toEqual([]);
+    expect(closeStarts).not.toHaveBeenCalled();
 
     copyDrawn(tree);
-    expect(timeline).toEqual([]);
+    expect(timeline).toEqual(['close set off']);
     advance(16);
 
-    expect(timeline).toEqual(['flight frames on']);
+    expect(timeline).toEqual(['close set off', 'flight frames on']);
     expect(exit).not.toHaveBeenCalled();
     renderer.act(() => tree.unmount());
   });
@@ -247,7 +250,7 @@ describe('a picture closing alone, on Android', () => {
     expect(exit).not.toHaveBeenCalled();
     advance(16);
 
-    expect(timeline).toEqual(['flight frames on', 'flight frames off', 'picture let go', 'reel popped']);
+    expect(timeline).toEqual(['close set off', 'flight frames on', 'flight frames off', 'picture let go', 'reel popped']);
     // The net that keeps a reel from sticking pops nothing twice.
     advance(2000);
     expect(exit).toHaveBeenCalledTimes(1);
@@ -259,7 +262,7 @@ describe('a picture closing alone, on Android', () => {
     renderer.act(() => dismiss());
     copyDrawn(tree);
     advance(16);
-    expect(timeline).toEqual(['flight frames on']);
+    expect(timeline).toEqual(['close set off', 'flight frames on']);
 
     // No frames reach the flight: the safety net, from the press.
     advance(SAFETY_MS - 32);
@@ -282,19 +285,20 @@ describe('a close of the old order, on Android', () => {
     copyDrawn(tree, TILE_PICTURE);
     advance(16);
     expect(exit).toHaveBeenCalledTimes(1);
-    expect(timeline).toEqual(['reel popped']);
+    expect(timeline).toEqual(['close set off', 'reel popped']);
 
     advance(16);
-    expect(timeline).toEqual(['reel popped', 'flight frames on']);
+    expect(timeline).toEqual(['close set off', 'reel popped', 'flight frames on']);
     renderer.act(() => tree.unmount());
   });
 
   it('sets a clip\'s close off at once, its window shrinking, and pops the reel at its landing', () => {
-    const { tree, exit, dismiss } = openReel({ picture: null, videoUrl: 'https://example.test/post.mp4' });
+    const { tree, exit, closeStarts, dismiss } = openReel({ picture: null, videoUrl: 'https://example.test/post.mp4' });
 
     renderer.act(() => dismiss());
     expect(getZoomFlight()?.still).toBe(false);
-    expect(timeline).toEqual(['flight frames on']);
+    expect(closeStarts).toHaveBeenCalledTimes(1);
+    expect(timeline).toEqual(['flight frames on', 'close set off']);
 
     flyHome();
     expect(exit).toHaveBeenCalledTimes(1);

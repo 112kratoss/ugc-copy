@@ -71,6 +71,7 @@ import {
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
 import { createLeavesMediaReport, leavesMediaPage, viewerNativeBackOptions, viewerNativeBarSoundOptions } from '@/lib/viewer-native-back';
 import { createReelHandoffPage, useReelChromePage, type ReelHandoffPage } from '@/lib/reel-chrome-page';
+import { createReelClosing, useReelClosing, type ReelClosing } from '@/lib/reel-closing';
 import { reelLeaveFor } from '@/lib/reel-leave';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
@@ -288,27 +289,45 @@ const ViewerGroundContext = createContext<string>(REEL_GROUND);
 /**
  * The reel stays dark in both schemes: it is an immersive media surface, and
  * its chrome, scrims and icon rasters are all drawn against video. Its status
- * bar is light only while the reel is in front — a screen pushed over it
- * (a creator's profile) keeps the reel mounted underneath and brings its own.
+ * bar is light only while the reel is in front (`ReelSystemBars`) — a screen
+ * pushed over it (a creator's profile) keeps the reel mounted underneath and
+ * brings its own.
  */
 export default function ImmersivePreviewViewerScreen() {
-  const isFocused = useIsFocused();
-  useNavigationBarSurface(isFocused ? 'dark' : null);
   // Out of a tile by UIKit's zoom, Back and sound come in once it has
   // crossfaded to the reel; held here, so the loading shell and the reel that
   // replaces it share the moment, and read by those controls alone, so the reel
   // is not drawn again as they come and go (lib/viewer-top-controls.ts).
   const followsZoom = Boolean(useAppleZoomSourceId());
   const [topControls] = useState(() => createViewerTopControls(!followsZoom));
+  // Whether the reel's close has set off, told by its zoom stage and read by
+  // the system bars alone (lib/reel-closing.ts).
+  const [closing] = useState(createReelClosing);
   return (
     <ThemeScope scheme="dark">
-      {isFocused ? <StatusBar style="light" /> : null}
+      <ReelSystemBars closing={closing} />
       <ViewerTopControlsContext.Provider value={topControls}>
         {followsZoom ? <AppleZoomTopControlsCue onShownChange={topControls.setShown} /> : null}
-        <ImmersivePreviewViewer />
+        <ImmersivePreviewViewer closing={closing} />
       </ViewerTopControlsContext.Provider>
     </ThemeScope>
   );
+}
+
+/**
+ * The reel's say over the system bars: light status-bar icons, and on Android
+ * a dark navigation bar, while it is the thing in front. Not under a screen
+ * pushed over it, which brings its own, nor once its close has set off: an
+ * Android close keeps the reel's route until it has landed, and with focus
+ * alone the white icons stood over the light grid for ~300 ms (review of
+ * #947). A clip's close and a picture's alike.
+ */
+function ReelSystemBars({ closing }: { closing: ReelClosing }) {
+  const isFocused = useIsFocused();
+  const closed = useReelClosing(closing);
+  const inFront = isFocused && !closed;
+  useNavigationBarSurface(inFront ? 'dark' : null);
+  return inFront ? <StatusBar style="light" /> : null;
 }
 
 /**
@@ -326,7 +345,7 @@ function useLeaveReel() {
   }, [navigation, routeKey]);
 }
 
-function ImmersivePreviewViewer() {
+function ImmersivePreviewViewer({ closing }: { closing: ReelClosing }) {
   const theme = useAppTheme();
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
@@ -835,6 +854,8 @@ function ImmersivePreviewViewer() {
     // A close into the tile this video came from hands the tile its player back.
     activeVideoUrl: activeMedia.playbackUrl,
     playerFor: playbackHandoff.playerFor,
+    // The system bars are the screen beneath's from the moment a close sets off.
+    onCloseStart: closing.setClosing,
     // By the reel's own route: a screen can be pushed while a close lands.
     onExit: leaveReel,
   });
