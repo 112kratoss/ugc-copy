@@ -1839,7 +1839,7 @@ function scrollTo(tree: renderer.ReactTestRenderer, pages: number) {
 // Owner, 2026-11-27: "having haptic on opening the media and swiping to other
 // is not needed". On the S24 each page settling played a 110 ms buzz, as strong
 // as a button press (Samsung plays `soft` as it plays `light`), 100–125 ms
-// after the page had visibly landed (archive/ux-feel-audit-2026-11-27).
+// after the page had visibly landed (device feel audit, 2026-11-27).
 describe("the reel's page turns", () => {
   it('play no haptic as a page settles, nor on reaching the end of the lane', async () => {
     seedLane('viewer-1', lanePosts());

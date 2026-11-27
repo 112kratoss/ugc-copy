@@ -1035,7 +1035,7 @@ describe('ProfileDashboard media tiles routing', () => {
   });
 
   // Owner, 2026-11-27: opening media plays no haptic; on the S24 every tile
-  // open buzzed for 110 ms (archive/ux-feel-audit-2026-11-27).
+  // open buzzed for 110 ms (device feel audit, 2026-11-27).
   it('opens a tile without a haptic', async () => {
     const plays = (['select', 'light', 'soft', 'medium', 'success', 'error'] as const)
       .map((kind) => vi.spyOn(haptic, kind));

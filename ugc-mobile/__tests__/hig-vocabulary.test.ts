@@ -84,7 +84,7 @@ describe('app vocabularies (HIG X2, X3)', () => {
     // other is not needed". Playing haptics: avoid overusing haptics, since one
     // that plays often becomes tiresome. An open is answered by its own motion,
     // the card's press and the zoom, and on the S24 every open buzzed for 110 ms
-    // (archive/ux-feel-audit-2026-11-27). So a handler that opens a post, a
+    // (device feel audit, 2026-11-27). So a handler that opens a post, a
     // tile's media or the reel plays none, whatever else it does.
     const offenders: string[] = [];
     for (const file of sourceFiles()) {

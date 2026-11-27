@@ -24,7 +24,7 @@ import { Platform } from 'react-native';
  * 2026-11-27: "having haptic on opening the media and swiping to other is not
  * needed"). On a Samsung phone every kind above is the same 110 ms buzz at the
  * phone's touch strength, so a tick on every open or page read as noise
- * (archive/ux-feel-audit-2026-11-27). `hig-vocabulary.test.ts` fails a handler
+ * (device feel audit, 2026-11-27). `hig-vocabulary.test.ts` fails a handler
  * that opens media and plays one.
  */
 export type HapticKind = 'select' | 'light' | 'soft' | 'medium' | 'success' | 'error';

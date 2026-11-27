@@ -1825,7 +1825,7 @@ function ImmersivePreviewViewer() {
           // opening the media and swiping to other is not needed"). The tick it
           // was waited for this event, 100–125 ms after the page had visibly
           // landed, and Samsung plays `soft` as strongly as a button press
-          // (archive/ux-feel-audit-2026-11-27). Like and save keep theirs.
+          // (device feel audit, 2026-11-27). Like and save keep theirs.
           // The reader put the list here, so the alignment effect has nothing
           // to correct.
           nativeRowRef.current = { index: clampedIndex, height };

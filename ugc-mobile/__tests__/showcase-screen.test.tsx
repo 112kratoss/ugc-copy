@@ -1476,7 +1476,7 @@ describe('Showcase screen', () => {
   });
 
   // Owner, 2026-11-27: opening media plays no haptic; the zoom out of the tile
-  // is the feedback (archive/ux-feel-audit-2026-11-27).
+  // is the feedback (device feel audit, 2026-11-27).
   it('opens a tile without a haptic', () => {
     queryState.pages = [{ items: [{ ...feedItem(), body: '' }], pageInfo: { hasMore: false, nextOffset: null } }];
     vi.mocked(router.push).mockClear();

@@ -3,7 +3,7 @@
  * `onEndReachedThreshold`, in heights of the list itself, so two screens of
  * rows still to come. A third of a screen (0.32) let a fast fling on the S24
  * run past the loaded rows into a blank strip and a spinner for 0.5 to 0.6 s,
- * three times in one pass over the profile grid (archive/ux-feel-audit-2026-11-27).
+ * three times in one pass over the profile grid (device feel audit, 2026-11-27).
  *
  * A runway this long means a page can land with the list still within it, and
  * inside the gate's cooldown: FlashList asks again as it lands, the gate

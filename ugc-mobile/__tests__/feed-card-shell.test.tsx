@@ -143,7 +143,7 @@ describe('FeedCardShell metadata line', () => {
 describe('FeedCardShell open', () => {
   // Owner, 2026-11-27: "having haptic on opening the media ... is not needed".
   // The card's press and the zoom that follows are the feedback; on the S24
-  // every open had buzzed for 110 ms (archive/ux-feel-audit-2026-11-27).
+  // every open had buzzed for 110 ms (device feel audit, 2026-11-27).
   it('opens the post from every part of the card without a haptic', async () => {
     Object.values(haptics).forEach((play) => play.mockClear());
     const onOpen = vi.fn();
