@@ -10,10 +10,11 @@ import loadMoreLane from './fixtures/explore-load-more.json';
 //
 // Back drew the grid again with every post it had, and the browser put the scroll back where it
 // was, but into a longer page: the tiles were new elements, and a tile not drawn yet stands at its
-// placeholder's height (`content-visibility: auto` with `contain-intrinsic-size`), 113px a row more
-// than its own at 1440px. With four rows above them the reader's post was drawn 454px lower, the
-// rows then took their own heights, and the page settled a row away from where it was left
-// (measured here before the fix: left at 283px from the window's top, back at 737px).
+// placeholder's height (`content-visibility: auto` with `contain-intrinsic-size`), not its own.
+// Every row above the reader's post drew it that much lower, the rows then took their own heights,
+// and the page settled away from where it was left. Measured here before the fix, in a window
+// 1440px wide (rows of four, each 113px taller as placeholders, four of them above the post): left
+// 283px from the window's top, back at 737px; in one 375px wide, left at 193px and back at 575px.
 //
 // The dev server answers Explore's Recent lane for the fixture's own tool
 // (support/supabase-server-stub.cjs, fixtures/explore-load-more.json): thirty pictures, twelve to a
@@ -27,7 +28,7 @@ const number = (n: number) => String(n).padStart(2, '0');
 const title = (n: number) => `${loadMoreLane.titlePrefix}${number(n)}`;
 const postId = (n: number) => `${loadMoreLane.postIdPrefix}${number(n)}`;
 const CREATOR_PAGE = `/creators/${loadMoreLane.creator.username}`;
-/** The post the reader stops on: on the lane's second page, the second of the fifth row of four on a laptop. */
+/** The post the reader stops on: on the lane's second page, so with rows of the grid above it at every width. */
 const ANCHOR = 18;
 // In `next dev` a page compiles on its first request; offline Explore also waits on reads.
 const COLD_PAGE = { timeout: 60_000 };
@@ -35,8 +36,16 @@ const PREVIEW_PICTURE = fs.readFileSync(path.join(__dirname, 'fixtures/red.png')
 const PICTURES = 'https://example.supabase.co/storage/v1/object/public/showcase_media';
 /** How far a tile may stand from where the reader left it: a rounding of the layout, no more. */
 const SAME_PLACE_PX = 2;
-/** The frames read after Back: a second and a half of them. */
+/** The frames read once Explore is back: a second and a half of them. */
 const FRAMES_AFTER_BACK = 90;
+/**
+ * How long the page left for (or the reel) may stay up after the press on Back. The router brings
+ * the page back inside the press's own task, so here it is gone by the first frame; a loaded CI
+ * runner is given room, and the claim that follows starts at the first frame that draws Explore.
+ */
+const EXPLORE_BACK_WITHIN_MS = 5_000;
+/** The recording ends by itself if Explore never comes back. */
+const GIVES_UP_AFTER_MS = 15_000;
 
 test.describe.configure({ timeout: 240_000 });
 
@@ -206,7 +215,14 @@ async function stopOnTheAnchor(page: Page): Promise<Place> {
 }
 
 type FrameAfterBack = {
+  /** Milliseconds since Back was pressed (the `popstate`). */
+  at: number;
   path: string;
+  /**
+   * Explore is the page drawn, in any of its three forms (the loading outline, the first-paint
+   * shell, the grid), with no reel over it: the page left for, or the reel, has gone.
+   */
+  explore: boolean;
   scrollY: number;
   /** The reader's post: where its top is drawn, or null while the page does not draw it. */
   anchorTop: number | null;
@@ -219,17 +235,29 @@ type FrameAfterBack = {
   height: number;
 };
 
-/** Every frame from the next Back on: where the page is scrolled and where the reader's post is drawn. */
+/**
+ * Every frame from the next Back on: whether Explore is the page drawn, where it is scrolled and
+ * where the reader's post is drawn. Read until Explore has been back for `FRAMES_AFTER_BACK`
+ * frames, or for `GIVES_UP_AFTER_MS`.
+ */
 async function recordFramesAfterBack(page: Page) {
-  await page.evaluate(({ anchor, count }) => {
+  await page.evaluate(({ anchor, count, limit }) => {
+    const recorder = window as unknown as { __framesAfterBack: FrameAfterBack[]; __framesAfterBackDone: boolean };
     const frames: FrameAfterBack[] = [];
-    (window as unknown as { __framesAfterBack: FrameAfterBack[] }).__framesAfterBack = frames;
+    recorder.__framesAfterBack = frames;
+    recorder.__framesAfterBackDone = false;
     window.addEventListener('popstate', () => {
+      const pressedAt = performance.now();
+      let sinceExplore = 0;
       const sample = () => {
         const buttons = [...document.querySelectorAll('main button[aria-label]')];
         const box = buttons.find((button) => button.getAttribute('aria-label') === anchor)?.getBoundingClientRect();
+        const explore = document.querySelector('[data-explore-filter-bar]') !== null
+          && document.querySelector('[role="dialog"][aria-label="Explore reel viewer"]') === null;
         frames.push({
+          at: Math.round(performance.now() - pressedAt),
           path: window.location.pathname,
+          explore,
           scrollY: Math.round(window.scrollY),
           anchorTop: box ? Math.round(box.top) : null,
           tiles: buttons.filter((button) => button.getAttribute('aria-label')?.startsWith('More actions for ')).length,
@@ -237,17 +265,22 @@ async function recordFramesAfterBack(page: Page) {
           loading: document.querySelector('[aria-label="Loading Explore"]') !== null,
           height: document.documentElement.scrollHeight,
         });
-        if (frames.length < count) requestAnimationFrame(sample);
+        if (explore || sinceExplore > 0) sinceExplore += 1;
+        if (sinceExplore >= count || performance.now() - pressedAt > limit) recorder.__framesAfterBackDone = true;
+        else requestAnimationFrame(sample);
       };
       requestAnimationFrame(sample);
     }, { once: true });
-  }, { anchor: title(ANCHOR), count: FRAMES_AFTER_BACK });
+  }, { anchor: title(ANCHOR), count: FRAMES_AFTER_BACK, limit: GIVES_UP_AFTER_MS });
 }
 
 async function framesAfterBack(page: Page) {
-  const read = () => page.evaluate(() => (window as unknown as { __framesAfterBack?: FrameAfterBack[] }).__framesAfterBack ?? []);
-  await expect.poll(async () => (await read()).length, { timeout: 30_000 }).toBeGreaterThanOrEqual(FRAMES_AFTER_BACK);
-  const frames = await read();
+  const recorder = () => page.evaluate(() => {
+    const { __framesAfterBack, __framesAfterBackDone } = window as unknown as { __framesAfterBack?: FrameAfterBack[]; __framesAfterBackDone?: boolean };
+    return { frames: __framesAfterBack ?? [], done: __framesAfterBackDone === true };
+  });
+  await expect.poll(async () => (await recorder()).done, { timeout: GIVES_UP_AFTER_MS + 30_000 }).toBe(true);
+  const { frames } = await recorder();
   const record = test.info().outputPath('frames-after-back.json');
   fs.writeFileSync(record, JSON.stringify(frames, null, 1));
   await test.info().attach('frames-after-back.json', { path: record, contentType: 'application/json' });
@@ -255,19 +288,31 @@ async function framesAfterBack(page: Page) {
 }
 
 /**
- * Back put the reader where they were: from the first frame after it the grid holds every post the
- * lane had loaded and the post they stopped on is where they left it, and nothing moves after.
+ * Back put the reader where they were. The page left for (or the reel) may stay up for the first
+ * frames after the press, for no longer than `EXPLORE_BACK_WITHIN_MS`. From the first frame that
+ * draws Explore again, in whatever form, it is the grid with every post the lane had loaded, never
+ * the loading outline or the six-tile shell, and the post the reader stopped on is where they left
+ * it, in every frame; and nothing moves after.
  */
 async function expectThePlaceKept(page: Page, before: Place, frames: FrameAfterBack[]) {
   // The frames that differ, in order: the whole story of a failure in a line or two.
-  const story = JSON.stringify({ before, frames: frames.filter((frame, index) => JSON.stringify(frame) !== JSON.stringify(frames[index - 1])) });
-  expect(frames.length, story).toBeGreaterThanOrEqual(FRAMES_AFTER_BACK);
-  for (const frame of frames) {
+  const story = JSON.stringify({
+    before,
+    frames: frames.filter((frame, index) => JSON.stringify({ ...frame, at: 0 }) !== JSON.stringify({ ...frames[index - 1], at: 0 })),
+  });
+  const back = frames.findIndex((frame) => frame.explore);
+  expect(back, `Explore is drawn again ${story}`).toBeGreaterThanOrEqual(0);
+  expect(frames[back].at, `Explore is back within ${EXPLORE_BACK_WITHIN_MS}ms of the press ${story}`).toBeLessThanOrEqual(EXPLORE_BACK_WITHIN_MS);
+  const drawn = frames.slice(back);
+  expect(drawn.length, story).toBeGreaterThanOrEqual(FRAMES_AFTER_BACK);
+  for (const frame of drawn) {
     expect(frame.path, story).toBe('/showcase');
+    expect(frame.explore, `Explore stays the page drawn ${story}`).toBe(true);
     expect(frame.shell, `the six-tile shell is never drawn on the way back ${story}`).toBe(false);
     expect(frame.loading, `the loading outline is never drawn on the way back ${story}`).toBe(false);
-    expect(frame.tiles, `every post the lane had loaded ${story}`).toBe(loadMoreLane.postCount);
-    expect(frame.anchorTop, `the reader's post is drawn ${story}`).not.toBeNull();
+    // No frame of Explore with the grid empty or part drawn.
+    expect(frame.tiles, `every post the lane had loaded, in every frame ${story}`).toBe(loadMoreLane.postCount);
+    expect(frame.anchorTop, `the reader's post is drawn in every frame ${story}`).not.toBeNull();
     expect(Math.abs(frame.anchorTop! - before.top), `the reader's post, left ${before.top}px from the window's top ${story}`).toBeLessThanOrEqual(SAME_PLACE_PX);
     expect(Math.abs(frame.scrollY - before.scrollY), `the scroll, left at ${before.scrollY}px ${story}`).toBeLessThanOrEqual(SAME_PLACE_PX);
   }

@@ -14,6 +14,7 @@ import {
     useFeedCardTelemetry,
     type ShowcaseFeedbackAction,
 } from '@/app/showcase/ShowcaseFeedInteraction';
+import { FEED_CARD_PLACEHOLDER_ATTRIBUTE } from '@/app/feed/WindowedFeedList';
 import ShowcaseMediaCarousel from '@/app/showcase/ShowcaseMediaCarousel';
 import RemixCreditLine from '@/app/showcase/RemixCreditLine';
 import { buildShowcaseDetailPath } from '@/lib/share';
@@ -217,6 +218,9 @@ function FeedPostCardView({
     return (
         <article
             className={laidOutInFull ? FEED_CARD_FRAME_CLASS : `${FEED_CARD_FRAME_CLASS} ${FEED_CARD_PLACEHOLDER_CLASS}`}
+            // Named for the feed's list, which takes a measure of this card
+            // for its own height only once what is inside it is drawn.
+            {...(laidOutInFull ? {} : { [FEED_CARD_PLACEHOLDER_ATTRIBUTE]: '' })}
             // Pointing at a card is the earliest honest signal that it is about
             // to be opened. Warming here is why the click feels instant; the
             // post links stay `prefetch={false}` so nothing is fetched for

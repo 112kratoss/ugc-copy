@@ -27,8 +27,16 @@ const CREATOR_PAGE = `/creators/${CREATOR.username}`;
 const COLD_PAGE = { timeout: 60_000 };
 /** How far a card may stand from where the reader left it: a rounding of the layout, no more. */
 const SAME_PLACE_PX = 2;
-/** The frames read after Back: a second and a half of them. */
+/** The frames read once Home's feed is back: a second and a half of them. */
 const FRAMES_AFTER_BACK = 90;
+/**
+ * How long the page left for may stay up after the press on Back. The router brings the page back
+ * inside the press's own task, so here it is gone by the first frame; a loaded CI runner is given
+ * room, and the claim that follows starts at the first frame that draws the feed.
+ */
+const FEED_BACK_WITHIN_MS = 5_000;
+/** The recording ends by itself if the feed never comes back. */
+const GIVES_UP_AFTER_MS = 15_000;
 // 1×1 PNG: a picture that loads.
 const PIXEL = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
@@ -200,7 +208,11 @@ async function stopOnTheCard(page: Page, anchor: number): Promise<Place> {
 }
 
 type FrameAfterBack = {
+  /** Milliseconds since Back was pressed (the `popstate`). */
+  at: number;
   path: string;
+  /** Home's feed is in the page: the page left for has gone. */
+  feed: boolean;
   scrollY: number;
   /** The reader's card: where its top is drawn, or null while the page does not draw it. */
   anchorTop: number | null;
@@ -209,19 +221,30 @@ type FrameAfterBack = {
   height: number;
 };
 
-/** Every frame from the next Back on: where the page is scrolled and where the reader's card is drawn. */
+/**
+ * Every frame from the next Back on: whether Home's feed is back in the page, where the page is
+ * scrolled and where the reader's card is drawn. Read until the feed has been back for
+ * `FRAMES_AFTER_BACK` frames, or for `GIVES_UP_AFTER_MS`.
+ */
 async function recordFramesAfterBack(page: Page, anchor: number) {
-  await page.evaluate(({ name, count }) => {
+  await page.evaluate(({ name, count, limit }) => {
+    const recorder = window as unknown as { __framesAfterBack: FrameAfterBack[]; __framesAfterBackDone: boolean };
     const frames: FrameAfterBack[] = [];
-    (window as unknown as { __framesAfterBack: FrameAfterBack[] }).__framesAfterBack = frames;
+    recorder.__framesAfterBack = frames;
+    recorder.__framesAfterBackDone = false;
     window.addEventListener('popstate', () => {
+      const pressedAt = performance.now();
+      let sinceFeed = 0;
       const sample = () => {
         const cards = [...document.querySelectorAll('article')];
         const box = cards
           .find((article) => [...article.querySelectorAll('h1, h2, h3')].some((found) => found.textContent === name))
           ?.getBoundingClientRect();
+        const feed = document.querySelector('[data-feed-windowed-list]') !== null;
         frames.push({
+          at: Math.round(performance.now() - pressedAt),
           path: window.location.pathname,
+          feed,
           scrollY: Math.round(window.scrollY),
           anchorTop: box ? Math.round(box.top) : null,
           cardsInView: cards.filter((article) => {
@@ -230,17 +253,22 @@ async function recordFramesAfterBack(page: Page, anchor: number) {
           }).length,
           height: document.documentElement.scrollHeight,
         });
-        if (frames.length < count) requestAnimationFrame(sample);
+        if (feed || sinceFeed > 0) sinceFeed += 1;
+        if (sinceFeed >= count || performance.now() - pressedAt > limit) recorder.__framesAfterBackDone = true;
+        else requestAnimationFrame(sample);
       };
       requestAnimationFrame(sample);
     }, { once: true });
-  }, { name: title(anchor), count: FRAMES_AFTER_BACK });
+  }, { name: title(anchor), count: FRAMES_AFTER_BACK, limit: GIVES_UP_AFTER_MS });
 }
 
 async function framesAfterBack(page: Page) {
-  const read = () => page.evaluate(() => (window as unknown as { __framesAfterBack?: FrameAfterBack[] }).__framesAfterBack ?? []);
-  await expect.poll(async () => (await read()).length, { timeout: 30_000 }).toBeGreaterThanOrEqual(FRAMES_AFTER_BACK);
-  const frames = await read();
+  const recorder = () => page.evaluate(() => {
+    const { __framesAfterBack, __framesAfterBackDone } = window as unknown as { __framesAfterBack?: FrameAfterBack[]; __framesAfterBackDone?: boolean };
+    return { frames: __framesAfterBack ?? [], done: __framesAfterBackDone === true };
+  });
+  await expect.poll(async () => (await recorder()).done, { timeout: GIVES_UP_AFTER_MS + 30_000 }).toBe(true);
+  const { frames } = await recorder();
   const record = test.info().outputPath('frames-after-back.json');
   fs.writeFileSync(record, JSON.stringify(frames, null, 1));
   await test.info().attach('frames-after-back.json', { path: record, contentType: 'application/json' });
@@ -248,19 +276,21 @@ async function framesAfterBack(page: Page) {
 }
 
 /**
- * The reader opens the creator of the card they stopped on, from the card, and comes back with the
- * browser's Back: from the first frame after it the card is where they left it, and stays there.
+ * The reader leaves by a link of the page (`leave`, to `leftFor`) and comes back with the browser's
+ * Back. The page left for may stay up for the first frames after the press, for no longer than
+ * `FEED_BACK_WITHIN_MS`; from the first frame that draws Home's feed again the reader's card is
+ * where they left it, in every frame, and it stays there.
  */
-async function leaveForTheCreatorAndComeBack(page: Page, anchor: number, before: Place) {
+async function leaveAndComeBack(page: Page, anchor: number, before: Place, leftFor: string, leave: () => Promise<void>) {
   // Where the window stood at the press itself: the press moved nothing.
   await page.evaluate(() => document.addEventListener('click', () => {
     (window as unknown as { __leftAt: number }).__leftAt = Math.round(window.scrollY);
   }, { capture: true, once: true }));
-  await card(page, anchor).locator(`a[href="${CREATOR_PAGE}"]`).first().click();
-  await page.waitForURL(`**${CREATOR_PAGE}`, COLD_PAGE);
+  await leave();
+  await page.waitForURL(`**${leftFor}`, COLD_PAGE);
   expect(await page.evaluate(() => (window as unknown as { __leftAt: number }).__leftAt)).toBe(before.scrollY);
   await expect(heading(page, anchor)).toHaveCount(0, COLD_PAGE);
-  // The creator's page has come (offline, the page that says it could not be read).
+  // The page left for has come (a creator's, offline, is the page that says it could not be read).
   await page.waitForLoadState('networkidle');
 
   await recordFramesAfterBack(page, anchor);
@@ -269,10 +299,20 @@ async function leaveForTheCreatorAndComeBack(page: Page, anchor: number, before:
   const frames = await framesAfterBack(page);
 
   // The frames that differ, in order: the whole story of a failure in a line or two.
-  const story = JSON.stringify({ before, frames: frames.filter((frame, index) => JSON.stringify(frame) !== JSON.stringify(frames[index - 1])) });
-  for (const frame of frames) {
+  const story = JSON.stringify({
+    before,
+    frames: frames.filter((frame, index) => JSON.stringify({ ...frame, at: 0 }) !== JSON.stringify({ ...frames[index - 1], at: 0 })),
+  });
+  const back = frames.findIndex((frame) => frame.feed);
+  expect(back, `Home's feed is drawn again ${story}`).toBeGreaterThanOrEqual(0);
+  expect(frames[back].at, `Home's feed is back within ${FEED_BACK_WITHIN_MS}ms of the press ${story}`).toBeLessThanOrEqual(FEED_BACK_WITHIN_MS);
+  const drawn = frames.slice(back);
+  expect(drawn.length, story).toBeGreaterThanOrEqual(FRAMES_AFTER_BACK);
+  for (const frame of drawn) {
     expect(frame.path, story).toBe('/');
-    expect(frame.anchorTop, `the reader's card is drawn in every frame ${story}`).not.toBeNull();
+    // No frame of the feed with nothing in the window.
+    expect(frame.cardsInView, `every frame of the feed draws cards in the window ${story}`).toBeGreaterThan(0);
+    expect(frame.anchorTop, `the reader's card is drawn in every frame of the feed ${story}`).not.toBeNull();
     expect(Math.abs(frame.anchorTop! - before.top), `the reader's card, left ${before.top}px from the window's top ${story}`).toBeLessThanOrEqual(SAME_PLACE_PX);
     expect(Math.abs(frame.scrollY - before.scrollY), `the scroll, left at ${before.scrollY}px ${story}`).toBeLessThanOrEqual(SAME_PLACE_PX);
   }
@@ -282,8 +322,17 @@ async function leaveForTheCreatorAndComeBack(page: Page, anchor: number, before:
   const settled = JSON.stringify({ before, after });
   expect(Math.abs(after.top - before.top), settled).toBeLessThanOrEqual(SAME_PLACE_PX);
   expect(Math.abs(after.scrollY - before.scrollY), settled).toBeLessThanOrEqual(SAME_PLACE_PX);
-  await expect(heading(page, anchor)).toBeInViewport();
+  await expect(card(page, anchor)).toBeInViewport();
 }
+
+/** The reader opens the creator of the card they stopped on, from the card, and comes back. */
+const leaveForTheCreatorAndComeBack = (page: Page, anchor: number, before: Place) => leaveAndComeBack(
+  page,
+  anchor,
+  before,
+  CREATOR_PAGE,
+  () => card(page, anchor).locator(`a[href="${CREATOR_PAGE}"]`).first().click(),
+);
 
 test.describe('on a laptop', () => {
   test.use({ viewport: { width: 1440, height: 900 } });
@@ -318,5 +367,70 @@ test.describe('on a phone', () => {
     const before = await stopOnTheCard(page, 17);
 
     await leaveForTheCreatorAndComeBack(page, 17, before);
+  });
+});
+
+// A reader who jumps down the feed (the End key, the scrollbar) passes cards that are never drawn.
+// The feed mounts a card from 1280px away and the browser draws one from one and a half windows
+// away, so in a window under 853px tall a card can be mounted, and measured, and still not drawn:
+// what the feed has of it is its placeholder's height. Laid out in full on the way back because it
+// "had been measured", such a card took its own height above the reader and moved their card
+// (review of d6700f26a). It is a placeholder still, as it was left.
+test.describe('in a short laptop window', () => {
+  test.use({ viewport: { width: 1280, height: 650 } });
+
+  const OTHER_PAGE = '/developers/mcp';
+
+  /**
+   * The cards mounted above the window, further than the browser draws from (one and a half
+   * windows, and a little), that it has not drawn: their titles, nearest last.
+   */
+  const undrawnCardsAbove = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-feed-window-key]')]
+    .filter((mounted) => mounted.getBoundingClientRect().bottom < -(window.innerHeight * 1.5 + 40))
+    // A card that skips its contents: nothing inside it is rendered.
+    .filter((mounted) => mounted.querySelector('article > *')?.checkVisibility({ contentVisibilityAuto: true }) === false)
+    .map((mounted) => mounted.querySelector('h1, h2, h3')?.textContent ?? ''));
+
+  test('Back keeps the place of a reader who jumped down the feed, past cards never drawn', async ({ page }) => {
+    await answerHome(page, 30);
+    await page.request.get(OTHER_PAGE, { timeout: 0 });
+    await page.goto('/', COLD_PAGE);
+    await expect(card(page, 1)).toBeVisible(COLD_PAGE);
+
+    // To the end in jumps, as the End key goes: each lands where the next page is asked for.
+    await expect(async () => {
+      await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'instant' }));
+      await expect(heading(page, 30)).toBeAttached({ timeout: 3_000 });
+    }).toPass({ timeout: 60_000 });
+    // Then up a little at a time, until a card the jumps passed is mounted above the window and
+    // not yet near enough to be drawn.
+    const frames = (count: number) => page.evaluate((left) => new Promise<void>((resolve) => {
+      const frame = () => (left-- > 0 ? requestAnimationFrame(frame) : resolve());
+      frame();
+    }), count);
+    await frames(20);
+    await expect(async () => {
+      if ((await undrawnCardsAbove(page)).length === 0) {
+        await page.evaluate(() => window.scrollBy({ top: -25, behavior: 'instant' }));
+      }
+      // Still there once the feed has taken the scroll: the cards it holds are the ones near the window.
+      await frames(10);
+      expect((await undrawnCardsAbove(page)).length).toBeGreaterThan(0);
+    }).toPass({ timeout: 90_000, intervals: [0] });
+
+    // The reader's card: the first one in the window.
+    const anchor = await page.evaluate(() => {
+      const first = [...document.querySelectorAll('article')].find((article) => article.getBoundingClientRect().bottom > 200);
+      return Number(/(\d+)$/.exec(first?.querySelector('h1, h2, h3')?.textContent ?? '')?.[1]);
+    });
+    expect(anchor).toBeGreaterThan(PAGE_SIZE);
+    const before = await settledPlace(page, anchor);
+    const undrawn = await undrawnCardsAbove(page);
+    expect(undrawn.length, 'a card above the window is mounted and not drawn').toBeGreaterThan(0);
+
+    // Away by the side navigation, which is on screen wherever the feed is scrolled.
+    await leaveAndComeBack(page, anchor, before, OTHER_PAGE, () => page.locator('aside.app-shell-sidebar').getByRole('link', { name: 'AI agents', exact: true }).click());
+    // The cards that were not drawn are not drawn now either.
+    expect(await undrawnCardsAbove(page)).toEqual(undrawn);
   });
 });
