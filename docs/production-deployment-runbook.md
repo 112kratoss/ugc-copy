@@ -1101,7 +1101,7 @@ These are known gaps, consciously left open under the no-third-party, no-paid-ad
   physical database backups have a daily RPO; they are not continuous recovery.
 - **No independent Storage recovery.** Supabase database backups do not cover
   Storage objects, and the lean launch has no off-platform media backup.
-- **No mobile OTA channel.** Every client fix requires a store release; the server-side 426 gate is the only fast lever, and it can only push users toward a build that must already be approved.
+- **A native fix needs a store release.** A JS-only fix ships as an OTA update with `ugc-mobile/scripts/publish-ota.mjs`, to the binaries whose runtime fingerprint `ugc-mobile/ota-targets.json` lists. A fix that touches a native input (a package, a plugin, a patch, the app config) needs a store build and its review; for those the server-side 426 gate is the only fast lever, and it can only push users toward a build that must already be approved.
 
 ## Performance Monitoring And Load Budgets
 
