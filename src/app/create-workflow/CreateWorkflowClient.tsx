@@ -403,7 +403,7 @@ export default function CreateWorkflowClient({
         const response = await fetch(`/api/templates/${initialTemplateId}`, {
           headers: await authHeaders(),
         });
-        const data = await readJsonResponse(response);
+        const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to load template authoring details.' });
         if (!response.ok) {
           throw new Error(data.error || 'Failed to load template authoring details.');
         }
@@ -1098,7 +1098,7 @@ export default function CreateWorkflowClient({
           body: JSON.stringify({}),
         }
       );
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to approve workflow checkpoint.' });
       if (!response.ok) {
         throw new Error(data.error || 'Failed to approve workflow checkpoint.');
       }

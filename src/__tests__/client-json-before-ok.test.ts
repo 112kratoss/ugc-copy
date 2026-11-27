@@ -56,3 +56,39 @@ describe('client reads of an API answer', () => {
     expect(findUnguardedReads()).toEqual([]);
   });
 });
+
+// A read whose success path goes on to use the body names the message it says when a 200's body
+// cannot be read (`unreadableSuccess`), instead of carrying on with `{}`: no canvas, share, run,
+// list or template (review of the 2026-11-27 change). `workflow-library.test.tsx` draws two of
+// these; the rest are held here by their words.
+const SUCCESS_BODY_READS: Array<[string, string]> = [
+  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'Failed to load workflow share preview.'],
+  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'Failed to create workflow share link.'],
+  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'Failed to import workflow share.'],
+  ['src/app/marketplace/MarketplaceBrowser.tsx', 'Could not load more recipes.'],
+  ['src/app/create-workflow/useWorkflowCanvasAssistant.ts', 'Workflow assistant request failed.'],
+  ['src/app/create-workflow/useWorkflowCanvasAssistant.ts', 'Failed to apply assistant proposal.'],
+  ['src/app/create-workflow/useWorkflowRunPolling.ts', 'Failed to refresh workflow run'],
+  ['src/app/create-workflow/CreateWorkflowClient.tsx', 'Failed to load template authoring details.'],
+  ['src/app/create-workflow/CreateWorkflowClient.tsx', 'Failed to approve workflow checkpoint.'],
+  ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'Failed to load workflow canvas'],
+  ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'Failed to create canvas'],
+  ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'Failed to load workflow canvases'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to load workflows.'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to create workflow.'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to load workflow for duplication.'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to duplicate workflow.'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to rename workflow.'],
+  ['src/app/create-workflow/useWorkflowCanvasPersistence.ts', 'Failed to save canvas'],
+  ['src/app/profile/OwnerProfileMediaHub.tsx', 'Could not load your posts.'],
+  ['src/app/profile/OwnerProfileMediaHub.tsx', 'Could not load saved posts.'],
+  ['src/app/create-workflow/WorkflowTemplatePublishDrawer.tsx', 'Template request failed.'],
+  ['src/app/post/new/NewPostClient.tsx', 'Failed to load generation.'],
+];
+
+describe('client reads that use a success body', () => {
+  it.each(SUCCESS_BODY_READS)('%s says "%s" for a 200 it cannot read', (file, message) => {
+    const source = readFileSync(path.join(process.cwd(), file), 'utf8');
+    expect(source).toContain(`unreadableSuccess: '${message}'`);
+  });
+});

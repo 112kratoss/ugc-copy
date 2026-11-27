@@ -113,7 +113,7 @@ export function useWorkflowCanvasPersistence({
           graphHash: nextGraphHash,
         }),
       });
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to save canvas' });
 
       if (response.status === 409 && data.canvas) {
         const conflictedCanvas = data.canvas as WorkflowCanvasRecord;

@@ -191,4 +191,37 @@ describe('WorkflowLibraryClient', () => {
       expect(screen.queryByRole('heading', { name: 'Product launch flow' })).not.toBeInTheDocument();
     });
   });
+
+  // A 200 whose body is not the answer (a page the platform put in its place) read as an empty
+  // object after the 2026-11-27 change, and the library went on with no canvas: it crashed on
+  // `undefined.id` or drew an empty list (review of that change). Each says its own message.
+  it('says its own message when a create or a rename answers 200 with no canvas', async () => {
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' || method === 'PATCH') {
+        return new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 });
+      }
+      return answer(input, init);
+    });
+    render(<WorkflowLibraryClient />);
+    await screen.findByRole('heading', { name: 'Product launch flow' });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'New workflow' })[0]);
+    expect(await screen.findByText('Failed to create workflow.')).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for Product launch flow' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Launch system' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
+    expect(await screen.findByText('Failed to rename workflow.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Product launch flow' })).toBeInTheDocument();
+  });
+
+  it('says the library failed to load when the list answers 200 with no list', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 })));
+    render(<WorkflowLibraryClient />);
+    expect(await screen.findByText('Failed to load workflows.')).toBeInTheDocument();
+  });
 });

@@ -431,7 +431,7 @@ export default function OwnerProfileMediaHub({
 
   const loadPosts = useCallback(async (offset = 0, append = false) => {
     const response = await fetch(`/api/posts?scope=owner&includeArchived=false&limit=${PAGE_SIZE}&offset=${offset}`, { headers: authHeaders });
-    const payload = await readJsonResponse(response);
+    const payload = await readJsonResponse(response, { unreadableSuccess: 'Could not load your posts.' });
     if (!response.ok) throw new Error(payload?.error || 'Could not load your posts.');
     const posts = Array.isArray(payload.posts) ? payload.posts as OwnerPost[] : [];
     setOwnerPosts((current) => append ? appendUnique(current, posts) : posts);
@@ -445,7 +445,7 @@ export default function OwnerProfileMediaHub({
 
   const loadSaved = useCallback(async (offset = 0, append = false) => {
     const response = await fetch(`/api/showcase/saved-media?limit=${PAGE_SIZE}&offset=${offset}`, { headers: authHeaders });
-    const payload = await readJsonResponse(response);
+    const payload = await readJsonResponse(response, { unreadableSuccess: 'Could not load saved posts.' });
     if (!response.ok) throw new Error(payload?.error || 'Could not load saved posts.');
     const items = Array.isArray(payload.items) ? payload.items as ShowcaseFeedItem[] : [];
     setProfileSavedItems((current) => append ? appendUnique(current, items) : items);

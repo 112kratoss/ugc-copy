@@ -109,7 +109,7 @@ export function useWorkflowCanvasCanvases({
     const response = await fetch(`/api/workflow-canvases/${canvasId}`, {
       headers: await authHeadersRef.current(),
     });
-    const data = await readJsonResponse(response);
+    const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to load workflow canvas' });
     if (!response.ok) {
       throw new Error(data.error || 'Failed to load workflow canvas');
     }
@@ -159,7 +159,7 @@ export function useWorkflowCanvasCanvases({
             graph: options?.graph ?? createStarterGraph(),
           }),
         });
-        const data = await readJsonResponse(response);
+        const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to create canvas' });
         if (!response.ok) {
           throw new Error(data.error || 'Failed to create canvas');
         }
@@ -287,7 +287,7 @@ export function useWorkflowCanvasCanvases({
         const response = await fetch('/api/workflow-canvases', {
           headers: await authHeadersRef.current(),
         });
-        const data = await readJsonResponse(response);
+        const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to load workflow canvases' });
         if (!response.ok) {
           throw new Error(data.error || 'Failed to load workflow canvases');
         }
@@ -310,7 +310,7 @@ export function useWorkflowCanvasCanvases({
               graph: createStarterGraph(),
             }),
           });
-          const createData = await readJsonResponse(createResponse);
+          const createData = await readJsonResponse(createResponse, { unreadableSuccess: 'Failed to create canvas' });
           if (!createResponse.ok) {
             throw new Error(createData.error || 'Failed to create canvas');
           }

@@ -356,7 +356,7 @@ export default function MarketplaceBrowser({
           : { Accept: 'application/json' },
         signal: controller.signal,
       });
-      const payload = await readJsonResponse(response) as {
+      const payload = await readJsonResponse(response, { unreadableSuccess: 'Could not load more recipes.' }) as {
         items?: MarketplaceResourceListItem[];
         pageInfo?: MarketplacePageInfo;
         error?: string;

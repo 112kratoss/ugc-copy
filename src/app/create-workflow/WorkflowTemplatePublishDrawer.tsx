@@ -275,7 +275,7 @@ export function WorkflowTemplatePublishDrawer({
   );
 
   const readJson = useCallback(async (response: Response) => {
-    const data = await readJsonResponse(response);
+    const data = await readJsonResponse(response, { unreadableSuccess: 'Template request failed.' });
     if (!response.ok) {
       throw new Error(data.error || 'Template request failed.');
     }

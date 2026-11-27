@@ -158,7 +158,7 @@ export function WorkflowCanvasShareActions({
       const response = await fetch(`/api/workflow-shares/${shareId}`, {
         headers: await authHeaders(),
       });
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to load workflow share preview.' });
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to load workflow share preview.');
@@ -199,7 +199,7 @@ export function WorkflowCanvasShareActions({
         method: 'POST',
         headers: await authHeaders(),
       });
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to create workflow share link.' });
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to create workflow share link.');
@@ -264,7 +264,7 @@ export function WorkflowCanvasShareActions({
         method: 'POST',
         headers: await authHeaders(),
       });
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to import workflow share.' });
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to import workflow share.');

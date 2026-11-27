@@ -48,7 +48,7 @@ export function useWorkflowRunPolling({
       const response = await fetch(`/api/workflow-canvases/${activeCanvasId}/runs/${activeRunId}`, {
         headers: await authHeaders(),
       });
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to refresh workflow run' });
       if (!response.ok) {
         throw new Error(data.error || 'Failed to refresh workflow run');
       }

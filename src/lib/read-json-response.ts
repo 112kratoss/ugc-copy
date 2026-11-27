@@ -9,15 +9,23 @@
  *
  * The type is the caller's claim, as `response.json()`'s `any` was: read `response.ok` before
  * trusting a field, since a failed answer reads as `{}`.
+ *
+ * A success status whose body cannot be read is no empty answer: a caller that goes on to use the
+ * body (a canvas, a share, a list) passes `unreadableSuccess`, the message it says then, and the
+ * read throws it, as `response.json()` threw before, in the caller's own words.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- drop-in for response.json()'s any
-export async function readJsonResponse<T = any>(response: Response): Promise<T> {
+export async function readJsonResponse<T = any>(
+  response: Response,
+  options: { unreadableSuccess?: string } = {},
+): Promise<T> {
   try {
     const body: unknown = await response.json();
     if (body !== null && typeof body === 'object') return body as T;
   } catch {
     // Not JSON (an HTML error page, an empty body) or a body already read.
   }
+  if (response.ok && options.unreadableSuccess) throw new Error(options.unreadableSuccess);
   return {} as T;
 }
 

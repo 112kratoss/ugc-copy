@@ -65,3 +65,25 @@ describe('readJsonResponse', () => {
     await expect(readJsonResponse(response)).resolves.toEqual({});
   });
 });
+
+// A success status whose body cannot be read is no empty answer: a caller that needs the body
+// names the message it says then (review of the 2026-11-27 fix: a canvas, a share, a list).
+describe('readJsonResponse with unreadableSuccess', () => {
+  it('throws the caller\'s message for a 200 whose body is not JSON', async () => {
+    await expect(readJsonResponse(new Response('<!DOCTYPE html>', { status: 200 }), {
+      unreadableSuccess: 'Failed to create canvas',
+    })).rejects.toThrow('Failed to create canvas');
+  });
+
+  it('still returns an empty object for a failed answer whose body is not JSON', async () => {
+    await expect(readJsonResponse(new Response('<!DOCTYPE html>', { status: 502 }), {
+      unreadableSuccess: 'Failed to create canvas',
+    })).resolves.toEqual({});
+  });
+
+  it('returns a readable success body as it is', async () => {
+    await expect(readJsonResponse(new Response('{"canvas":{"id":"c1"}}', { status: 200 }), {
+      unreadableSuccess: 'Failed to create canvas',
+    })).resolves.toEqual({ canvas: { id: 'c1' } });
+  });
+});

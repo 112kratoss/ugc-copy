@@ -1759,7 +1759,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             Authorization: `Bearer ${session.access_token}`,
           },
         });
-        const payload = await readJsonResponse(response);
+        const payload = await readJsonResponse(response, { unreadableSuccess: 'Failed to load generation.' });
 
         if (!response.ok) {
           throw new Error(payload.error || 'Failed to load generation.');

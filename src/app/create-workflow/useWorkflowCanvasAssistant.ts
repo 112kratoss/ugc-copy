@@ -50,7 +50,7 @@ class WorkflowAssistantRequestError extends Error {
 }
 
 async function readAssistantResponse(response: Response) {
-  const data = await readJsonResponse(response);
+  const data = await readJsonResponse(response, { unreadableSuccess: 'Workflow assistant request failed.' });
   if (!response.ok) {
     throw new WorkflowAssistantRequestError(
       data.error || 'Workflow assistant request failed.',
@@ -217,7 +217,7 @@ export function useWorkflowCanvasAssistant({
           headers: await authHeaders(),
         }
       );
-      const data = await readJsonResponse(response);
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to apply assistant proposal.' });
 
       if (response.status === 409) {
         if (data.canvas) {
