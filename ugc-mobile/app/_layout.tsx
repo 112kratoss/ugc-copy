@@ -54,7 +54,13 @@ import { CREATOR_PAYOUTS_QUERY_KEY } from '@/lib/use-creator-payout-state';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
 import { subscribeToAppForeground } from '@/lib/app-foreground';
-import { installGlobalErrorHandlers, reportClientError, setClientErrorReporter } from '@/lib/client-error-report';
+import {
+  configureClientErrorStore,
+  installGlobalErrorHandlers,
+  reportClientError,
+  setClientErrorReporter,
+} from '@/lib/client-error-report';
+import { createClientErrorStore } from '@/lib/client-error-store';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
@@ -112,6 +118,19 @@ const FONT_SPLASH_FALLBACK_MS = 1200;
 // The app's error reporting (lib/client-error-report.ts), from launch: the global JS error handler
 // and Hermes's unhandled-rejection tracker, both handing errors to the one reporter. Here because
 // this module loads eagerly; inline requires would install them late anywhere else.
+// A fatal error's report is kept on the device and sent at the next launch: the route it happened
+// on is the one the ClientErrorCoordinator last saw.
+let clientErrorRoute: string | null = null;
+function readClientErrorContext() {
+  const { version, update } = readAppVersionParts();
+  return {
+    route: clientErrorRoute,
+    appVersion: version,
+    updateId: update,
+    platform: Platform.OS === 'ios' ? 'ios' as const : 'android' as const,
+  };
+}
+configureClientErrorStore(createClientErrorStore(), readClientErrorContext);
 installGlobalErrorHandlers({
   errorUtils: (globalThis as { ErrorUtils?: Parameters<typeof installGlobalErrorHandlers>[0]['errorUtils'] }).ErrorUtils,
   hermes: (globalThis as { HermesInternal?: Parameters<typeof installGlobalErrorHandlers>[0]['hermes'] }).HermesInternal,
@@ -644,19 +663,13 @@ function ClientErrorCoordinator() {
   // app's version and update, and the platform. Nothing a person typed.
   const { api } = useAuth();
   const pathname = usePathname();
-  const pathnameRef = useRef(pathname);
   useEffect(() => {
-    pathnameRef.current = pathname;
+    clientErrorRoute = pathname ?? null;
   }, [pathname]);
 
   useEffect(() => setClientErrorReporter({
     send: (report) => api.reportClientError(report),
-    context: () => ({
-      route: pathnameRef.current ?? null,
-      appVersion: readAppVersionParts().version,
-      updateId: readAppVersionParts().update,
-      platform: Platform.OS === 'ios' ? 'ios' : 'android',
-    }),
+    context: readClientErrorContext,
   }), [api]);
 
   return null;

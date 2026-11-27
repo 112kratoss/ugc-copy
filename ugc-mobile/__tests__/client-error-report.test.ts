@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import {
   CLIENT_ERROR_LIMITS,
+  configureClientErrorStore,
   installGlobalErrorHandlers,
+  type ClientErrorReportBody,
   reportClientError,
   resetClientErrorReportsForTests,
   setClientErrorReporter,
@@ -107,6 +109,21 @@ describe('the client error reporter', () => {
     expect((send.mock.calls[0][0] as { message: string; fatal: boolean })).toMatchObject({ message: 'Error: at launch', fatal: true });
   });
 
+  // A plain network failure says nothing about the app, and five of them would use up the session.
+  it('does not report plain network failures', async () => {
+    const send = reporter();
+    const aborted = new Error('Aborted');
+    aborted.name = 'AbortError';
+    const apiOffline = Object.assign(new Error('Network request failed. Please check your connection and try again.'), { name: 'ApiError', status: 0 });
+    for (const error of [new TypeError('Network request failed'), aborted, apiOffline, new Error('Request timed out after 30000ms')]) {
+      reportClientError(error, { fatal: false });
+    }
+    reportClientError(new Error('a real one'), { fatal: false });
+    await settle();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((send.mock.calls[0][0] as { message: string }).message).toBe('Error: a real one');
+  });
+
   it('sends a route\'s path alone, never its query', async () => {
     const send = vi.fn(async (_report: unknown) => undefined);
     setClientErrorReporter({ send, context: () => ({ ...context, route: '/search?q=what I typed' }) });
@@ -128,11 +145,80 @@ describe('the global handlers', () => {
 
     installGlobalErrorHandlers({ errorUtils, hermes: null });
     const error = new Error('boom');
-    installed!(error, true);
+    // A fatal one is kept on the device instead (the next test); a non-fatal one is sent now.
+    installed!(error, false);
     await settle();
 
-    expect(previous).toHaveBeenCalledWith(error, true);
-    expect(send.mock.calls[0][0]).toMatchObject({ message: 'Error: boom', fatal: true });
+    expect(previous).toHaveBeenCalledWith(error, false);
+    expect(send.mock.calls[0][0]).toMatchObject({ message: 'Error: boom', fatal: false });
+  });
+
+  // Audit review: a release build's handler ends the process on a fatal error, so a fetch started
+  // then never lands. The report is kept on the device first, for a bounded time, and sent at the
+  // next launch.
+  it('keeps a fatal error on the device before the handler before it ends the app, and sends it next launch', async () => {
+    vi.useFakeTimers();
+    try {
+      const saved: ClientErrorReportBody[] = [];
+      let finishSave!: () => void;
+      const store = {
+        save: vi.fn((bodies: ClientErrorReportBody[]) => new Promise<void>((resolve) => {
+          finishSave = () => { saved.push(...bodies); resolve(); };
+        })),
+        take: vi.fn(async () => saved.splice(0)),
+      };
+      configureClientErrorStore(store, () => context);
+      const previous = vi.fn();
+      let installed: ((error: unknown, isFatal?: boolean) => void) | null = null;
+      installGlobalErrorHandlers({
+        errorUtils: { getGlobalHandler: () => previous, setGlobalHandler: (handler) => { installed = handler; } },
+        hermes: null,
+      });
+
+      installed!(new Error('fatal boom'), true);
+      expect(store.save).toHaveBeenCalledTimes(1);
+      expect(previous).not.toHaveBeenCalled();
+      finishSave();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(previous).toHaveBeenCalledTimes(1);
+      expect(saved).toEqual([expect.objectContaining({ message: 'Error: fatal boom', fatal: true, route: context.route })]);
+
+      // The next launch: the reporter, once set, sends what was kept.
+      resetClientErrorReportsForTests({ dev: false });
+      configureClientErrorStore(store, () => context);
+      const send = reporter();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ message: 'Error: fatal boom', fatal: true }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends the app as before when keeping the report hangs or throws, after at most a second', async () => {
+    vi.useFakeTimers();
+    try {
+      configureClientErrorStore({ save: () => new Promise<void>(() => undefined), take: async () => [] }, () => context);
+      const previous = vi.fn();
+      let installed: ((error: unknown, isFatal?: boolean) => void) | null = null;
+      installGlobalErrorHandlers({
+        errorUtils: { getGlobalHandler: () => previous, setGlobalHandler: (handler) => { installed = handler; } },
+        hermes: null,
+      });
+      installed!(new Error('hangs'), true);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(previous).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(previous).toHaveBeenCalledTimes(1);
+
+      configureClientErrorStore({ save: () => { throw new Error('disk'); }, take: async () => [] }, () => context);
+      expect(() => installed!(new Error('throws'), true)).not.toThrow();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(previous).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(previous).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('tracks unhandled rejections on Hermes as non-fatal reports', async () => {
