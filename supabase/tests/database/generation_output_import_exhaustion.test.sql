@@ -6,7 +6,7 @@
 begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
-select plan(15);
+select plan(18);
 
 insert into auth.users (id, email, aud, role, raw_app_meta_data, raw_user_meta_data, created_at)
 values (
@@ -64,22 +64,58 @@ select is(
   'an exhausted import is not reported as due work'
 );
 
+-- The same file signed again (a new query string) on a later status poll:
+-- stored, but not a reason to try again.
 select public.enqueue_generation_output_import_job(
   'e8400000-0000-4000-8000-000000000001'::uuid,
-  '["https://provider.invalid/refreshed.mp4"]'::jsonb,
+  '["https://provider.invalid/output.mp4?sig=second&expires=2"]'::jsonb,
+  now()
+);
+select is(
+  (select status || ':' || (output_urls ->> 0) from public.generation_output_import_jobs
+   where generation_id = 'e8400000-0000-4000-8000-000000000001'::uuid),
+  'failed:https://provider.invalid/output.mp4?sig=second&expires=2',
+  'the same path with a new query string stays failed, with its URLs refreshed'
+);
+
+-- A different file within five minutes of the last failure: stored, not yet tried.
+select public.enqueue_generation_output_import_job(
+  'e8400000-0000-4000-8000-000000000001'::uuid,
+  '["https://provider.invalid/early.mp4"]'::jsonb,
+  now()
+);
+select is(
+  (select status || ':' || (output_urls ->> 0) from public.generation_output_import_jobs
+   where generation_id = 'e8400000-0000-4000-8000-000000000001'::uuid),
+  'failed:https://provider.invalid/early.mp4',
+  'a different path within five minutes of the last failure stays failed, with its URLs refreshed'
+);
+
+-- A different file once five minutes have passed: tried at once.
+update public.generation_output_import_jobs
+set completed_at = now() - interval '10 minutes'
+where generation_id = 'e8400000-0000-4000-8000-000000000001'::uuid;
+select public.enqueue_generation_output_import_job(
+  'e8400000-0000-4000-8000-000000000001'::uuid,
+  '["https://provider.invalid/refreshed.mp4?sig=x"]'::jsonb,
   now()
 );
 select is(
   (select status || ':' || attempt_count from public.generation_output_import_jobs
    where generation_id = 'e8400000-0000-4000-8000-000000000001'::uuid),
   'pending:1',
-  'different URLs from a later callback reopen it at once, keeping its tries'
+  'a different path after five minutes reopens it, keeping its tries'
 );
 select is(
   (select output_urls from public.generation_output_import_jobs
    where generation_id = 'e8400000-0000-4000-8000-000000000001'::uuid),
-  '["https://provider.invalid/refreshed.mp4"]'::jsonb,
+  '["https://provider.invalid/refreshed.mp4?sig=x"]'::jsonb,
   'the reopened import uses the new URLs'
+);
+select is(
+  public.generation_output_import_url_paths('["https://a.invalid/x.mp4?sig=1#t", "https://a.invalid/y.mp4"]'::jsonb),
+  '["https://a.invalid/x.mp4", "https://a.invalid/y.mp4"]'::jsonb,
+  'file addresses drop the query string and fragment, in order'
 );
 update public.generation_output_import_jobs
 set status = 'failed', next_attempt_at = now() - interval '1 hour'

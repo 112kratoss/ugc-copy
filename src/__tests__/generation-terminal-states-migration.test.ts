@@ -28,9 +28,23 @@ describe('generation terminal states migration', () => {
     expect(sql).toContain('GRANT EXECUTE ON FUNCTION public.enqueue_generation_output_import_job(uuid, jsonb, timestamptz) TO service_role;');
   });
 
-  it('reopens an exhausted import when a later callback brings different URLs, without resetting its tries', () => {
+  it('reopens an exhausted import only for a different file address, five minutes after its last failure, without resetting its tries', () => {
     const body = enqueueBody();
-    expect(body).toContain("public.generation_output_import_jobs.status = 'failed'\n          AND public.generation_output_import_jobs.output_urls IS DISTINCT FROM excluded.output_urls");
+    // Query strings (a per-request signature or expiry) are dropped before comparing.
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION public.generation_output_import_url_paths(p_urls jsonb)');
+    expect(sql).toContain("regexp_replace(item.value #>> '{}', '[?#].*$', '')");
+    expect(sql).toContain('REVOKE ALL ON FUNCTION public.generation_output_import_url_paths(jsonb) FROM PUBLIC, anon, authenticated;');
+    const reopen = [
+      "public.generation_output_import_jobs.status = 'failed'",
+      "AND public.generation_output_import_jobs.completed_at <= now() - interval '5 minutes'",
+      'AND public.generation_output_import_url_paths(public.generation_output_import_jobs.output_urls)',
+      'IS DISTINCT FROM public.generation_output_import_url_paths(excluded.output_urls)',
+    ];
+    for (const line of reopen) expect(body.split(line).length - 1).toBe(2);
+    // The raw URLs are never what decides a reopen.
+    expect(body).not.toContain('output_urls IS DISTINCT FROM excluded.output_urls');
+    // The freshest URLs are stored for every unfinished job, failed included.
+    expect(body).toContain("WHEN public.generation_output_import_jobs.status = 'succeeded'\n        THEN public.generation_output_import_jobs.output_urls\n      ELSE excluded.output_urls");
     expect(body).not.toMatch(/attempt_count/);
   });
 

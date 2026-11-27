@@ -22,9 +22,32 @@ COMMENT ON COLUMN public.generations.provider_sync_attempted_at IS
 --    provider's file may still be there, and its generation is failed and
 --    refunded when that window ends (src/lib/generation-output-import-retries.ts).
 --    A repeated enqueue still refreshes the output URLs of an unfinished job,
---    and reopens a failed one at once when the URLs differ (a later callback
---    with a fresh render), without resetting its attempt count. Otherwise
+--    and reopens a failed one when a later callback names a different file
+--    (the URLs differ once query strings are dropped) at least five minutes
+--    after its last failure, without resetting its attempt count. Otherwise
 --    unchanged from 20260810107000_durable_generation_output_imports.sql.
+-- The file addresses of a list of output URLs: each URL without its query
+-- string or fragment, which providers use for per-request signatures and
+-- expiries. Used by the enqueue below to tell a different file from the same
+-- file signed again.
+CREATE OR REPLACE FUNCTION public.generation_output_import_url_paths(p_urls jsonb)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $function$
+  SELECT coalesce(
+    jsonb_agg(to_jsonb(regexp_replace(item.value #>> '{}', '[?#].*$', '')) ORDER BY item.ordinality),
+    '[]'::jsonb
+  )
+  FROM jsonb_array_elements(
+    CASE WHEN jsonb_typeof(p_urls) = 'array' THEN p_urls ELSE '[]'::jsonb END
+  ) WITH ORDINALITY AS item(value, ordinality);
+$function$;
+
+REVOKE ALL ON FUNCTION public.generation_output_import_url_paths(jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.generation_output_import_url_paths(jsonb) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.enqueue_generation_output_import_job(
   p_generation_id uuid,
   p_output_urls jsonb,
@@ -75,12 +98,17 @@ BEGIN
       public.generation_output_import_jobs.provider_completed_at,
       excluded.provider_completed_at
     ),
-    -- A failed job reopens only for different URLs (a later callback with a
-    -- fresh render), keeping its attempt count: one more try, then the hourly
-    -- retry again. The same URLs again leave it failed.
+    -- A failed job reopens only for a different file address (a later
+    -- callback with a fresh render): the URLs compared without their query
+    -- strings, so a per-request signature or expiry on every status poll is
+    -- not "different", and never sooner than five minutes after its last
+    -- failure. It keeps its attempt count: one more try, then the hourly retry
+    -- again. Otherwise it stays failed, with the freshest URLs stored above.
     status = CASE
       WHEN public.generation_output_import_jobs.status = 'failed'
-          AND public.generation_output_import_jobs.output_urls IS DISTINCT FROM excluded.output_urls
+          AND public.generation_output_import_jobs.completed_at <= now() - interval '5 minutes'
+          AND public.generation_output_import_url_paths(public.generation_output_import_jobs.output_urls)
+            IS DISTINCT FROM public.generation_output_import_url_paths(excluded.output_urls)
         THEN 'pending'
       WHEN public.generation_output_import_jobs.status IN ('processing', 'succeeded', 'failed')
         THEN public.generation_output_import_jobs.status
@@ -88,7 +116,9 @@ BEGIN
     END,
     next_attempt_at = CASE
       WHEN public.generation_output_import_jobs.status = 'failed'
-          AND public.generation_output_import_jobs.output_urls IS DISTINCT FROM excluded.output_urls
+          AND public.generation_output_import_jobs.completed_at <= now() - interval '5 minutes'
+          AND public.generation_output_import_url_paths(public.generation_output_import_jobs.output_urls)
+            IS DISTINCT FROM public.generation_output_import_url_paths(excluded.output_urls)
         THEN now()
       WHEN public.generation_output_import_jobs.status IN ('processing', 'succeeded', 'failed')
         THEN public.generation_output_import_jobs.next_attempt_at
