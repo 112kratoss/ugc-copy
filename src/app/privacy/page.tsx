@@ -17,7 +17,7 @@ export default function PrivacyPolicy() {
             <div className="max-w-4xl mx-auto px-6 py-16">
 
                 <h1 className="text-4xl font-bold mb-4">Privacy Policy</h1>
-                <p className="text-zinc-400 mb-12">Last updated: November 23, 2026</p>
+                <p className="text-zinc-400 mb-12">Last updated: November 27, 2026</p>
 
                 <div className="space-y-8 text-zinc-300">
                     <section>
@@ -56,6 +56,7 @@ export default function PrivacyPolicy() {
                             <li>Onboarding steps viewed, completion or skip status, and the creation goal you select</li>
                             <li>Public posts you view: each counts once a day toward the post&apos;s view total, which everyone can see. A view is recorded under your account, or, without one, under privacy-protective hashes of your browser&apos;s or app installation&apos;s identifier and of your network, and that record is deleted within three days of the view; only the totals are kept.</li>
                             <li>Time and date of visits</li>
+                            <li>Error reports from the app: when the app hits an error, it sends us a report, kept for 30 days and used to fix faults, with the error&apos;s text and stack, the path of the screen it happened on, the app version and platform, and your account if you are signed in.</li>
                         </ul>
 
                         <h3 className="text-xl font-medium text-white mb-3 mt-6">Referral Information</h3>
