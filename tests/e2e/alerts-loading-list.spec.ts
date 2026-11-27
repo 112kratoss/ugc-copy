@@ -269,7 +269,10 @@ test('Mark all read neither acts nor lights up with nothing unread, and turns on
     return route.fulfill({ json: { success: true } });
   });
   await page.goto('/notifications', COLD_PAGE);
-  await expect(page.getByText('0 unread alerts')).toBeVisible(COLD_PAGE);
+  // The page's own line, under its heading. The bell's badge says the same words to a screen
+  // reader (AlertsBadge), outside the page's main, so the words alone are not one element.
+  const unreadLine = (words: string) => page.getByRole('main').getByText(words);
+  await expect(unreadLine('0 unread alerts')).toBeVisible(COLD_PAGE);
 
   const markAll = page.getByRole('button', { name: 'Mark all read' });
   await expect(markAll).toBeDisabled();
@@ -296,13 +299,13 @@ test('Mark all read neither acts nor lights up with nothing unread, and turns on
   // Something unread, read again by Refresh: the control turns on and acts.
   unread = 2;
   await page.getByRole('button', { name: 'Refresh alerts' }).click();
-  await expect(page.getByText('2 unread alerts')).toBeVisible();
+  await expect(unreadLine('2 unread alerts')).toBeVisible();
   await expect(markAll).toBeEnabled();
   // Read until the colours have moved: the change from rest runs a 150ms transition.
   await expect.poll(look).not.toEqual(resting);
   await expect.poll(async () => (await look()).background).not.toBe(resting.background);
   await markAll.click();
-  await expect(page.getByText('0 unread alerts')).toBeVisible();
+  await expect(unreadLine('0 unread alerts')).toBeVisible();
   expect(markAllRequests).toBe(1);
   await expect(markAll).toBeDisabled();
 });
