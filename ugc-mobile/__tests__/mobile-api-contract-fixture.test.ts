@@ -674,6 +674,12 @@ const extendedOperationCases: Array<{
   { key: 'createReferralLink', call: (api) => api.createReferralLink() },
   { key: 'claimReferral', call: (api) => api.claimReferral({ code: 'CREATOR1' }) },
   {
+    key: 'reportClientError',
+    call: (api) => api.reportClientError(
+      mobileApiContract.endpoints.reportClientError.request as Parameters<MagicbookletApiClient['reportClientError']>[0],
+    ),
+  },
+  {
     key: 'reportMediaDiagnostics',
     call: (api) => api.reportMediaDiagnostics({
       sessionId: 'session-1234',

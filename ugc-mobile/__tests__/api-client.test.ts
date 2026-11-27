@@ -2552,6 +2552,25 @@ describe('mobile api client refused-token handling', () => {
     });
   }
 
+  // Audit 2026-11-27: an error report carries the session, when there is one, so the row names its
+  // account; a refused token there must never end the session, whatever the report was about.
+  it('sends an error report with the session but never reads its 401 as the session ending', async () => {
+    const handler = vi.fn();
+    setSessionRejectedHandler(handler);
+    const fetcher = vi.fn(async () => refusedTokenResponse());
+    const api = apiWithToken(fetcher);
+    const report = mobileApiContract.endpoints.reportClientError.request as Parameters<typeof api.reportClientError>[0];
+
+    await expect(api.reportClientError(report)).rejects.toBeInstanceOf(ApiError);
+
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`https://magicbooklet.test${mobileApiContract.endpoints.reportClientError.path}`);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(String(init.body))).toEqual(report);
+    expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('invokes the registered handler exactly once for a burst of refused tokens', async () => {
     const handler = vi.fn();
     setSessionRejectedHandler(handler);

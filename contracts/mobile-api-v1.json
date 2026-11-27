@@ -3596,6 +3596,7 @@
       },
       "status": 204,
       "cacheControl": "private, no-store",
+      "response": null,
       "errors": {
         "invalid": {
           "request": { "message": "", "fatal": false, "platform": "android" },
