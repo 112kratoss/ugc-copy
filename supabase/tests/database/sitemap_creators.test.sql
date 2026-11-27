@@ -1,11 +1,12 @@
 -- list_sitemap_creators: one grouped read for the sitemap's creator list (database audit,
 -- 2026-11-27). It replaces a posts read the API cut at 1,000 rows and a profiles read with up to
 -- 2,000 ids in its URL. Its rows must equal what the old two-step code computed when that code
--- was correct; the reference query below is that code's logic in SQL.
+-- was correct; the reference query below is that code's logic in SQL. Every assertion reads the
+-- fixture's creators only (usernames starting smap-), so seeded rows cannot move it.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap WITH SCHEMA extensions;
 SET LOCAL search_path = public, extensions;
-SELECT plan(11);
+SELECT plan(12);
 
 SELECT has_function('public', 'list_sitemap_creators', ARRAY['integer', 'integer']);
 SELECT is(
@@ -67,22 +68,26 @@ GRANT SELECT ON reference_creators TO service_role;
 
 SET LOCAL role service_role;
 
-SELECT is((SELECT count(*)::int FROM public.list_sitemap_creators(1, 2000)), 1200,
+SELECT is((SELECT count(*)::int FROM public.list_sitemap_creators(1, 2000) WHERE username LIKE 'smap-%'), 1200,
   'every creator with a public post and a name is listed, past the 1,000-row page');
 SELECT set_eq(
-  'SELECT username, last_posted_at FROM public.list_sitemap_creators(1, 2000)',
-  'SELECT username, last_posted_at FROM reference_creators',
+  $$SELECT username, last_posted_at FROM public.list_sitemap_creators(1, 2000) WHERE username LIKE 'smap-%'$$,
+  $$SELECT username, last_posted_at FROM reference_creators WHERE username LIKE 'smap-%'$$,
   'the rows equal the two-step reference: gates, counts and newest dates');
 SELECT is(
   (SELECT last_posted_at FROM public.list_sitemap_creators(1, 2000) WHERE username = 'smap-1'),
   timestamptz '2001-01-01 00:01:00+00',
   'archived and private posts do not move a creator''s last posted date');
-SELECT is((SELECT count(*)::int FROM public.list_sitemap_creators(2, 2000)), 50,
+SELECT is((SELECT count(*)::int FROM public.list_sitemap_creators(2, 2000) WHERE username LIKE 'smap-%'), 50,
   'the minimum post count gates creators');
 SELECT results_eq(
-  'SELECT username FROM public.list_sitemap_creators(1, 3)',
+  $$SELECT username FROM public.list_sitemap_creators(1, 2000) WHERE username LIKE 'smap-%' LIMIT 3$$,
   $$VALUES ('smap-1200'::text), ('smap-1199'), ('smap-1198')$$,
-  'the limit keeps the creators who posted most recently');
+  'the creators who posted most recently come first');
+SELECT results_eq(
+  'SELECT username FROM public.list_sitemap_creators(1, 3)',
+  'SELECT username FROM public.list_sitemap_creators(1, 2000) LIMIT 3',
+  'the limit keeps the first creators of that order');
 SELECT is_empty(
   $$SELECT 1 FROM public.list_sitemap_creators(1, 2000) WHERE username IN ('smap-1201', 'smap-1202', 'smap-1204', 'smap-1205')$$,
   'no display name, a blank one, and only private or hidden posts all leave a creator out');
