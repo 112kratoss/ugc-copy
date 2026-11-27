@@ -1177,6 +1177,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const submitVisibilityRef = useRef<PostVisibility>(getComposerVisibility(initialPost?.visibility));
+  // The Idempotency-Key of the post being composed (POST /api/posts), made at its first publish.
+  const publishIdempotencyKeyRef = useRef<string | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
@@ -3443,12 +3445,18 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         formData.set('category', 'text');
       }
 
+      // One key per composed post, kept until it is published: a retry after a lost answer (a
+      // gateway's 504 after the post was written) carries the same key, so the server can answer
+      // the post it already made instead of making a second. A server that does not know the
+      // header ignores it.
+      publishIdempotencyKeyRef.current ??= crypto.randomUUID();
       let response: Response;
       try {
         response = await fetch('/api/posts', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${session.access_token}`,
+            'Idempotency-Key': publishIdempotencyKeyRef.current,
           },
           body: formData,
         });
@@ -3467,6 +3475,8 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       if (!response.ok) {
         throw getSubmissionError(data, 'Failed to publish post.');
       }
+      // Published: whatever is composed next is another post.
+      publishIdempotencyKeyRef.current = null;
 
       const published: CreatedPostState = {
         postId: data.postId as string,

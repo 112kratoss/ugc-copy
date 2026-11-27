@@ -7089,6 +7089,35 @@ describe('NewPostClient', () => {
       expect(screen.queryByText('Name and handle')).not.toBeInTheDocument();
     });
 
+    // A publish whose answer was lost (a gateway's 504 after the post was written) is retried by
+    // the creator: the retry carries the same Idempotency-Key, so the server can answer the post
+    // it already made instead of making a second one (audit 2026-11-27).
+    it('sends one Idempotency-Key per composed post, the same on a retry', async () => {
+      loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+      enqueueResponse({
+        ok: false,
+        status: 504,
+        json: async () => {
+          throw new SyntaxError('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON');
+        },
+      });
+      enqueueResponse(createdPost);
+      render(<NewPostClient />);
+      writeTextPost();
+      await screen.findByRole('textbox', { name: /^display name$/i });
+
+      fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+      await waitFor(() => expect(postsCalls()).toHaveLength(1));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Failed to publish post.');
+
+      fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+      await waitFor(() => expect(postsCalls()).toHaveLength(2));
+
+      const keys = postsCalls().map(([, init]) => (init?.headers as Record<string, string> | undefined)?.['Idempotency-Key']);
+      expect(keys[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      expect(keys[1]).toBe(keys[0]);
+    });
+
     // The pages read the two fields with the rest of the server render, so the
     // fields are there from the first paint and nothing is fetched for them.
     it('starts from what the server render read and does not read the profile again', () => {
