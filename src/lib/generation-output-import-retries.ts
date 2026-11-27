@@ -174,6 +174,8 @@ async function close(client: SupabaseClient, row: ExhaustedImportRow, nowMs: num
     if (error) throw error;
   } catch (error) {
     logBackendError('generation_output_import_close_failed', { importJobId: row.id, error });
+    // Left open, it would head the next read; stamped, it waits its turn.
+    await moveToBack(client, row, nowMs);
   }
 }
 

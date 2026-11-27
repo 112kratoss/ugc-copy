@@ -341,6 +341,23 @@ describe('exhausted generation output imports', () => {
     expect(builders[1].calls[0]).toEqual(['update', [expect.objectContaining({ status: 'cancelled' })]]);
   });
 
+  it('moves a job it could not close to the back, so it does not hold a batch slot', async () => {
+    const job = exhaustedJob({ generations: { ...exhaustedJob().generations, status: 'failed' } });
+    const { client, builders } = createClient([
+      { data: [job], error: null },
+      { data: null, error: { message: 'close refused' } },
+      { data: null, error: null },
+    ]);
+
+    await retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS });
+
+    expect(builders[1].calls[0]).toEqual(['update', [expect.objectContaining({ status: 'cancelled' })]]);
+    expect(builders[2].calls).toEqual([
+      ['update', [{ updated_at: '2026-11-27T12:00:00.000Z' }]],
+      ['eq', ['id', 'import-1']],
+    ]);
+  });
+
   it('defers what it cannot start before the run deadline', async () => {
     const { client, rpc } = createClient([{ data: [exhaustedJob(), exhaustedJob({ id: 'import-2' })], error: null }]);
 
