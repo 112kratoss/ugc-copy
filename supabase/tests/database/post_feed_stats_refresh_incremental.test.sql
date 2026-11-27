@@ -5,8 +5,9 @@
 -- three window rows were rewritten on every run. A candidate is now a post with a qualifying
 -- event in the last 31 days, or one whose rows are not yet what an empty window computes (it
 -- needs one final refresh to zero them), or one missing a window row. The 24h row is always
--- written: its updated_at is the refresh marker the rotation orders by. The 7d and 30d rows are
--- written only when a value changed.
+-- written: it carries stats_refreshed_at, the cursor the rotation orders by. The 7d and 30d rows
+-- are written only when a value changed. The cursors are left out of the comparison: the old
+-- function had none.
 --
 -- The oracle is the old function, kept below as pg_temp.legacy_refresh_post_feed_stats: on the
 -- same data both must leave identical values in every row and window.
@@ -248,14 +249,14 @@ begin
   drop table if exists pg_temp.before_state, pg_temp.legacy_state;
   create temp table before_state as select * from public.post_feed_stats;
   perform pg_temp.legacy_refresh_post_feed_stats(p_as_of, 10000);
-  create temp table legacy_state as select to_jsonb(s) - 'updated_at' as v from public.post_feed_stats s;
+  create temp table legacy_state as select to_jsonb(s) - 'updated_at' - 'stats_refreshed_at' - 'engagement_refreshed_at' as v from public.post_feed_stats s;
   delete from public.post_feed_stats;
   insert into public.post_feed_stats select * from before_state;
   perform public.refresh_post_feed_stats(p_as_of, 10000);
   select count(*) into v_diff from (
-    (select v from legacy_state except all select to_jsonb(s) - 'updated_at' from public.post_feed_stats s)
+    (select v from legacy_state except all select to_jsonb(s) - 'updated_at' - 'stats_refreshed_at' - 'engagement_refreshed_at' from public.post_feed_stats s)
     union all
-    (select to_jsonb(s) - 'updated_at' from public.post_feed_stats s except all select v from legacy_state)
+    (select to_jsonb(s) - 'updated_at' - 'stats_refreshed_at' - 'engagement_refreshed_at' from public.post_feed_stats s except all select v from legacy_state)
   ) d;
   return v_diff;
 end $$;
@@ -337,7 +338,7 @@ select is(
   'post 1 counts each window''s events (24h, 30d, 7d)');
 
 -- 2. A minute later: the aged-out post and post 5 are no longer candidates and are not written;
---    the unchanged post's 7d and 30d rows are not written; its 24h row carries the marker.
+--    the unchanged post's 7d and 30d rows are not written; its 24h row carries the cursor.
 create temp table before_minute as
 select post_id, window_key, ctid::text as tid, updated_at from public.post_feed_stats;
 select is(public.refresh_post_feed_stats((select t from clock) + interval '1 minute', 10000), 9,
@@ -350,21 +351,21 @@ select ok(not exists (
   select 1 from public.post_feed_stats s join before_minute b using (post_id, window_key)
   where s.post_id = pg_temp.post(4) and s.window_key in ('7d', '30d') and s.ctid::text <> b.tid),
   'an unchanged post''s 7d and 30d rows are not rewritten');
-select is((select updated_at from public.post_feed_stats where post_id = pg_temp.post(4) and window_key = '24h'),
-  (select t from clock) + interval '1 minute', 'its 24h row carries the refresh marker');
+select is((select stats_refreshed_at from public.post_feed_stats where post_id = pg_temp.post(4) and window_key = '24h'),
+  (select t from clock) + interval '1 minute', 'its 24h row carries this refresh''s cursor');
 
 -- 3. Rotation: nine candidates, four a run. Three runs reach every candidate, least recently
 --    refreshed first, although most rows do not change and are not written.
 create temp table candidates as select pg_temp.post(n) as post_id from unnest(array[1, 3, 4, 7, 8, 9, 10, 11, 12]) n;
-update public.post_feed_stats set updated_at = '2030-02-01' where window_key = '24h' and post_id = pg_temp.post(12);
+update public.post_feed_stats set stats_refreshed_at = '2030-02-01' where window_key = '24h' and post_id = pg_temp.post(12);
 select is(public.refresh_post_feed_stats((select t from clock) + interval '2 minutes', 4), 4, 'run 1 takes four');
-select is((select updated_at from public.post_feed_stats where window_key = '24h' and post_id = pg_temp.post(12)),
+select is((select stats_refreshed_at from public.post_feed_stats where window_key = '24h' and post_id = pg_temp.post(12)),
   (select t from clock) + interval '2 minutes', 'run 1 took the least recently refreshed first');
 select is(public.refresh_post_feed_stats((select t from clock) + interval '3 minutes', 4), 4, 'run 2 takes four');
 select is(public.refresh_post_feed_stats((select t from clock) + interval '4 minutes', 4), 4, 'run 3 takes four');
 select is(
   (select count(*)::int from candidates c join public.post_feed_stats s on s.post_id = c.post_id and s.window_key = '24h'
-   where s.updated_at >= (select t from clock) + interval '2 minutes'),
+   where s.stats_refreshed_at >= (select t from clock) + interval '2 minutes'),
   9, 'three runs of four reached all nine candidates');
 
 -- 4. Sliding windows with no new events: identical a day later (the first hours leave 24h), at

@@ -12,13 +12,17 @@
 -- A post outside all three is skipped; on the same data its rows already equal what the old
 -- function would write.
 --
--- Rotation: the least recently refreshed posts still come first. The marker is the 24h row's
--- updated_at, and the 24h row is written on every refresh; the 7d and 30d rows are written only
--- when a value changed (IS DISTINCT FROM, as rebuild_search_terms does). So an unchanged post costs
--- one row write instead of three, and the marker still advances, so the rotation reaches every
--- candidate within ceil(candidates / p_limit) runs. updated_at on 7d and 30d rows now means "last
--- changed"; nothing reads it but this rotation and refresh_post_feed_engagement_stats', which
--- reads the same 24h marker.
+-- Rotation: the least recently refreshed posts still come first. Each refresh now keeps a cursor
+-- of its own: stats_refreshed_at here, engagement_refreshed_at in
+-- refresh_post_feed_engagement_stats (both added below). They used to share updated_at, and the
+-- two run back to back at the same p_as_of, so one refresh's writes reordered the other's
+-- rotation: posts the event refresh wrote every run sorted last for the engagement refresh and,
+-- tied on post id, could miss it for good (review, 2026-11-27). The cursor is read on the 24h row,
+-- which this refresh writes every time; the 7d and 30d rows are written only when a value changed
+-- (IS DISTINCT FROM, as rebuild_search_terms does). So an unchanged post costs one row write
+-- instead of three, and the cursor still advances, so the rotation reaches every candidate within
+-- ceil(candidates / p_limit) runs, whatever the other refresh writes. updated_at stays "last
+-- written"; nothing orders by it any more.
 --
 -- The return value is the number of posts refreshed, as before (it was rows / 3).
 -- Name, arguments, return type, invoker rights, search_path and grants are unchanged; the body is
@@ -27,6 +31,22 @@
 -- against the old function, the zeroing, the skipped writes and the rotation.
 BEGIN;
 SET LOCAL lock_timeout = '5s';
+
+-- One rotation cursor per refresh. Nullable, no default: adding them rewrites nothing. They start
+-- from updated_at, the marker both refreshes ordered by until now, so the first runs after this
+-- keep the order they had.
+ALTER TABLE public.post_feed_stats
+  ADD COLUMN stats_refreshed_at timestamp with time zone,
+  ADD COLUMN engagement_refreshed_at timestamp with time zone;
+
+COMMENT ON COLUMN public.post_feed_stats.stats_refreshed_at IS
+  'When refresh_post_feed_stats last refreshed the post (read on the 24h row): its rotation cursor.';
+COMMENT ON COLUMN public.post_feed_stats.engagement_refreshed_at IS
+  'When refresh_post_feed_engagement_stats last refreshed the post (read on the 24h row): its rotation cursor.';
+
+UPDATE public.post_feed_stats
+SET stats_refreshed_at = updated_at,
+    engagement_refreshed_at = updated_at;
 
 CREATE OR REPLACE FUNCTION public.refresh_post_feed_stats(p_as_of timestamp with time zone DEFAULT timezone('utc'::text, now()), p_limit integer DEFAULT 1000)
  RETURNS integer
@@ -56,7 +76,7 @@ BEGIN
   SELECT array_agg(candidate.post_id ORDER BY candidate.last_refreshed_at ASC NULLS FIRST, candidate.post_id)
   INTO v_post_ids
   FROM (
-    SELECT changing.post_id, marker.updated_at AS last_refreshed_at
+    SELECT changing.post_id, marker.stats_refreshed_at AS last_refreshed_at
     FROM (
       SELECT p.id AS post_id
       FROM public.posts AS p
@@ -104,12 +124,13 @@ BEGIN
       GROUP BY partial.post_id
       HAVING count(*) < 3
     ) AS changing
-    -- The 24h row is written on every refresh, so its updated_at is when the post was last
-    -- refreshed; the least recently refreshed come first, posts with no row before all.
+    -- This refresh's own cursor, on the 24h row it writes every time: the least recently refreshed
+    -- come first, posts with no row (or never refreshed here) before all. The engagement refresh
+    -- keeps a cursor of its own, so its writes never reorder this rotation.
     LEFT JOIN public.post_feed_stats AS marker
       ON marker.post_id = changing.post_id
      AND marker.window_key = '24h'
-    ORDER BY marker.updated_at ASC NULLS FIRST, changing.post_id
+    ORDER BY marker.stats_refreshed_at ASC NULLS FIRST, changing.post_id
     LIMIT p_limit
   ) AS candidate;
 
@@ -233,7 +254,8 @@ BEGIN
     negative_feedback_rate,
     last_event_at,
     last_event_received_at,
-    updated_at
+    updated_at,
+    stats_refreshed_at
   )
   SELECT
     scored.post_id,
@@ -260,6 +282,7 @@ BEGIN
     scored.negative_feedback_rate,
     scored.last_event_at,
     scored.last_event_received_at,
+    p_as_of,
     p_as_of
   FROM scored
   ON CONFLICT (post_id, window_key) DO UPDATE
@@ -285,8 +308,9 @@ BEGIN
       negative_feedback_rate = EXCLUDED.negative_feedback_rate,
       last_event_at = EXCLUDED.last_event_at,
       last_event_received_at = EXCLUDED.last_event_received_at,
-      updated_at = EXCLUDED.updated_at
-  -- The 24h row always (the refresh marker); the others only when a value changed.
+      updated_at = EXCLUDED.updated_at,
+      stats_refreshed_at = EXCLUDED.stats_refreshed_at
+  -- The 24h row always (it carries the cursor); the others only when a value changed.
   WHERE post_feed_stats.window_key = '24h'
      OR (
         post_feed_stats.impression_count, post_feed_stats.unique_viewer_count,

@@ -6,7 +6,7 @@
 -- post, so every fact was matched three times; its rollup then read each candidate's facts once
 -- per window (CROSS JOIN windows, LEFT JOIN feed_delivery_facts).
 --
--- Now: the candidate step reads the marker from the 24h row only. The rollup reads the
+-- Now: the candidate step reads its cursor from the 24h row only. The rollup reads the
 -- candidates' facts of the 30-day window once (MATERIALIZED) and each window takes its part of
 -- them in memory; the aggregates are unchanged, so every value is computed as before.
 --
@@ -15,9 +15,11 @@
 -- between 30 and 31 days, and otherwise kept its counts for good. Rows whose counts are all zero
 -- (never refreshed here, or already zeroed) are left as they are, as before.
 --
--- Rotation and writes as in refresh_post_feed_stats (20261127060310): the 24h row is written on
--- every refresh and its updated_at is the marker both functions order by; the 7d and 30d rows
--- are written only when a value changed. The return value is the number of posts refreshed, as
+-- Rotation and writes as in refresh_post_feed_stats (20261127060310), on a cursor of this
+-- refresh's own, engagement_refreshed_at (added there): the 24h row is written on every refresh
+-- and carries it; the 7d and 30d rows are written only when a value changed. The event refresh
+-- runs just before this one at the same p_as_of and never writes this cursor, so it cannot keep
+-- a post at the back of this rotation. The return value is the number of posts refreshed, as
 -- before (it was rows / 3).
 -- Name, arguments, return type, invoker rights, search_path and grants are unchanged; the body is
 -- the live definition from a clean replay with the candidate step, the fact read and the write
@@ -50,11 +52,11 @@ BEGIN
   -- one whose rows still hold engagement counts: once its facts have left every window it needs
   -- one refresh that zeroes them, which the old candidate step gave only to a post refreshed in the
   -- day between 30 and 31 days. A row whose counts are all zero is left as it is, as before.
-  -- The marker is the 24h row only: joining all three window rows matched each post three times.
+  -- The cursor is read on the 24h row only: joining all three window rows matched each post three times.
   SELECT array_agg(candidate.post_id ORDER BY candidate.last_refreshed_at ASC NULLS FIRST, candidate.post_id)
   INTO v_post_ids
   FROM (
-    SELECT changing.post_id, marker.updated_at AS last_refreshed_at
+    SELECT changing.post_id, marker.engagement_refreshed_at AS last_refreshed_at
     FROM (
       SELECT facts.post_id
       FROM public.feed_delivery_facts AS facts
@@ -77,12 +79,12 @@ BEGIN
          OR counted.exploration_delivery_count > 0
          OR counted.exploration_success_count > 0
     ) AS changing
-    -- The 24h row is written on every refresh, so its updated_at is when the post was last
-    -- refreshed; the least recently refreshed come first, posts with no row before all.
+    -- This refresh's own cursor, on the 24h row it writes every time: the least recently refreshed
+    -- come first, posts with no row (or never refreshed here) before all.
     LEFT JOIN public.post_feed_stats AS marker
       ON marker.post_id = changing.post_id
      AND marker.window_key = '24h'
-    ORDER BY marker.updated_at ASC NULLS FIRST, changing.post_id
+    ORDER BY marker.engagement_refreshed_at ASC NULLS FIRST, changing.post_id
     LIMIT p_limit
   ) AS candidate;
 
@@ -259,7 +261,8 @@ BEGIN
     engagement_depth,
     attention_seconds_norm,
     meaningful_engagement_rate,
-    updated_at
+    updated_at,
+    engagement_refreshed_at
   )
   SELECT
     scored.post_id,
@@ -278,6 +281,7 @@ BEGIN
     scored.engagement_depth,
     scored.attention_seconds_norm,
     scored.meaningful_engagement_rate,
+    p_as_of,
     p_as_of
   FROM scored
   ON CONFLICT (post_id, window_key) DO UPDATE
@@ -295,8 +299,9 @@ BEGIN
       engagement_depth = EXCLUDED.engagement_depth,
       attention_seconds_norm = EXCLUDED.attention_seconds_norm,
       meaningful_engagement_rate = EXCLUDED.meaningful_engagement_rate,
-      updated_at = EXCLUDED.updated_at
-  -- The 24h row always (the refresh marker); the others only when a value changed.
+      updated_at = EXCLUDED.updated_at,
+      engagement_refreshed_at = EXCLUDED.engagement_refreshed_at
+  -- The 24h row always (it carries the cursor); the others only when a value changed.
   WHERE stats.window_key = '24h'
      OR (
         stats.served_delivery_count, stats.rendered_count, stats.video_start_count,

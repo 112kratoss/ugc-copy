@@ -30,6 +30,12 @@ describe('refresh_post_feed_stats refreshes only posts whose rows can change', (
     expect(body).not.toMatch(/\bGRANT\b/);
   });
 
+  it('adds one rotation cursor per refresh, started from the old shared marker', () => {
+    expect(body).toContain('ADD COLUMN stats_refreshed_at timestamp with time zone,');
+    expect(body).toContain('ADD COLUMN engagement_refreshed_at timestamp with time zone;');
+    expect(body).toMatch(/SET stats_refreshed_at = updated_at,\s+engagement_refreshed_at = updated_at;/);
+  });
+
   it('no longer keeps every post that has a row', () => {
     expect(body).not.toContain('existing.post_id IS NOT NULL');
     expect(body).toContain("recent_event.occurred_at >= p_as_of - interval '31 days'");
@@ -39,7 +45,8 @@ describe('refresh_post_feed_stats refreshes only posts whose rows can change', (
 
   it('rotates on the 24h row, which every refresh writes, and guards the others', () => {
     expect(body).toContain("AND marker.window_key = '24h'");
-    expect(body).toContain('ORDER BY marker.updated_at ASC NULLS FIRST, changing.post_id');
+    expect(body).toContain('ORDER BY marker.stats_refreshed_at ASC NULLS FIRST, changing.post_id');
+    expect(body).toContain('stats_refreshed_at = EXCLUDED.stats_refreshed_at');
     expect(body).toContain("WHERE post_feed_stats.window_key = '24h'");
     expect(body).toContain('RETURN cardinality(v_post_ids);');
     expect(body).not.toContain('v_affected_rows / 3');
@@ -62,6 +69,9 @@ describe('refresh_post_feed_engagement_stats reads the facts once and refreshes 
 
   it('joins one window row for the marker and reads the 30-day facts once', () => {
     expect(body).toContain("AND marker.window_key = '24h'");
+    expect(body).toContain('ORDER BY marker.engagement_refreshed_at ASC NULLS FIRST, changing.post_id');
+    expect(body).toContain('engagement_refreshed_at = EXCLUDED.engagement_refreshed_at');
+    expect(body).not.toContain('stats_refreshed_at');
     expect(body).not.toContain('min(existing.updated_at)');
     expect(body).toContain('WITH window_facts AS MATERIALIZED (');
     expect(body).toContain("facts.ranked_at >= p_as_of - interval '30 days'");
@@ -103,5 +113,56 @@ describe('refresh_user_interest_weights updates in place', () => {
     expect(body).toContain('EXCLUDED.weight, EXCLUDED.positive_score');
     expect(body).toContain('INSERT INTO public.user_interest_refresh_state (user_id, refreshed_at)');
     expect(body).toContain('RETURN cardinality(v_user_ids);');
+  });
+});
+
+/**
+ * The write guards: a column a later change adds to an upsert's SET list but forgets in its
+ * IS DISTINCT FROM tuple would never be written while the other values stand still. For each
+ * upsert, every column the SET list assigns from EXCLUDED, except updated_at and the rotation
+ * cursors (written whenever the row is), must be compared on both sides of the guard.
+ */
+const NOT_GUARDED = new Set(['updated_at', 'stats_refreshed_at', 'engagement_refreshed_at']);
+
+function unguardedColumns(sql: string): string[] {
+  // The first upsert in each file is the one that writes the refreshed rows.
+  const upsert = sql.slice(sql.indexOf('ON CONFLICT ('));
+  const setList = upsert.slice(upsert.indexOf(' SET '), upsert.search(/\n\s*(--[^\n]*\n\s*)*WHERE /));
+  const assigned = [...setList.matchAll(/(\w+) = EXCLUDED\.(\w+)/g)]
+    .filter(([, column, source]) => column === source)
+    .map(([, column]) => column)
+    .filter((column) => !NOT_GUARDED.has(column));
+  const guardStart = upsert.search(/\n\s*WHERE /);
+  const guard = upsert.slice(guardStart, upsert.indexOf(';', guardStart));
+  const [stored, excluded] = guard.split('IS DISTINCT FROM');
+  if (!excluded) return assigned;
+  const storedColumns = new Set([...stored.matchAll(/\w+\.(\w+)/g)].map(([, column]) => column));
+  const excludedColumns = new Set([...excluded.matchAll(/EXCLUDED\.(\w+)/g)].map(([, column]) => column));
+  return assigned.filter((column) => !storedColumns.has(column) || !excludedColumns.has(column));
+}
+
+describe('every write guard compares every column its SET list writes', () => {
+  it.each([
+    '_post_feed_stats_refresh_incremental.sql',
+    '_post_feed_engagement_stats_refresh_incremental.sql',
+    '_user_interest_weights_refresh_in_place.sql',
+  ])('%s', (suffix) => {
+    const { file, body } = readMigration(suffix);
+    expect(file).toBeTruthy();
+    const assigned = [...body.slice(body.indexOf('ON CONFLICT (')).matchAll(/(\w+) = EXCLUDED\.\1/g)];
+    expect(assigned.length).toBeGreaterThan(5);
+    expect(unguardedColumns(body)).toEqual([]);
+  });
+
+  it('notices a column missing from the guard', () => {
+    const sql = `INSERT INTO t AS t (a, b, c, updated_at) SELECT 1
+  ON CONFLICT (a) DO UPDATE
+  SET b = EXCLUDED.b,
+      c = EXCLUDED.c,
+      updated_at = EXCLUDED.updated_at
+  -- only when changed
+  WHERE (t.b) IS DISTINCT FROM (EXCLUDED.b);`;
+    expect(unguardedColumns(sql)).toEqual(['c']);
+    expect(unguardedColumns(sql.replace('(t.b) IS DISTINCT FROM (EXCLUDED.b)', '(t.b, t.c) IS DISTINCT FROM (EXCLUDED.b, EXCLUDED.c)'))).toEqual([]);
   });
 });
