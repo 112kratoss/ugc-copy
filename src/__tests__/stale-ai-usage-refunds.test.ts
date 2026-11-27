@@ -36,8 +36,8 @@ const NOW_MS = Date.UTC(2026, 10, 27, 12, 0, 0);
 describe('stale AI usage refunds', () => {
   it('refunds a charge left pending well past any request that could still settle it', () => {
     // The enhance-prompt, workflow-assistant and workflow-blueprint routes run
-    // for at most Vercel's 300 s; health reports a charge still pending after 30 min,
-    // two ticks of this refund later (backend-health.test.ts holds the two together).
+    // for at most Vercel's 300 s; health reports a charge still pending after 35 min,
+    // two runs of this refund later (backend-health.test.ts holds the two together).
     expect(AI_USAGE_PENDING_REFUND_AFTER_MINUTES).toBe(10);
   });
 
