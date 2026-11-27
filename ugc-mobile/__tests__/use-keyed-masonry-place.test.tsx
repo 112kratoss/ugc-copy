@@ -13,14 +13,15 @@ vi.mock('@/lib/keyed-masonry-layouts', () => ({
 
 import {
   KEYED_MASONRY_PLACE_OWED_MS,
+  KEYED_MASONRY_PLACE_RETRY_MS,
   useKeyedMasonryPlace,
   type KeyedMasonryList,
 } from '@/lib/use-keyed-masonry-place';
 
-let onContentSizeChange: () => void = () => {};
+let place!: ReturnType<typeof useKeyedMasonryPlace>;
 
 function Screen({ list, data }: { list: KeyedMasonryList; data: readonly unknown[] }) {
-  onContentSizeChange = useKeyedMasonryPlace({ current: list }, data);
+  place = useKeyedMasonryPlace({ current: list }, data);
   return null;
 }
 
@@ -58,7 +59,7 @@ describe('useKeyedMasonryPlace', () => {
     expect(list.scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it('scrolls again as the content grows, when posts coming back sent the list further down', () => {
+  function undo() {
     vi.useFakeTimers();
     const list = { getAbsoluteLastScrollOffset: vi.fn(() => 7786), scrollToOffset: vi.fn() };
     let view!: renderer.ReactTestRenderer;
@@ -69,35 +70,58 @@ describe('useKeyedMasonryPlace', () => {
     taken.set(back, 1264);
     act(() => view.update(<Screen list={list} data={back} />));
     expect(list.scrollToOffset).toHaveBeenCalledTimes(1);
+    return { list, view };
+  }
 
-    // The scroll view stopped that one at the old end; FlashList has heard of it.
-    list.getAbsoluteLastScrollOffset.mockReturnValue(6522);
-    onContentSizeChange();
+  it('makes the scroll again until a scroll event says the list is there, when posts coming back sent it further down', () => {
+    const { list } = undo();
+    // The scroll view stopped the first one at the old end, and says so.
+    place.onScroll(6522);
     expect(list.scrollToOffset).toHaveBeenCalledTimes(2);
+    place.onContentSizeChange();
+    expect(list.scrollToOffset).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_RETRY_MS[0]);
+    expect(list.scrollToOffset).toHaveBeenCalledTimes(4);
     expect(list.scrollToOffset).toHaveBeenLastCalledWith({ offset: 7786, animated: false });
 
-    onContentSizeChange();
-    expect(list.scrollToOffset).toHaveBeenCalledTimes(2);
+    // There: nothing more is owed, on any signal.
+    place.onScroll(7786);
+    place.onContentSizeChange();
+    place.onScroll(7000);
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS);
+    expect(list.scrollToOffset).toHaveBeenCalledTimes(4);
   });
 
-  it('owes no second scroll to a later size change, or after posts left', () => {
-    vi.useFakeTimers();
-    const list = { getAbsoluteLastScrollOffset: vi.fn(() => 7786), scrollToOffset: vi.fn() };
-    let view!: renderer.ReactTestRenderer;
-    act(() => {
-      view = renderer.create(<Screen list={list} data={['a', 'c']} />);
-    });
-    const back = ['a', 'b', 'c'];
-    taken.set(back, 1264);
-    act(() => view.update(<Screen list={list} data={back} />));
-    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS + 1);
-    onContentSizeChange();
+  it('owes nothing once the reader takes hold of the list', () => {
+    const { list } = undo();
+    place.onScrollBeginDrag();
+    place.onScroll(6522);
+    place.onContentSizeChange();
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS);
     expect(list.scrollToOffset).toHaveBeenCalledTimes(1);
+  });
 
+  it('stops trying when the time is up, when posts leave, and when the screen goes', () => {
+    const first = undo();
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS + 1);
+    const tries = first.list.scrollToOffset.mock.calls.length;
+    expect(tries).toBe(1 + KEYED_MASONRY_PLACE_RETRY_MS.length);
+    first.list.scrollToOffset.mockClear();
+    place.onScroll(6522);
+    expect(first.list.scrollToOffset).not.toHaveBeenCalled();
+
+    const second = undo();
     const fewer = ['a', 'c'];
     taken.set(fewer, -1264);
-    act(() => view.update(<Screen list={list} data={fewer} />));
-    onContentSizeChange();
-    expect(list.scrollToOffset).toHaveBeenCalledTimes(2);
+    act(() => second.view.update(<Screen list={second.list} data={fewer} />));
+    expect(second.list.scrollToOffset).toHaveBeenCalledTimes(2);
+    place.onScroll(6522);
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS);
+    expect(second.list.scrollToOffset).toHaveBeenCalledTimes(2);
+
+    const third = undo();
+    act(() => third.view.unmount());
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS);
+    expect(third.list.scrollToOffset).toHaveBeenCalledTimes(1);
   });
 });

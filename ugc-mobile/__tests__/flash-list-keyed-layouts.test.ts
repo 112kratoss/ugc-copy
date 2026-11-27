@@ -22,6 +22,7 @@ import {
 
 import {
   createMasonryListDevice,
+  DEVICE_DRAW_DISTANCE,
   DEVICE_WINDOW,
   deviceTiles,
   type DeviceTile,
@@ -183,6 +184,51 @@ describe('a masonry whose tiles follow their posts', () => {
     // One column is where it was; the reader was not taken back to the place of the hide.
     const still = [...screenBefore].filter(([id, at]) => screenAfter.get(id)?.y === at.y);
     expect(still.length).toBeGreaterThan(0);
+  });
+
+  it('draws every tile on screen after posts leave one column only, all the way up and down', () => {
+    // Kept columns stand apart by what left; FlashList finds the tiles to
+    // draw taking them to lie in order down the grid (review of #955, finding 1).
+    const tiles = deviceTiles(90);
+    const device = createMasonryListDevice(tiles, asFeed('all'));
+    device.scrollTo(5200);
+    const left = tiles.slice(4, 30).filter((tile) => device.layoutOf(tile.id).x === 0).slice(0, 4);
+    expect(left).toHaveLength(4);
+    device.setData(tiles.filter((tile) => !left.includes(tile)));
+    device.scrollTo(0, 37);
+    device.scrollTo(9000, 37);
+    device.scrollTo(0, 113);
+    expect(device.undrawn()).toBe(0);
+    // The columns are back within a tile or so of each other below what left.
+    const layouts = [...device.layouts().values()];
+    const ends = [0, DEVICE_WINDOW.width / 2].map((x) => Math.max(
+      ...layouts.filter((layout) => layout.x === x).map((layout) => layout.y + layout.height),
+    ));
+    expect(Math.abs(ends[0] - ends[1])).toBeLessThanOrEqual(DEVICE_DRAW_DISTANCE * 0.45 + 1);
+  });
+
+  it('stays where it is when posts it has never held arrive above the screen (a refresh)', () => {
+    const tiles = deviceTiles(60);
+    const device = createMasonryListDevice(tiles, asFeed('all'));
+    device.scrollTo(2600);
+    const offsetBefore = device.offset();
+    device.setData([...deviceTiles(3, 'new'), ...tiles]);
+    expect(device.offset()).toBe(offsetBefore);
+    expect(takeKeyedMasonryShift(device.tiles())).toBe(0);
+
+    const atTop = createMasonryListDevice(tiles, asFeed('all'));
+    atTop.setData([...deviceTiles(3, 'new'), ...tiles]);
+    expect(atTop.offset()).toBe(0);
+    expect(takeKeyedMasonryShift(atTop.tiles())).toBe(0);
+  });
+
+  it('leaves a list alone that rests above its top (an iPhone holding its refresh control open)', () => {
+    const tiles = deviceTiles(60);
+    const device = createMasonryListDevice(tiles, asFeed('all'));
+    device.manager.updateScrollOffset(-60);
+    device.setData(tiles.filter((_, index) => index !== 1));
+    expect(device.offset()).toBe(-60);
+    expect(takeKeyedMasonryShift(device.tiles())).toBe(0);
   });
 
   it('closes the gap under a post removed on screen and leaves the other column still', () => {

@@ -16,6 +16,7 @@ type ManagerInternals = {
 };
 
 export const DEVICE_WINDOW = { width: 360, height: 780 };
+export const DEVICE_DRAW_DISTANCE = 900;
 const COLUMN_WIDTH = DEVICE_WINDOW.width / 2;
 
 /** `name` is what the data is given to the list as: the test's way to name it a feed (`keyedMasonryData`). */
@@ -29,6 +30,8 @@ export function createMasonryListDevice(
     masonry: true,
     numColumns: 2,
     optimizeItemArrangement: true,
+    // Explore's (`SHOWCASE_DRAW_DISTANCE`): how far past the screen tiles are drawn.
+    drawDistance: DEVICE_DRAW_DISTANCE,
     keyExtractor: (tile: DeviceTile) => tile.id,
     maintainVisibleContentPosition: { disabled: true },
     renderItem: () => null,
@@ -60,6 +63,17 @@ export function createMasonryListDevice(
   settle();
 
   const offset = () => internals.engagedIndicesTracker.scrollOffset;
+  let undrawn = 0;
+
+  /** The tiles the reader would see as holes: on screen by the layout, and not among the cells drawn. */
+  const countUndrawn = () => {
+    const drawn = new Set(Array.from(manager.getRenderStack().values()).map((entry) => entry.index));
+    const top = offset();
+    data.forEach((_, index) => {
+      const layout = manager.getLayout(index);
+      if (layout.y + layout.height > top && layout.y < top + DEVICE_WINDOW.height && !drawn.has(index)) undrawn += 1;
+    });
+  };
 
   /** Where each tile on screen is drawn, measured from the top of the screen. */
   const onScreen = () => {
@@ -83,6 +97,7 @@ export function createMasonryListDevice(
     const before = onScreen();
     step();
     settle();
+    countUndrawn();
     const after = onScreen();
     let moved = 0;
     before.forEach((was, id) => {
@@ -98,6 +113,8 @@ export function createMasonryListDevice(
     offset,
     onScreen,
     tiles: () => data,
+    /** How many times, over every step so far, a tile on screen was not drawn. */
+    undrawn: () => undrawn,
     /** The reader scrolls to `to` in steps, as scroll events arrive; returns the on-screen moves. */
     scrollTo(to: number, stepSize = 60) {
       let moved = 0;

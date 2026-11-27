@@ -42,6 +42,21 @@ import { RecyclerViewManager } from '@shopify/flash-list/dist/recyclerview/Recyc
 
 const KEPT_COLUMN = Symbol('keptColumn');
 const KEEPS_COLUMNS = Symbol('keepsColumns');
+const KEPT_COLUMN_REACH = Symbol('keptColumnReach');
+
+/**
+ * How far ahead of the shortest column a kept column may place its tile, as a
+ * share of the list's draw distance. FlashList finds the tiles to draw with a
+ * binary search that takes tiles to lie in order down the grid, which the
+ * shortest-column rule guarantees and a kept column does not: a tile placed
+ * `reach` ahead is that far out of order. The draw window reaches at least 0.6
+ * of the draw distance past the screen on its shorter side, so tiles less out
+ * of order than that are all still drawn. Past the reach a tile gives its
+ * column up and goes to the shortest, as FlashList would put it; the reach
+ * (405 pt on Explore) is taller than a tile, so that brings the columns back
+ * within it and the tiles after keep theirs.
+ */
+const KEPT_COLUMN_REACH_OF_DRAW_DISTANCE = 0.45;
 
 type Layout = {
   x: number;
@@ -62,7 +77,9 @@ type MasonryInternals = {
   windowSize: { width: number; height: number };
   recomputeLayouts: (startIndex: number, endIndex: number) => void;
   placeSingleColumnItem: (layout: Layout) => void;
+  getSpan?: (index: number, skipTracking?: boolean) => number;
   [KEEPS_COLUMNS]?: boolean;
+  [KEPT_COLUMN_REACH]?: number;
 };
 
 type ManagerInternals = {
@@ -72,7 +89,7 @@ type ManagerInternals = {
     keyExtractor?: (item: unknown, index: number) => string;
   };
   layoutManager?: MasonryInternals;
-  engagedIndicesTracker: { scrollOffset: number };
+  engagedIndicesTracker: { scrollOffset: number; drawDistance: number };
   firstItemOffset: number;
   processDataUpdate: () => void;
   updateLayoutParams: (...args: unknown[]) => void;
@@ -183,13 +200,33 @@ function topmostOnScreenByColumn(manager: ManagerInternals, layouts: Layout[], s
   return [...found.values()].map((index) => ({ index, y: layouts[index].y }));
 }
 
+/** Says of a list's layout whether its tiles keep their columns, and how far apart the columns may then stand. */
+function setKeepsColumns(manager: ManagerInternals, keeps: boolean) {
+  const layoutManager = manager.layoutManager;
+  if (!isMasonry(layoutManager)) return;
+  layoutManager[KEEPS_COLUMNS] = keeps;
+  layoutManager[KEPT_COLUMN_REACH] = keeps
+    ? Math.max(0, manager.engagedIndicesTracker.drawDistance * KEPT_COLUMN_REACH_OF_DRAW_DISTANCE)
+    : 0;
+}
+
+/** Has FlashList note the span of the tiles it has no span for, as it does for a tile new at the end. */
+function noteSpans(layoutManager: MasonryInternals) {
+  const spans = layoutManager.spanTracker;
+  if (!spans || typeof layoutManager.getSpan !== 'function') return;
+  spans.length = layoutManager.layouts.length;
+  for (let index = 0; index < spans.length; index += 1) {
+    if (spans[index] === undefined) layoutManager.getSpan(index);
+  }
+}
+
 function followPosts(manager: ManagerInternals) {
   const { data, keyExtractor, masonry } = manager.propsRef;
   const scope = data ? scopeByData.get(data) : undefined;
   const layoutManager = isMasonry(manager.layoutManager) ? manager.layoutManager : undefined;
   if (!data || scope === undefined || !masonry || !keyExtractor) {
     stateByManager.delete(manager);
-    if (layoutManager) layoutManager[KEEPS_COLUMNS] = false;
+    setKeepsColumns(manager, false);
     return;
   }
 
@@ -205,7 +242,7 @@ function followPosts(manager: ManagerInternals) {
   };
   stateByManager.set(manager, state);
   if (!layoutManager) return;
-  layoutManager[KEEPS_COLUMNS] = true;
+  setKeepsColumns(manager, true);
   if (!previous || layoutManager.layouts.length !== previous.keys.length) return;
 
   if (previous.scope !== scope) {
@@ -214,6 +251,7 @@ function followPosts(manager: ManagerInternals) {
     layoutManager.layouts.length = 0;
     layoutManager.layouts.push(...fresh);
     if (layoutManager.spanTracker) layoutManager.spanTracker.length = 0;
+    noteSpans(layoutManager);
     layoutManager.recomputeLayouts(0, fresh.length - 1);
     return;
   }
@@ -226,9 +264,11 @@ function followPosts(manager: ManagerInternals) {
   const tracker = manager.engagedIndicesTracker;
   const offsetBefore = tracker.scrollOffset;
   const windowHeight = layoutManager.windowSize.height;
+  const start = -manager.firstItemOffset;
   // The list ends below its last tile, by a footer this layout knows nothing
   // of. A reader at the very end shows how far: the list is kept within that.
-  const pastTiles = offsetBefore - (Math.max(0, ...layoutManager.columnHeights) - windowHeight);
+  // (A grid shorter than its window does not scroll, and shows nothing.)
+  const pastTiles = offsetBefore - Math.max(start, Math.max(0, ...layoutManager.columnHeights) - windowHeight);
   if (pastTiles > 0) state.tail = Math.min(pastTiles, windowHeight);
   const stays = new Set<number>();
   move.from.forEach((index) => {
@@ -245,6 +285,7 @@ function followPosts(manager: ManagerInternals) {
     state.left.delete(state.left.keys().next().value as string);
   }
 
+  let newPosts = 0;
   const after = move.from.map((index, nextIndex) => {
     if (index >= 0 && before[index]) return before[index];
     const returning = state.left.get(keys[nextIndex]);
@@ -252,6 +293,7 @@ function followPosts(manager: ManagerInternals) {
       state.left.delete(keys[nextIndex]);
       return returning;
     }
+    newPosts += 1;
     return freshLayout();
   });
   if (!move.keepsOrder) {
@@ -267,9 +309,9 @@ function followPosts(manager: ManagerInternals) {
     layoutManager.spanTracker.length = 0;
     layoutManager.spanTracker.push(...move.from.map((index) => (index >= 0 ? spansBefore[index] : undefined)));
   }
+  noteSpans(layoutManager);
   layoutManager.recomputeLayouts(move.firstChanged, after.length - 1);
 
-  const start = -manager.firstItemOffset;
   const end = Math.max(start, Math.max(0, ...layoutManager.columnHeights) - windowHeight + state.tail);
   const leaving = new Set(previous.keys.filter((_, index) => !stays.has(index)));
   const arriving = keys.filter((_, index) => move.from[index] < 0);
@@ -288,12 +330,14 @@ function followPosts(manager: ManagerInternals) {
     // the list goes back to where it was, whatever stopped it short then (the
     // end of a grid that had become shorter).
     offset = returning.offsetBefore;
-  } else {
+  } else if (newPosts === 0) {
     // The tiles of a column move as one when posts above the screen go or
     // come back, and the two columns by different amounts. The list follows
     // the column that moved least: that column stays where it is on screen. A
     // post removed on screen leaves the other column, and so the list, still.
     // Each tile's layout is the one object it had before, now at its new place.
+    // Not when posts the list has never held arrive (a refresh, "New posts"):
+    // the reader asked for those, and the list stays where it is, as it did.
     let shift = 0;
     anchors.forEach((anchor, at) => {
       const moved = before[anchor.index].y - anchor.y;
@@ -301,7 +345,9 @@ function followPosts(manager: ManagerInternals) {
     });
     offset = offsetBefore + shift;
   }
-  offset = Math.min(Math.max(start, offset), end);
+  // Kept within the grid, but never brought into it from where the list
+  // already rests outside (an iPhone holding its refresh control open).
+  offset = Math.min(Math.max(Math.min(start, offsetBefore), offset), Math.max(end, Math.min(start, offsetBefore)));
   if (leaving.size > 0 && arriving.length === 0 && move.keepsOrder) {
     state.lastLeaving = { keys: leaving, offsetBefore, offsetAfter: offset };
   }
@@ -351,20 +397,24 @@ export function installKeyedMasonryLayouts(): (() => void) | null {
   // The layout manager is made here, after the first data has been seen.
   managerPrototype.updateLayoutParams = function updateLayoutParams(this: ManagerInternals, ...args: unknown[]) {
     stockUpdateLayoutParams.apply(this, args);
-    if (isMasonry(this.layoutManager)) {
-      this.layoutManager[KEEPS_COLUMNS] = stateByManager.has(this);
-    }
+    setKeepsColumns(this, stateByManager.has(this));
   };
 
   masonryPrototype.placeSingleColumnItem = function placeSingleColumnItem(this: MasonryInternals, layout: Layout) {
     const kept = this[KEEPS_COLUMNS] ? layout[KEPT_COLUMN] : undefined;
-    if (!kept || kept.of !== this.maxColumns) {
-      stockPlace.call(this, layout);
-      return;
+    if (kept && kept.of === this.maxColumns) {
+      const ahead = this.columnHeights[kept.column] - Math.min(...this.columnHeights);
+      if (ahead <= (this[KEPT_COLUMN_REACH] ?? 0)) {
+        layout.x = (this.boundedSize / this.maxColumns) * kept.column;
+        layout.y = this.columnHeights[kept.column];
+        this.columnHeights[kept.column] += layout.height;
+        return;
+      }
+      // Too far ahead of the shortest column (`KEPT_COLUMN_REACH_OF_DRAW_DISTANCE`):
+      // the tile is placed as FlashList places it, and keeps that column from here.
+      delete layout[KEPT_COLUMN];
     }
-    layout.x = (this.boundedSize / this.maxColumns) * kept.column;
-    layout.y = this.columnHeights[kept.column];
-    this.columnHeights[kept.column] += layout.height;
+    stockPlace.call(this, layout);
   };
 
   masonryPrototype.recomputeLayouts = function recomputeLayouts(

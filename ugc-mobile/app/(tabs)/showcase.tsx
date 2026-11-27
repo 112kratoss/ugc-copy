@@ -542,11 +542,11 @@ export default function ShowcaseScreen() {
     () => keyedMasonryData(buildShowcaseMasonry(showcaseItems), laneScope),
     [showcaseItems, laneScope],
   );
-  const settleKeyedMasonryPlace = useKeyedMasonryPlace(feedRef, cards);
+  const keyedMasonryPlace = useKeyedMasonryPlace(feedRef, cards);
   const handleContentSizeChange = useCallback((contentWidth: number, contentHeight: number) => {
     keepScrollWithinContent(contentWidth, contentHeight);
-    settleKeyedMasonryPlace();
-  }, [keepScrollWithinContent, settleKeyedMasonryPlace]);
+    keyedMasonryPlace.onContentSizeChange();
+  }, [keepScrollWithinContent, keyedMasonryPlace]);
   const showcasePageCount = showcaseQuery.data?.pages.length ?? 0;
   // Keyed off the rendered cards, not the ranked items: a page that is entirely
   // text posts renders nothing, and that has to read as empty, not as loaded.
@@ -740,6 +740,7 @@ export default function ShowcaseScreen() {
   // Scroll events arrive every frame; only the moment the header passes under
   // the status bar, one way or the other, reaches React.
   const trackListOffset = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    keyedMasonryPlace.onScroll(event.nativeEvent.contentOffset.y);
     const scrolledOff = listHeaderHeight > 0
       && event.nativeEvent.contentOffset.y >= LIST_HEADER_TOP_GAP + listHeaderHeight;
     if (scrolledOff === listHeaderScrolledOffRef.current) return;
@@ -1015,7 +1016,10 @@ export default function ShowcaseScreen() {
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         extraData={feedExtraData}
-        onScrollBeginDrag={() => dispatchActivation({ type: 'dragBegin' })}
+        onScrollBeginDrag={() => {
+          keyedMasonryPlace.onScrollBeginDrag();
+          dispatchActivation({ type: 'dragBegin' });
+        }}
         onScrollEndDrag={(event) => dispatchActivation({
           type: 'dragEnd',
           velocityY: event.nativeEvent.velocity?.y,
