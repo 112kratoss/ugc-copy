@@ -2,6 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 type RpcClient = Pick<SupabaseClient, 'rpc'>;
 
+/**
+ * Attempts before a job is marked `failed` (exhausted). An exhausted job keeps
+ * its count when generation-output-import-retries.ts reopens it, so each hourly
+ * retry that fails exhausts it again at once.
+ */
+export const GENERATION_OUTPUT_IMPORT_MAX_ATTEMPTS = 10;
+
 export type GenerationOutputImportJob = {
   id: string;
   generation_id: string;
@@ -60,7 +67,7 @@ export async function finishGenerationOutputImportJob(params: {
     p_succeeded: params.succeeded,
     p_error: params.error ?? null,
     p_retry_delay_seconds: params.retryDelaySeconds ?? 60,
-    p_max_attempts: 10,
+    p_max_attempts: GENERATION_OUTPUT_IMPORT_MAX_ATTEMPTS,
   });
   if (error) throw error;
   return typeof data === 'string' ? data : null;
