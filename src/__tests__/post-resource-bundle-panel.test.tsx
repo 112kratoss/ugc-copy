@@ -1171,6 +1171,34 @@ describe('PostResourceBundlePanel', () => {
     });
   });
 
+  // An order answered 200 with a body that is not the order (a page the platform put in its place)
+  // read as an empty object, and the payment sheet opened with no order and no amount (review of
+  // the 2026-11-27 fix). No order came back: the sheet stays shut and the panel says so.
+  it('opens no payment sheet when the order answers 200 with no order', async () => {
+    authState.session = { access_token: 'token-1' };
+    authState.credits = 1000;
+    const opened = vi.fn();
+    vi.stubGlobal('Razorpay', class {
+      constructor() { opened(); }
+      open() {}
+      on() {}
+    });
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.endsWith('/order')) return new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 });
+      if (url.endsWith('/resource-bundle')) {
+        return new Response(JSON.stringify({ bundle: { viewerCanAccess: false, viewerIsOwner: false, resources: null } }));
+      }
+      return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+    }));
+
+    renderPanel({ isFree: false, priceLabel: '₹189', priceUsdCents: 900 });
+    fireEvent.click(screen.getByRole('button', { name: /^pay ₹189/i }));
+
+    expect(await screen.findByText('Failed to start checkout.')).toBeInTheDocument();
+    expect(opened).not.toHaveBeenCalled();
+  });
+
   it('keeps the Razorpay checkout route wired for paid post resources', async () => {
     authState.session = { access_token: 'token-1' };
     authState.credits = 1000;

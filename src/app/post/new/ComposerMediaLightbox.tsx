@@ -6,6 +6,8 @@ import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
+import { keepTabInside } from '@/lib/focusable-elements';
+
 export interface ComposerMediaLightboxItem {
   id: string;
   previewUrl: string | null | undefined;
@@ -84,7 +86,11 @@ function ComposerMediaLightboxDialog({
       if (event.key === 'ArrowRight' && activeIndex < lastIndex) {
         event.preventDefault();
         onNavigate(activeIndex + 1);
+        return;
       }
+
+      // A modal: Tab goes round its own controls, never on to the composer under it.
+      keepTabInside(event, panelRef.current);
     };
 
     window.addEventListener('keydown', handleKeyDown);

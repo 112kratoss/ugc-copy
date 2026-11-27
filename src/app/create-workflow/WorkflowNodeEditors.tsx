@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
@@ -598,7 +599,7 @@ function SeedanceAssetStatusCard({
             assetType,
           }),
         });
-    const data = await response.json();
+    const data = await readJsonResponse(response);
 
     if (!response.ok || !data.success) {
       throw new Error(data.error || 'Seedance asset request failed');

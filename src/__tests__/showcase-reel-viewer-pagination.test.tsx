@@ -3008,6 +3008,28 @@ describe('ShowcaseReelViewer pagination', () => {
       });
     });
 
+    // An order answered 200 with a body that is not the order read as an empty object, and the
+    // payment sheet opened with no order and no amount (review of the 2026-11-27 fix).
+    it('opens no payment sheet when the order answers 200 with no order', async () => {
+      authState.session = { access_token: 'token-1' };
+      authState.credits = 1200;
+      const opened = vi.fn();
+      vi.stubGlobal('Razorpay', class {
+        constructor() { opened(); }
+        open() {}
+        on() {}
+      });
+      stubRequests({
+        '/api/posts/post-1/resource-bundle/order': () => new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 }),
+      });
+      renderPaidReel();
+      fireEvent.click(screen.getAllByRole('button', { name: /unlock for \$9\.00/i })[0]);
+      fireEvent.click(screen.getByRole('button', { name: /^pay [$₹]/i }));
+
+      expect(await screen.findByText('Failed to start checkout.')).toBeInTheDocument();
+      expect(opened).not.toHaveBeenCalled();
+    });
+
     it('reports a cash checkout to the funnel', async () => {
       authState.session = { access_token: 'token-1' };
       authState.credits = 1200;

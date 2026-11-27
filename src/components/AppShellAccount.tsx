@@ -29,6 +29,7 @@ import AppShellAccountPending, {
 } from './AppShellAccountPending';
 import { OptimizedPreviewImage } from './OptimizedPreviewImage';
 import { publishAppShellAuthentication } from './app-shell-auth-state';
+import { resetUnreadAlertsCount } from './useUnreadAlertsCount';
 import { APP_NAV_ITEMS, getActiveAppNavItem, type AppNavClickHandler } from './app-shell-nav';
 import { pushToast, requestConfirmation } from './feedback-state';
 
@@ -183,6 +184,19 @@ export default function AppShellAccount({
   const creditIdentityRef = useRef<{ userId: string } | null>(null);
   const credits = profile?.credits;
   const signedInUserId = session?.user?.id ?? null;
+  // The Alerts badge's count is the account's: a session of another account (or none) must not
+  // show the previous one's for the minute the count is kept. The first session this page learns
+  // of is no change (`session` starts undefined, not known yet): a reset there threw away the
+  // badge's first read on every full load.
+  const previousUnreadUserIdRef = useRef<string | null | undefined>(undefined);
+  const sessionKnown = session !== undefined;
+  useEffect(() => {
+    if (!sessionKnown) return;
+    const previous = previousUnreadUserIdRef.current;
+    previousUnreadUserIdRef.current = signedInUserId;
+    if (previous === undefined || previous === signedInUserId) return;
+    resetUnreadAlertsCount();
+  }, [sessionKnown, signedInUserId]);
   const displayName = getCreatorDisplayName({
     displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
@@ -208,6 +222,7 @@ export default function AppShellAccount({
       deferredAuthSyncIds.clear();
       // Nothing checked or read for the session that ended answers anyone after it.
       forgetAccountReads();
+      resetUnreadAlertsCount();
       publishAppShellAuthentication(false);
       if (mounted) {
         setSession(null);
@@ -456,6 +471,7 @@ export default function AppShellAccount({
   const leaveSignedOut = () => {
     creditIdentityRef.current = null;
     forgetAccountReads();
+    resetUnreadAlertsCount();
     publishAppShellAuthentication(false);
     setSession(null);
     setProfile(null);

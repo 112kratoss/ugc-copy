@@ -1,3 +1,4 @@
+import { readJsonResponse } from '@/lib/read-json-response';
 import { supabase } from '@/lib/supabase';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 
@@ -37,7 +38,7 @@ export async function uploadProfileMediaWithSignedIntent({
     }),
   });
 
-  const uploadIntent = await response.json() as Partial<ProfileMediaUploadIntent> & { error?: string };
+  const uploadIntent = await readJsonResponse(response) as Partial<ProfileMediaUploadIntent> & { error?: string };
   if (!response.ok) {
     throw new Error(uploadIntent.error || 'Failed to prepare profile media upload.');
   }

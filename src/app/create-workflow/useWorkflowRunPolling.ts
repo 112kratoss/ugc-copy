@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useCallback, useEffect, useRef } from 'react';
 import type { WorkflowCanvasRunRecord } from '@/lib/workflow-canvas';
 
@@ -47,7 +48,7 @@ export function useWorkflowRunPolling({
       const response = await fetch(`/api/workflow-canvases/${activeCanvasId}/runs/${activeRunId}`, {
         headers: await authHeaders(),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to refresh workflow run' });
       if (!response.ok) {
         throw new Error(data.error || 'Failed to refresh workflow run');
       }

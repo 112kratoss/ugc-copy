@@ -1,4 +1,4 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound, permanentRedirect } from 'next/navigation';
 
 import { resolvePostIdForResourceIdentifier } from '@/lib/post-resource-bundles-server';
 import { buildShowcaseDetailPath } from '@/lib/share';
@@ -15,7 +15,8 @@ export default async function MarketplaceAssetPage({ params }: MarketplaceAssetP
     notFound();
   }
 
-  redirect(buildShowcaseDetailPath(postId, {
+  // An old resource address always names the same post: a permanent move (308).
+  permanentRedirect(buildShowcaseDetailPath(postId, {
     from: 'unlocks',
     returnTo: '/marketplace',
     section: 'resources',

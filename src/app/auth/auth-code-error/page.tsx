@@ -35,7 +35,7 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
       </Link>
 
       <div className="flex flex-1 items-center justify-center py-10">
-        <main className="w-full max-w-md rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
+        <div className="w-full max-w-md rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-300/20 bg-rose-400/10 text-rose-200">
             <AlertCircle className="h-5 w-5" aria-hidden />
           </span>
@@ -67,7 +67,7 @@ export default async function AuthCodeErrorPage({ searchParams }: AuthCodeErrorP
               Back home
             </Link>
           </div>
-        </main>
+        </div>
       </div>
     </div>
   );

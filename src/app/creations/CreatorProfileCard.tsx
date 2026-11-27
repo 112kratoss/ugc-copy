@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -692,7 +693,7 @@ export default function CreatorProfileCard({
         },
         body: JSON.stringify(buildProfileSaveBody(form)),
       });
-      const validationData = await validationResponse.json();
+      const validationData = await readJsonResponse(validationResponse);
       if (!validationResponse.ok) {
         if (validationData.fieldErrors) {
           const nextErrors = validationData.fieldErrors as ProfileFieldErrors;

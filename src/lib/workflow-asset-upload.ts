@@ -1,3 +1,4 @@
+import { readJsonResponse } from '@/lib/read-json-response';
 import { supabase } from '@/lib/supabase';
 import { finalizeSignedUpload } from '@/lib/upload-finalize-client';
 
@@ -46,7 +47,7 @@ export async function uploadWorkflowAssetWithSignedIntent(
     }),
   });
 
-  const uploadIntent = await response.json() as Partial<WorkflowAssetUploadIntent> & { error?: string };
+  const uploadIntent = await readJsonResponse(response) as Partial<WorkflowAssetUploadIntent> & { error?: string };
   if (!response.ok) {
     throw new Error(uploadIntent.error || 'Failed to prepare workflow asset upload.');
   }
@@ -91,7 +92,7 @@ export async function uploadWorkflowAssetWithSignedIntent(
     }),
   });
 
-  const readUrl = await readUrlResponse.json() as Partial<WorkflowAssetReadUrlResponse> & { error?: string };
+  const readUrl = await readJsonResponse(readUrlResponse) as Partial<WorkflowAssetReadUrlResponse> & { error?: string };
   if (!readUrlResponse.ok || !readUrl.signedUrl) {
     throw new Error(readUrl.error || 'Failed to prepare workflow asset preview.');
   }

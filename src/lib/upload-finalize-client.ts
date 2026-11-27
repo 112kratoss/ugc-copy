@@ -1,3 +1,5 @@
+import { readJsonResponse } from '@/lib/read-json-response';
+
 export type FinalizedUploadDescriptor = {
   bucket: string;
   path: string;
@@ -20,7 +22,7 @@ export async function finalizeSignedUpload(
     body: JSON.stringify({ uploadId }),
     signal,
   });
-  const body = await response.json() as Partial<FinalizedUploadDescriptor> & { error?: string };
+  const body = await readJsonResponse(response) as Partial<FinalizedUploadDescriptor> & { error?: string };
   if (!response.ok) {
     throw new Error(body.error || 'Failed to finalize upload.');
   }

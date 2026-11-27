@@ -125,7 +125,7 @@ function ResetPasswordContent() {
       </Link>
 
       <div className="flex flex-1 items-center justify-center py-10">
-        <main className="w-full max-w-md rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
+        <div className="w-full max-w-md rounded-3xl border border-[var(--ui-border-default)] bg-[var(--ui-surface-1)] p-6 shadow-[var(--ui-shadow-panel)] sm:p-8">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--ui-primary-soft)] text-[var(--ui-primary)]">
             <LockKeyhole className="h-5 w-5" aria-hidden />
           </span>
@@ -251,7 +251,7 @@ function ResetPasswordContent() {
               </button>
             </form>
           )}
-        </main>
+        </div>
       </div>
     </div>
   );

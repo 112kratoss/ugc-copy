@@ -16,6 +16,8 @@ const UNREAD_TTL_MS = 60_000;
 let unreadCount = 0;
 let readAt = 0;
 let inflight: Promise<number> | null = null;
+// Bumped by a reset: a read that was out for the account before it answers nobody.
+let generation = 0;
 const listeners = new Set<() => void>();
 
 function notify() {
@@ -50,18 +52,35 @@ async function readUnreadAlertsCount(): Promise<number> {
   return typeof body.unreadCount === 'number' ? body.unreadCount : 0;
 }
 
+/**
+ * Forgets the count: a sign-out, or a session of another account. The count was kept a minute with
+ * no reset, so the previous account's unread count stayed on the bell for up to a minute after
+ * either. The badge shows nothing at once, and while a badge is on the page the count of the
+ * account now signed in (none, after a sign-out) is read again at once.
+ */
+export function resetUnreadAlertsCount() {
+  generation += 1;
+  inflight = null;
+  unreadCount = 0;
+  readAt = 0;
+  notify();
+  if (listeners.size > 0) refreshUnreadAlertsCount(true);
+}
+
 function refreshUnreadAlertsCount(force = false) {
   if (!force && Date.now() - readAt < UNREAD_TTL_MS) return;
   if (!inflight) {
-    inflight = readUnreadAlertsCount()
+    const readGeneration = generation;
+    const read = readUnreadAlertsCount()
       .catch(() => unreadCount)
       .then((count) => {
-        publishUnreadAlertsCount(count);
+        if (readGeneration === generation) publishUnreadAlertsCount(count);
         return count;
       })
       .finally(() => {
-        inflight = null;
+        if (inflight === read) inflight = null;
       });
+    inflight = read;
   }
 }
 

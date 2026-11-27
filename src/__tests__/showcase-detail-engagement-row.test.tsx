@@ -391,6 +391,30 @@ describe('ShowcaseDetailEngagementRow', () => {
     expect(await screen.findByRole('link', { name: /comment/i })).toHaveAttribute('href', '#comments');
   });
 
+  // A reveal answered 200 with a body that is not the post (a page the platform put in its place)
+  // read as an empty object, and the gate counted the post as revealed with nothing to show (review
+  // of the 2026-11-27 fix). Nothing came back: the gate stays shut and says so.
+  it('keeps the gate shut and says so when a reveal answers 200 with no post', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/content-preferences') return new Response(JSON.stringify({ showMature: true }), { status: 200 });
+      if (url === '/api/posts/post-1/reveal') return new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 });
+      return new Response('[]', { status: 200 });
+    }));
+    render(
+      <NsfwPostReveal postId="post-1">
+        <ShowcaseDetailEngagementRow {...rowProps()} />
+      </NsfwPostReveal>,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reveal post' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal post' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not reveal this post.');
+    expect(screen.queryByRole('link', { name: /comment/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reveal post' })).toBeInTheDocument();
+  });
+
   // The locked Remix pill leads to the recipe, which under an NSFW gate is on
   // the page only after the reveal: before it, the pill would scroll nowhere.
   it('holds the locked Remix pill until an NSFW gate opens', async () => {

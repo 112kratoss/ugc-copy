@@ -101,7 +101,7 @@ export default function ReferralLandingClient({
         : 'Invite saved. Create your new account to keep the first top-up bonus.';
 
   return (
-    <main className="ui-page ui-page-ambient min-h-screen px-4 py-10 sm:px-6 sm:py-16">
+    <div className="ui-page ui-page-ambient min-h-screen px-4 py-10 sm:px-6 sm:py-16">
       <div className="mx-auto max-w-3xl">
         <Link href="/" className="ui-focus-ring inline-flex rounded-full px-3 py-2 text-sm font-extrabold text-[var(--ui-text-muted)] hover:bg-[var(--ui-surface-2)] hover:text-[var(--ui-text-primary)]">
           Magic Booklet
@@ -186,6 +186,6 @@ export default function ReferralLandingClient({
           </div>
         </section>
       </div>
-    </main>
+    </div>
   );
 }

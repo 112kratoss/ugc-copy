@@ -1,3 +1,4 @@
+import { readJsonResponse } from '@/lib/read-json-response';
 import { supabase } from '@/lib/supabase';
 import {
   resolveSignedUploadUrl,
@@ -164,7 +165,7 @@ export async function uploadMediaToTemporaryStorage(
     }),
   });
 
-  const uploadIntent = await response.json() as Partial<TemporaryMediaUploadIntent> & { error?: string };
+  const uploadIntent = await readJsonResponse(response) as Partial<TemporaryMediaUploadIntent> & { error?: string };
   if (!response.ok) {
     throw new Error(uploadIntent.error || 'Failed to prepare media upload.');
   }

@@ -132,7 +132,7 @@ export function AdminShell({
         </div>
       </aside>
 
-      <main className="min-w-0 flex-1 px-5 py-6 lg:px-8 lg:py-8">{children}</main>
+      <div className="min-w-0 flex-1 px-5 py-6 lg:px-8 lg:py-8">{children}</div>
     </div>
   );
 }

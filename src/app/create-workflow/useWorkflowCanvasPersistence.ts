@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createWorkflowGraphHash, type WorkflowCanvasGraph, type WorkflowCanvasRecord } from '@/lib/workflow-canvas';
 import {
@@ -112,7 +113,7 @@ export function useWorkflowCanvasPersistence({
           graphHash: nextGraphHash,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the canvas was saved. Check it before trying again.' });
 
       if (response.status === 409 && data.canvas) {
         const conflictedCanvas = data.canvas as WorkflowCanvasRecord;

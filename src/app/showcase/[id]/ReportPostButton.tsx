@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useState } from 'react';
 import { Ban, Flag, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -141,7 +142,7 @@ export default function ReportPostButton({
           ...(deliveryId ? { deliveryId } : {}),
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Failed to submit report.');

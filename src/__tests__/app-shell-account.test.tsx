@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import AppShellAccount, { AGENT_ACCESS_MAY_REMAIN_MESSAGE } from '@/components/AppShellAccount';
 import AppShellAccountFallback from '@/components/AppShellAccountFallback';
+import AlertsBadge from '@/components/AlertsBadge';
 import FeedbackViewport from '@/components/FeedbackViewport';
 import { APP_NAV_ITEMS } from '@/components/app-shell-nav';
 import { readFeedbackSnapshot, resetFeedbackState } from '@/components/feedback-state';
@@ -1098,6 +1099,72 @@ describe('AppShellAccount', () => {
       expect(screen.queryByRole('menuitem', { name: 'Sign out of all devices' })).not.toBeInTheDocument();
     });
   });
+  // The Alerts badge's count belongs to the account, but the first arrival of the session after a
+  // full load is no change of account: a reset there threw the badge's first read away and read
+  // nothing again until a page change, so a reload showed no badge (review of the 2026-11-27 fix).
+  describe('the Alerts badge on a full load', () => {
+    afterEach(() => {
+      clearCookies();
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    });
+
+    it('shows the signed-in account\'s unread count once the session arrives after mount', async () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+      document.cookie = `${AUTH_COOKIE}=session; Path=/`;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => (
+        String(input).startsWith('/api/mobile/notifications')
+          ? new Response(JSON.stringify({ unreadCount: 3 }), { status: 200 })
+          : new Response('{}', { status: 200 })
+      ));
+      vi.stubGlobal('fetch', fetchMock);
+
+      render(
+        <>
+          <AlertsBadge />
+          <AppShellAccount />
+        </>,
+      );
+
+      expect(await screen.findByText('1295 credits')).toBeInTheDocument();
+      expect(await screen.findByText('3 unread alerts')).toBeInTheDocument();
+      expect(fetchMock.mock.calls.some(([input]) => String(input).startsWith('/api/mobile/notifications'))).toBe(true);
+    });
+
+    it('reads the new account\'s count at once when the account changes', async () => {
+      vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', SUPABASE_URL);
+      document.cookie = `${AUTH_COOKIE}=session; Path=/`;
+      let unread = 3;
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+        String(input).startsWith('/api/mobile/notifications')
+          ? new Response(JSON.stringify({ unreadCount: unread }), { status: 200 })
+          : new Response('{}', { status: 200 })
+      )));
+
+      render(
+        <>
+          <AlertsBadge />
+          <AppShellAccount />
+        </>,
+      );
+      expect(await screen.findByText('3 unread alerts')).toBeInTheDocument();
+
+      unread = 5;
+      const otherAccount = {
+        ...authenticatedSession,
+        access_token: unsignedJwt({ sub: 'user-2', session_id: 'session-2' }),
+        user: { ...authenticatedSession.user, id: 'user-2' },
+      };
+      mocks.getSession.mockResolvedValue({ data: { session: otherAccount } });
+      mocks.getUser.mockResolvedValue({ data: { user: otherAccount.user }, error: null });
+      await act(async () => {
+        appShellAuthCallback?.('SIGNED_IN', otherAccount);
+      });
+
+      expect(await screen.findByText('5 unread alerts')).toBeInTheDocument();
+      expect(screen.queryByText('3 unread alerts')).not.toBeInTheDocument();
+    });
+  });
 });
 
 // Audit 01-5: the most used sign-in entry on the web returned everyone to Home.
@@ -1204,4 +1271,5 @@ describe('the header Sign in link', () => {
     expect(link).toHaveAttribute('href', '/login?returnUrl=%2Fshowcase');
     window.localStorage.removeItem('magicbooklet.welcome-promise.spent.v1');
   });
+
 });

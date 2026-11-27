@@ -304,7 +304,7 @@ export default function TemplateDetailClient({ slug }: { slug: string }) {
                 <div className="flex min-w-0 items-center gap-3">{creatorIdentity}</div>
               )}
               <div className="ml-auto text-sm font-semibold text-zinc-400">
-                {template.useCount.toLocaleString()} {template.useCount === 1 ? 'use' : 'uses'}
+                {template.useCount.toLocaleString('en-US')} {template.useCount === 1 ? 'use' : 'uses'}
               </div>
             </div>
             {/* The server refuses a creator's report of their own template. */}

@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 
 import InlineMediaVideo from '@/components/InlineMediaVideo';
@@ -483,6 +484,50 @@ function getSubmissionError(
   );
 }
 
+const POST_CREATE_IN_PROGRESS_CODE = 'POST_CREATE_IN_PROGRESS';
+const IDEMPOTENCY_KEY_CONFLICT_CODE = 'IDEMPOTENCY_KEY_CONFLICT';
+const POST_SAVED_AS_DRAFT_CODE = 'POST_SAVED_AS_DRAFT';
+const POST_SAVED_AS_DRAFT_MESSAGE = 'It is private and could not be made public.';
+const POST_CREATE_IN_PROGRESS_MESSAGE = 'Your post is still publishing. Try again in a moment.';
+const UNCONFIRMED_SAVE_MESSAGE = 'We could not confirm your post was saved. Check your posts before trying again.';
+
+/**
+ * The draft a 409 POST_SAVED_AS_DRAFT carries: the post written private, read from the body as a
+ * created post is (or from its `post` field), or null when it names none. Always private, so the
+ * way to it is its editor.
+ */
+function readSavedDraft(
+  data: SaveResponseBody,
+  resourceAccessMode: PostResourceBundleAccessMode,
+): CreatedPostState | null {
+  const post = data.post && typeof data.post === 'object' ? data.post as Record<string, unknown> : data;
+  const postId = typeof post.postId === 'string' ? post.postId : typeof post.id === 'string' ? post.id : null;
+  if (!postId) return null;
+  return {
+    postId,
+    showcasePath: null,
+    ownerPath: typeof post.ownerPath === 'string' ? post.ownerPath : `/post/${postId}/edit`,
+    resourceBundlePath: typeof post.resourceBundlePath === 'string' ? post.resourceBundlePath : null,
+    visibility: 'private',
+    resourceAccessMode,
+    resourceBundleStatus: post.resourceBundleStatus === 'draft' || post.resourceBundleStatus === 'published'
+      ? post.resourceBundleStatus
+      : null,
+  };
+}
+
+/**
+ * Whether a refused publish ends its Idempotency-Key (POST /api/posts). A key the server can no
+ * longer use (409 IDEMPOTENCY_KEY_CONFLICT) and any other 4xx, which wrote nothing, end it; an
+ * earlier attempt still running (409 POST_CREATE_IN_PROGRESS), throttling (429) and a 5xx keep it,
+ * as a lost answer does, so a retry answers the same post.
+ */
+function shouldDropPublishKey(status: number, code: string | null): boolean {
+  if (status === 429 || (status === 409 && code === POST_CREATE_IN_PROGRESS_CODE)) return false;
+  if (status === 409 && code === IDEMPOTENCY_KEY_CONFLICT_CODE) return true;
+  return status >= 400 && status < 500;
+}
+
 type SaveResponseBody = Record<string, unknown> & {
   error?: string;
   field?: string;
@@ -511,7 +556,11 @@ async function readSaveResponse(
  */
 async function readResponseBody(response: Response): Promise<SaveResponseBody> {
   if (response.ok) {
-    return await response.json() as SaveResponseBody;
+    // A success whose body cannot be read (a page the platform put in its place) may follow a
+    // save that was written: the person is told so, not how the parse failed.
+    return await response.json().catch(() => {
+      throw new ComposerSubmissionError(UNCONFIRMED_SAVE_MESSAGE, 'publish');
+    }) as SaveResponseBody;
   }
   return await response.json().catch(() => ({})) as SaveResponseBody;
 }
@@ -753,7 +802,7 @@ async function uploadResourceFile(
       }),
       signal: options.signal,
     });
-    const uploadIntent = await signResponse.json() as {
+    const uploadIntent = await readJsonResponse(signResponse) as {
       bucket?: 'post_resource_files';
       uploadId?: string;
       path?: string;
@@ -1176,6 +1225,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const [isLoadingGeneration, setIsLoadingGeneration] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const submitVisibilityRef = useRef<PostVisibility>(getComposerVisibility(initialPost?.visibility));
+  // The Idempotency-Key of the post being composed (POST /api/posts), made at its first publish.
+  const publishIdempotencyKeyRef = useRef<string | null>(null);
+  // A post the server wrote as a private draft and could not make public (409 POST_SAVED_AS_DRAFT):
+  // the composer's post from then on, edited in its own editor, never created again.
+  const savedDraftRef = useRef<CreatedPostState | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1756,7 +1810,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             Authorization: `Bearer ${session.access_token}`,
           },
         });
-        const payload = await response.json();
+        const payload = await readJsonResponse(response, { unreadableSuccess: 'Failed to load generation.' });
 
         if (!response.ok) {
           throw new Error(payload.error || 'Failed to load generation.');
@@ -1970,7 +2024,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
 
     void fetch('/api/source-tools')
       .then(async (response) => {
-        const payload = await response.json();
+        const payload = await readJsonResponse(response);
         if (!cancelled && Array.isArray(payload.tools)) {
           setSourceToolsData(payload.tools as SourceToolOption[]);
         }
@@ -3056,6 +3110,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     removalAnswered?: boolean;
   } = {}) => {
     setError(null);
+    if (!isEditMode && savedDraftRef.current) {
+      // The post already exists as a draft: its editor saves it, so no second post is made.
+      leaveForPublishedPost(savedDraftRef.current);
+      return;
+    }
     setCreatedPost(null);
     const accessModeForSubmit: PostResourceBundleAccessMode = withoutRecipe ? 'none' : resourceAccessMode;
 
@@ -3442,12 +3501,18 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         formData.set('category', 'text');
       }
 
+      // One key per composed post, kept until it is published: a retry after a lost answer (a
+      // gateway's 504 after the post was written) carries the same key, so the server can answer
+      // the post it already made instead of making a second. A server that does not know the
+      // header ignores it.
+      publishIdempotencyKeyRef.current ??= crypto.randomUUID();
       let response: Response;
       try {
         response = await fetch('/api/posts', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${session.access_token}`,
+            'Idempotency-Key': publishIdempotencyKeyRef.current,
           },
           body: formData,
         });
@@ -3464,8 +3529,40 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         forgetStagedMediaPaths();
       }
       if (!response.ok) {
+        const code = typeof data.code === 'string' ? data.code : null;
+        const draft = response.status === 409 && code === POST_SAVED_AS_DRAFT_CODE
+          ? readSavedDraft(data, accessModeForSubmit)
+          : null;
+        if (draft) {
+          // Written, as a private draft: this key is spent, and the draft is the composer's post.
+          // The person is told why and taken to its editor, where a save updates it.
+          publishIdempotencyKeyRef.current = null;
+          savedDraftRef.current = draft;
+          // As the app's composer says it: "Saved as a draft", then the server's words.
+          pushToast({
+            tone: 'info',
+            message: `Saved as a draft. ${typeof data.error === 'string' && data.error.trim() ? data.error.trim() : POST_SAVED_AS_DRAFT_MESSAGE}`,
+          });
+          leaveForPublishedPost(draft);
+          return;
+        }
+        if (response.status === 409 && code === POST_CREATE_IN_PROGRESS_CODE) {
+          // An earlier attempt with this key is still running: the key stays, so the next press
+          // answers that same post.
+          throw new ComposerSubmissionError(
+            typeof data.error === 'string' && data.error.trim() ? data.error : POST_CREATE_IN_PROGRESS_MESSAGE,
+            'publish',
+          );
+        }
+        if (shouldDropPublishKey(response.status, code)) {
+          // Nothing was written (a refusal), or the server can no longer use this key: the next
+          // attempt is a new post.
+          publishIdempotencyKeyRef.current = null;
+        }
         throw getSubmissionError(data, 'Failed to publish post.');
       }
+      // Published: whatever is composed next is another post.
+      publishIdempotencyKeyRef.current = null;
 
       const published: CreatedPostState = {
         postId: data.postId as string,

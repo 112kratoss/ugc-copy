@@ -52,8 +52,9 @@ let PublicIdentityDialog = lazyPublicIdentityDialog();
  * The question's load can fail: a deploy rotated the chunk names while the tab
  * was open, or the connection was down as it was asked. React.lazy throws that
  * to the nearest error boundary, and nothing above this viewport
- * in the root layout is one, so the whole page would give way to Next's
- * generic client-exception page, as Alerts' did (`SignedInAlertsBoundary`).
+ * in the root layout is one (the root error.tsx sits below the layout), so the
+ * whole page would give way to Next's generic client-exception page, as
+ * Alerts' did (`SignedInAlertsBoundary`).
  * Kept here instead: the question is answered `unavailable`, and its caller
  * says what it would have said without asking.
  */

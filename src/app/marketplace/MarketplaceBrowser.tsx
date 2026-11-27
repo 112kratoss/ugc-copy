@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import Link from 'next/link';
 import { useEffect, useEffectEvent, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
@@ -355,7 +356,7 @@ export default function MarketplaceBrowser({
           : { Accept: 'application/json' },
         signal: controller.signal,
       });
-      const payload = await response.json() as {
+      const payload = await readJsonResponse(response, { unreadableSuccess: 'Could not load more recipes.' }) as {
         items?: MarketplaceResourceListItem[];
         pageInfo?: MarketplacePageInfo;
         error?: string;

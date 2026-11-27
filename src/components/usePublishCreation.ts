@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '@/components/AuthProvider';
@@ -473,7 +474,7 @@ export function usePublishCreation({
         body: JSON.stringify(requestBody),
       });
 
-      const data = await response.json() as {
+      const data = await readJsonResponse(response) as {
         success?: boolean;
         error?: string;
         field?: string;

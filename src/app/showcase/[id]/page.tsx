@@ -258,7 +258,9 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
   if (page.kind === 'redirect') {
     // To the post's own address. The cached redirect cannot carry the query
     // of the link that reached it (the page never reads one), so a legacy id
-    // opened from a ranked card lands without its way back or delivery.
+    // opened from a ranked card lands without its way back or delivery. Temporary
+    // (307) on purpose: a generation id names whichever of its posts is visible
+    // now, and a cached 308 could keep pointing at one removed later.
     redirect(buildShowcaseDetailPath(page.postId));
   }
 

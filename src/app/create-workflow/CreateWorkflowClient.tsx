@@ -1,5 +1,7 @@
 'use client';
 
+import { isUnconfirmedOutcome, readJsonResponse } from '@/lib/read-json-response';
+
 import '@xyflow/react/dist/style.css';
 
 import {
@@ -74,6 +76,9 @@ import type {
 } from './workflowCanvasUiTypes';
 import { formatWorkflowRunPrice, getNodeAnchoredPopupPosition, getNodeRunAffordance } from './workflowCanvasUiUtils';
 import { WORKFLOW_ASSISTANT_COST } from '@/lib/workflow-assistant-client';
+
+// Said when a paid run's start cannot be confirmed: the run may have started.
+const UNCONFIRMED_RUN_START_MESSAGE = 'We could not confirm the run started. Check the canvas for a running step before running again.';
 
 function areViewportsEqual(
   left: { x: number; y: number; zoom: number },
@@ -398,7 +403,7 @@ export default function CreateWorkflowClient({
         const response = await fetch(`/api/templates/${initialTemplateId}`, {
           headers: await authHeaders(),
         });
-        const data = await response.json();
+        const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to load template authoring details.' });
         if (!response.ok) {
           throw new Error(data.error || 'Failed to load template authoring details.');
         }
@@ -1020,7 +1025,7 @@ export default function CreateWorkflowClient({
           catalogRevision: catalogCheck.revision,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (!response.ok) {
         // Only deterministic pre-creation rejections clear the intent. A 429
         // can follow an earlier request whose response was lost; clearing the
@@ -1029,13 +1034,20 @@ export default function CreateWorkflowClient({
         if ([400, 401, 403, 404].includes(response.status)) {
           pendingRunIntentRef.current = null;
         }
+        if (isUnconfirmedOutcome(response, data)) {
+          // The run may have started and spent credits; the kept key makes a retry the same run.
+          throw new Error(UNCONFIRMED_RUN_START_MESSAGE);
+        }
         throw new Error(data.error || 'Failed to start workflow run.');
       }
 
-      pendingRunIntentRef.current = null;
-      if (typeof data.runId === 'string' && data.runId.length > 0) {
-        setActiveRunId(data.runId);
+      // A 200 with no run in it (a page the platform put in its place) may still have started a
+      // paid run: the key stays, so a retry is the same run, and the page says so.
+      if (typeof data.runId !== 'string' || data.runId.length === 0) {
+        throw new Error(UNCONFIRMED_RUN_START_MESSAGE);
       }
+      pendingRunIntentRef.current = null;
+      setActiveRunId(data.runId);
     } catch (runError) {
       setError(runError instanceof Error ? runError.message : 'Failed to start workflow run.');
     }
@@ -1086,7 +1098,7 @@ export default function CreateWorkflowClient({
           body: JSON.stringify({}),
         }
       );
-      const data = await response.json();
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the checkpoint was approved. Check the run before trying again.' });
       if (!response.ok) {
         throw new Error(data.error || 'Failed to approve workflow checkpoint.');
       }

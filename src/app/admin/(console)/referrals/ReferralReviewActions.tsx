@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import clsx from 'clsx';
@@ -58,7 +59,7 @@ export function ReferralReviewActions({
           reason: reason.trim(),
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         setError(typeof data?.error === 'string' ? data.error : 'The decision could not be saved.');

@@ -12,9 +12,11 @@ interface SignedInAlertsBoundaryProps {
  * The signed-in half loads with import() once a reader is known, and that load
  * can fail: a deploy rotated the chunk names while the tab was open and the
  * reader then signed in, or the connection was down at that moment. React.lazy
- * throws the failure to the nearest error boundary, and src/app has none, so
- * the reader got Next's generic client-exception page in place of the list.
- * This boundary keeps the failure to the half: the page draws its own error
+ * throws the failure to the nearest error boundary. Until 2026-11-27 src/app
+ * had none, so the reader got Next's generic client-exception page in place of
+ * the list; the root error.tsx now catches it, but in place of the whole page,
+ * and its Retry re-fetches the segment without reloading, so the lazy keeps the
+ * failed chunk. This boundary keeps the failure to the half: the page draws its own error
  * card, whose Retry reloads the page and so fetches the current chunk names.
  */
 export class SignedInAlertsBoundary extends Component<SignedInAlertsBoundaryProps, { failed: boolean }> {

@@ -73,6 +73,10 @@ export function CreatorProfileHeader({
             alt={`${profile.displayName} cover`}
             fill
             sizes="(min-width: 1560px) 1560px, 100vw"
+            // The page's first and widest picture, likely its largest paint: not lazy, and asked
+            // for first (next/image's docs prefer these to `preload`).
+            loading="eager"
+            fetchPriority="high"
             className="object-cover"
           />
         ) : (

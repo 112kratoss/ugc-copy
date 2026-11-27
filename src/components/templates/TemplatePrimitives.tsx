@@ -131,7 +131,7 @@ export function TemplateCard({
         </Text>
         <div className="mt-4 flex items-center gap-3 border-t border-white/8 pt-4">
           <div className="text-xs font-semibold text-zinc-400">
-            {template.useCount.toLocaleString()} {template.useCount === 1 ? 'use' : 'uses'}
+            {template.useCount.toLocaleString('en-US')} {template.useCount === 1 ? 'use' : 'uses'}
           </div>
           {mode === 'public' && template.estimatedTotalCredits !== null ? (
             <div className="ml-auto inline-flex items-center gap-1.5 text-xs font-bold text-amber-100">

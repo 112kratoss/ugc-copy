@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import {
   useCallback,
   useDeferredValue,
@@ -444,7 +445,7 @@ export default function WorkflowLibraryClient() {
     setLoadError(null);
     try {
       const response = await fetch('/api/workflow-canvases', { headers: authHeaders() });
-      const data = await response.json();
+      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to load workflows.' });
       if (!response.ok) throw new Error(data.error || 'Failed to load workflows.');
       setCanvases(data.canvases as WorkflowCanvasListItem[]);
     } catch (error) {
@@ -487,7 +488,7 @@ export default function WorkflowLibraryClient() {
         headers: authHeaders(),
         body: JSON.stringify({ title: `Workflow ${canvases.length + 1}` }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the workflow was created. Check your workflows before trying again.' });
       if (!response.ok) throw new Error(data.error || 'Failed to create workflow.');
       openCanvas((data.canvas as WorkflowCanvasRecord).id);
     } catch (error) {
@@ -502,7 +503,7 @@ export default function WorkflowLibraryClient() {
     setActionError(null);
     try {
       const detailResponse = await fetch(`/api/workflow-canvases/${canvas.id}`, { headers: authHeaders() });
-      const detailData = await detailResponse.json();
+      const detailData = await readJsonResponse(detailResponse, { unreadableSuccess: 'Failed to load workflow for duplication.' });
       if (!detailResponse.ok) throw new Error(detailData.error || 'Failed to load workflow for duplication.');
       const source = detailData.canvas as WorkflowCanvasRecord;
       const createResponse = await fetch('/api/workflow-canvases', {
@@ -510,7 +511,7 @@ export default function WorkflowLibraryClient() {
         headers: authHeaders(),
         body: JSON.stringify({ title: `Copy of ${canvas.title}`, graph: source.graph }),
       });
-      const createData = await createResponse.json();
+      const createData = await readJsonResponse(createResponse, { unreadableSuccess: 'We could not confirm the copy was made. Check your workflows before trying again.' });
       if (!createResponse.ok) throw new Error(createData.error || 'Failed to duplicate workflow.');
       const created = createData.canvas as WorkflowCanvasRecord;
       setCanvases((current) => [toCanvasListItem(created), ...current]);
@@ -534,7 +535,7 @@ export default function WorkflowLibraryClient() {
         headers: authHeaders(),
         body: JSON.stringify({ title }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the new name was saved. Check the workflow before trying again.' });
       if (!response.ok) throw new Error(data.error || 'Failed to rename workflow.');
       const updated = toCanvasListItem(data.canvas as WorkflowCanvasRecord);
       setCanvases((current) => current.map((item) => item.id === updated.id ? updated : item));
@@ -556,7 +557,7 @@ export default function WorkflowLibraryClient() {
         method: 'DELETE',
         headers: authHeaders(),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (!response.ok) throw new Error(data.error || 'Failed to delete workflow.');
       setCanvases((current) => current.filter((item) => item.id !== canvas.id));
       setDialog(null);
