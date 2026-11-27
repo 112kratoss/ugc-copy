@@ -303,6 +303,30 @@ describe('generation completion jobs', () => {
     });
   });
 
+  it('starts no claimed job once the run deadline has passed, leaving it to its lease', async () => {
+    const client = createRpcClient([
+      {
+        data: [
+          { id: 'job-1', prediction_id: 'task-1', payload: {}, status: 'processing', attempt_count: 1, locked_by: 'worker-1' },
+          { id: 'job-2', prediction_id: 'task-2', payload: {}, status: 'processing', attempt_count: 1, locked_by: 'worker-1' },
+        ],
+        error: null,
+      },
+    ]);
+
+    await expect(processGenerationCompletionJobs({
+      supabase: client as never,
+      creditSupabase: client as never,
+      lockedBy: 'worker-1',
+      limit: 5,
+      deadlineMs: Date.now() - 1,
+    })).resolves.toEqual({ claimed: 2, completed: 0, retried: 0, failed: 0, deferred: 2 });
+
+    expect(syncGenerationStatusByPredictionId).not.toHaveBeenCalled();
+    // Only the claim: a deferred job is neither finished nor counted as an attempt.
+    expect(client.rpc).toHaveBeenCalledTimes(1);
+  });
+
   it('reattaches callback generation ids and retries missing provider task lookups', async () => {
     const webhookPayload = {
       data: { taskId: 'task-1', state: 'success' },

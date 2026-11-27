@@ -5,11 +5,14 @@ type LockMockResult =
   | { acquired: false; reason: 'already_running' };
 
 const stalledReapSummary = {
-  providerSync: { eligible: 1, reconciled: 1, stillActive: 0, skipped: 0, failed: 0, deferred: 0 },
+  providerSync: { eligible: 1, reconciled: 1, stillActive: 0, abandoned: 0, skipped: 0, failed: 0, deferred: 0 },
   startFailures: { eligible: 1, settled: 1, skipped: 0, failed: 0, deferred: 0 },
 };
 
 const queuedStartsSummary = { sent: 1, queued: 2, gone: 0, expired: 1, failed: 0 };
+
+const importRetriesSummary = { eligible: 1, reopened: 0, abandoned: 1, skipped: 0, failed: 0, deferred: 0 };
+const aiUsageRefundsSummary = { eligible: 1, refunded: 1, skipped: 0, failed: 0, deferred: 0 };
 
 const mocks = vi.hoisted(() => ({
   createServiceClient: vi.fn(),
@@ -46,6 +49,10 @@ const mocks = vi.hoisted(() => ({
   }),
   processGenerationCompletionJobs: vi.fn(),
   processGenerationOutputImportJobs: vi.fn(),
+  hasDueGenerationOutputImportRetries: vi.fn(),
+  retryOrAbandonExhaustedGenerationOutputImports: vi.fn(),
+  hasStaleAiUsageCharges: vi.fn(),
+  refundStaleAiUsageCharges: vi.fn(),
   processTemplateRunJobs: vi.fn(),
   processWorkflowRunStepJobs: vi.fn(),
   hasDueGenerationOutputImportJobs: vi.fn(),
@@ -148,6 +155,18 @@ vi.mock('@/lib/generation-output-import-jobs-processor', () => ({
   ),
 }));
 
+vi.mock('@/lib/generation-output-import-retries', () => ({
+  hasDueGenerationOutputImportRetries: (...args: unknown[]) => mocks.hasDueGenerationOutputImportRetries(...args),
+  retryOrAbandonExhaustedGenerationOutputImports: (...args: unknown[]) => (
+    mocks.retryOrAbandonExhaustedGenerationOutputImports(...args)
+  ),
+}));
+
+vi.mock('@/lib/stale-ai-usage-refunds', () => ({
+  hasStaleAiUsageCharges: (...args: unknown[]) => mocks.hasStaleAiUsageCharges(...args),
+  refundStaleAiUsageCharges: (...args: unknown[]) => mocks.refundStaleAiUsageCharges(...args),
+}));
+
 describe('/api/cron/generation-completions route', () => {
   beforeEach(() => {
     vi.resetModules();
@@ -199,6 +218,10 @@ describe('/api/cron/generation-completions route', () => {
     });
     mocks.hasStalledGenerationWork.mockResolvedValue(false);
     mocks.reapStalledGenerations.mockResolvedValue(stalledReapSummary);
+    mocks.hasDueGenerationOutputImportRetries.mockReset().mockResolvedValue(false);
+    mocks.retryOrAbandonExhaustedGenerationOutputImports.mockReset().mockResolvedValue(importRetriesSummary);
+    mocks.hasStaleAiUsageCharges.mockReset().mockResolvedValue(false);
+    mocks.refundStaleAiUsageCharges.mockReset().mockResolvedValue(aiUsageRefundsSummary);
     mocks.hasQueuedProviderSubmissions.mockReset();
     mocks.hasQueuedProviderSubmissions.mockResolvedValue(false);
     mocks.driveQueuedSubmissions.mockReset();
@@ -276,27 +299,41 @@ describe('/api/cron/generation-completions route', () => {
       creditSupabase: { service: 'supabase' },
       lockedBy: expect.stringMatching(/^generation-completions:/),
       limit: 25,
+      deadlineMs: expect.any(Number),
     });
     expect(mocks.reapStalledGenerations).toHaveBeenCalledWith({
       supabase: { service: 'supabase' },
       creditSupabase: { service: 'supabase' },
       nowMs: expect.any(Number),
+      deadlineMs: expect.any(Number),
     });
+    expect(mocks.retryOrAbandonExhaustedGenerationOutputImports).toHaveBeenCalledWith({
+      client: { service: 'supabase' },
+      nowMs: expect.any(Number),
+      deadlineMs: expect.any(Number),
+    });
+    expect(mocks.refundStaleAiUsageCharges).toHaveBeenCalledWith({
+      client: { service: 'supabase' },
+      nowMs: expect.any(Number),
+      deadlineMs: expect.any(Number),
+    });
+    // Woken for the completed job, the reaper's two, the import and the abandoned import.
     expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith({
       supabase: { service: 'supabase' },
       lockedBy: expect.stringMatching(/^generation-completions:.*:workflow$/),
-      limit: 4,
+      limit: 5,
       nowMs: expect.any(Number),
     });
     expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith({
       client: { service: 'supabase' },
       lockedBy: expect.stringMatching(/^generation-completions:.*:template$/),
-      limit: 4,
+      limit: 5,
     });
     expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalledWith({
       client: { service: 'supabase' },
       lockedBy: expect.stringMatching(/^generation-completions:.*:output-import$/),
       limit: 4,
+      deadlineMs: expect.any(Number),
     });
     expect(mocks.maybePruneGenerationCompletionJobs).toHaveBeenCalledWith(
       { service: 'supabase' },
@@ -315,6 +352,8 @@ describe('/api/cron/generation-completions route', () => {
           failed: 0,
           stalled: stalledReapSummary,
           outputImports: expect.objectContaining({ claimed: 1, completed: 1 }),
+          outputImportRetries: importRetriesSummary,
+          aiUsageRefunds: aiUsageRefundsSummary,
           queuedStarts: queuedStartsSummary,
           workflowWake: expect.objectContaining({ claimed: 1, advanced: 1 }),
           templateWake: expect.objectContaining({ claimed: 1, completed: 1 }),
@@ -378,6 +417,48 @@ describe('/api/cron/generation-completions route', () => {
       success: true,
       summary: { stalled: stalledReapSummary },
     });
+  });
+
+  it.each([
+    ['an exhausted import due its hourly retry or its give-up', 'hasDueGenerationOutputImportRetries'],
+    ['an AI usage charge nobody settled', 'hasStaleAiUsageCharges'],
+  ] as const)('runs when the only work is %s', async (_label, probe) => {
+    mocks.hasDueGenerationCompletionJobs.mockResolvedValueOnce(false);
+    mocks[probe].mockResolvedValueOnce(true);
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks[probe]).toHaveBeenCalledWith({ service: 'supabase' }, expect.objectContaining({ nowMs: expect.any(Number) }));
+    expect(mocks.retryOrAbandonExhaustedGenerationOutputImports).toHaveBeenCalled();
+    expect(mocks.refundStaleAiUsageCharges).toHaveBeenCalled();
+  });
+
+  it('gives each stage a deadline inside the 300-second route, measured from the start of the run', async () => {
+    const { GENERATION_COMPLETIONS_RUN_DEADLINES_MS } = await import('@/lib/backend-job-executions');
+    const before = Date.now();
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+    const after = Date.now();
+
+    const drain = mocks.processGenerationCompletionJobs.mock.calls[0][0].deadlineMs as number;
+    const reaper = mocks.reapStalledGenerations.mock.calls[0][0].deadlineMs as number;
+    const imports = mocks.processGenerationOutputImportJobs.mock.calls[0][0].deadlineMs as number;
+    expect(drain).toBeGreaterThanOrEqual(before + GENERATION_COMPLETIONS_RUN_DEADLINES_MS.completionDrain);
+    expect(drain).toBeLessThanOrEqual(after + GENERATION_COMPLETIONS_RUN_DEADLINES_MS.completionDrain);
+    expect(reaper - drain).toBe(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.stalledReaper - GENERATION_COMPLETIONS_RUN_DEADLINES_MS.completionDrain);
+    expect(imports - drain).toBe(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.outputImports - GENERATION_COMPLETIONS_RUN_DEADLINES_MS.completionDrain);
+    // Every admission deadline leaves room under the route's maxDuration for
+    // the last item started (a provider poll of three ten-second tries, or one
+    // import inside its own budget) and the wake-ups after it.
+    expect(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.completionDrain).toBeLessThan(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.stalledReaper);
+    expect(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.stalledReaper).toBeLessThan(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.outputImports);
+    expect(GENERATION_COMPLETIONS_RUN_DEADLINES_MS.outputImports).toBeLessThanOrEqual(210_000);
   });
 
   it('records a skipped job-run without taking the lock when no completion or stalled work exists', async () => {
@@ -444,11 +525,12 @@ describe('/api/cron/generation-completions route', () => {
       supabase: { service: 'supabase' },
       creditSupabase: { service: 'supabase' },
       nowMs: expect.any(Number),
+      deadlineMs: expect.any(Number),
     });
     expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalled();
-    // Woken for the job that did complete, plus the reaper's two and the import.
-    expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 4 }));
-    expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 4 }));
+    // Woken for the job that did complete, plus the reaper's two, the import and the abandoned import.
+    expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 }));
+    expect(mocks.processTemplateRunJobs).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 }));
     expect(mocks.maybePruneGenerationCompletionJobs).toHaveBeenCalled();
     // The run is still reported as failed, with the job's own error.
     expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(

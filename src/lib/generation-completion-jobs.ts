@@ -59,6 +59,12 @@ export type GenerationCompletionProcessSummary = {
   completed: number;
   retried: number;
   failed: number;
+  /**
+   * Claimed but not started because the caller's deadline had passed; present
+   * only when a deadline was given. They keep their lease and are claimed again
+   * once it expires (five minutes, inside the next ten-minute tick).
+   */
+  deferred?: number;
 };
 
 /**
@@ -475,6 +481,8 @@ export async function processGenerationCompletionJobs(params: {
   limit: number;
   predictionId?: string | null;
   retryDelaySeconds?: number;
+  /** Absolute time after which no claimed job is started (the cron run's drain budget). */
+  deadlineMs?: number;
 }): Promise<GenerationCompletionProcessSummary> {
   const jobs = await claimGenerationCompletionJobs(params.supabase, {
     limit: params.limit,
@@ -486,13 +494,15 @@ export async function processGenerationCompletionJobs(params: {
     completed: 0,
     retried: 0,
     failed: 0,
+    ...(params.deadlineMs !== undefined ? { deferred: 0 } : {}),
   };
 
   const failures: unknown[] = [];
   const outcomes = await mapWithConcurrency(
     jobs,
     GENERATION_COMPLETION_CONCURRENCY,
-    async (job) => {
+    async (job): Promise<GenerationCompletionJobOutcome | 'deferred' | null> => {
+      if (params.deadlineMs !== undefined && Date.now() >= params.deadlineMs) return 'deferred';
       try {
         return await processGenerationCompletionJob({
           supabase: params.supabase,
@@ -518,7 +528,7 @@ export async function processGenerationCompletionJobs(params: {
     },
   );
   for (const outcome of outcomes) {
-    if (outcome) summary[outcome] += 1;
+    if (outcome) summary[outcome] = (summary[outcome] ?? 0) + 1;
   }
 
   if (failures.length > 0) {

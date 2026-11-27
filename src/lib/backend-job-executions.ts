@@ -42,6 +42,11 @@ import {
 } from '@/lib/generation-completion-jobs';
 import { hasDueGenerationOutputImportJobs } from '@/lib/generation-output-import-jobs';
 import {
+  hasDueGenerationOutputImportRetries,
+  retryOrAbandonExhaustedGenerationOutputImports,
+} from '@/lib/generation-output-import-retries';
+import { hasStaleAiUsageCharges, refundStaleAiUsageCharges } from '@/lib/stale-ai-usage-refunds';
+import {
   GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
   processGenerationOutputImportJobs,
 } from '@/lib/generation-output-import-jobs-processor';
@@ -104,6 +109,24 @@ import {
 } from '@/lib/workflow-run-jobs-processor';
 
 const GENERATION_COMPLETION_BATCH_LIMIT = 25;
+
+/**
+ * Admission deadlines of the generation-completions run, measured from its
+ * start, inside the route's 300-second maxDuration. Each stage starts no new
+ * item after its deadline; an item already started runs to its end, so each
+ * leaves room for the slowest single item (a provider status poll is three
+ * ten-second tries; an output import has its own 60-second admission budget)
+ * and for the queue pass and the wake-ups after the imports. Work not started
+ * stays queued or eligible for the next ten-minute tick.
+ *
+ * The cheap, money-settling sweeps (exhausted imports, stale AI charges) run
+ * right after the drain, so a slow provider in the reaper cannot starve them.
+ */
+export const GENERATION_COMPLETIONS_RUN_DEADLINES_MS = {
+  completionDrain: 90_000,
+  stalledReaper: 150_000,
+  outputImports: 210_000,
+} as const;
 
 export function runAccountDeletionResweepsBackendJob(options: {
   requestId?: string;
@@ -416,6 +439,8 @@ export function runGenerationCompletionsBackendJob(options: {
       || await hasDueGenerationOutputImportJobs(client)
       || await hasStalledGenerationWork(client, { nowMs: context.startedAtMs })
       || await hasQueuedProviderSubmissions(client)
+      || await hasDueGenerationOutputImportRetries(client, { nowMs: context.startedAtMs })
+      || await hasStaleAiUsageCharges(client, { nowMs: context.startedAtMs })
     ),
     onNoWork: async (client, context) => ({
       pruned: await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs }),
@@ -424,6 +449,9 @@ export function runGenerationCompletionsBackendJob(options: {
       // A job the drain could not finish fails this run, but only at the end.
       // Everything below is owed to other generations: the reaper is their
       // safety net and must not be switched off by one job that keeps throwing.
+      const deadline = (stage: keyof typeof GENERATION_COMPLETIONS_RUN_DEADLINES_MS) => (
+        context.startedAtMs + GENERATION_COMPLETIONS_RUN_DEADLINES_MS[stage]
+      );
       let completionFailure: GenerationCompletionBatchError | null = null;
       let completionSummary: GenerationCompletionProcessSummary;
       try {
@@ -432,12 +460,27 @@ export function runGenerationCompletionsBackendJob(options: {
           creditSupabase: client,
           lockedBy: context.lockOwner,
           limit: GENERATION_COMPLETION_BATCH_LIMIT,
+          deadlineMs: deadline('completionDrain'),
         });
       } catch (error) {
         if (!(error instanceof GenerationCompletionBatchError)) throw error;
         completionFailure = error;
         completionSummary = error.summary;
       }
+      // A provider-finished generation whose file could not be stored: its
+      // exhausted import is reopened hourly, then failed and refunded once the
+      // provider's file can no longer be there.
+      const outputImportRetries = await retryOrAbandonExhaustedGenerationOutputImports({
+        client,
+        nowMs: context.startedAtMs,
+        deadlineMs: deadline('outputImports'),
+      });
+      // A prompt-enhancement or assistant charge whose request died unsettled.
+      const aiUsageRefunds = await refundStaleAiUsageCharges({
+        client,
+        nowMs: context.startedAtMs,
+        deadlineMs: deadline('outputImports'),
+      });
       // Webhook-less safety net: reconcile stalled generations that the
       // durable completion queue never heard about (missed webhook, closed
       // app) so credit holds cannot linger forever. Bounded and idempotent.
@@ -445,11 +488,13 @@ export function runGenerationCompletionsBackendJob(options: {
         supabase: client,
         creditSupabase: client,
         nowMs: context.startedAtMs,
+        deadlineMs: deadline('stalledReaper'),
       });
       const outputImports = await processGenerationOutputImportJobs({
         client,
         lockedBy: `${context.lockOwner}:output-import`,
         limit: GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
+        deadlineMs: deadline('outputImports'),
       });
       // The backstop for queued starts: one whose request stopped asking and
       // whose creator left is sent, or expired and refunded, from here.
@@ -459,8 +504,10 @@ export function runGenerationCompletionsBackendJob(options: {
       });
       const terminalTransitions = completionSummary.completed
         + stalled.providerSync.reconciled
+        + stalled.providerSync.abandoned
         + stalled.startFailures.settled
-        + outputImports.completed;
+        + outputImports.completed
+        + outputImportRetries.abandoned;
       const workflowWake = terminalTransitions > 0
         ? await processWorkflowRunStepJobs({
             supabase: client,
@@ -482,6 +529,8 @@ export function runGenerationCompletionsBackendJob(options: {
         ...completionSummary,
         stalled,
         outputImports,
+        outputImportRetries,
+        aiUsageRefunds,
         queuedStarts,
         workflowWake,
         templateWake,
