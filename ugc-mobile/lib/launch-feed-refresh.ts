@@ -44,6 +44,9 @@ export function mergeUnderRestoredPage(restored: ShowcaseFeedResponse, fresh: Sh
   const keptIds = new Set(restored.items.map((item) => item.id));
   return {
     ...fresh,
+    // The posts that are here only because the reader was on them: this
+    // launch's alone (`withoutKeptRestoredPosts`).
+    keptRestoredPostIds: restored.items.filter((item) => !freshById.has(item.id)).map((item) => item.id),
     items: [
       ...restored.items.map((item) => {
         const again = freshById.get(item.id);
@@ -54,6 +57,20 @@ export function mergeUnderRestoredPage(restored: ShowcaseFeedResponse, fresh: Sh
       ...fresh.items.filter((item) => !keptIds.has(item.id)),
     ],
   };
+}
+
+/**
+ * The page as the server answered it, for the next launch to restore: without
+ * the posts this launch kept on top of it. Saved with them, the next launch
+ * would draw the same posts first again, keep them again at a touch, and so
+ * on, the saved page a dozen posts longer each time, and since a kept post
+ * holds no delivery the server would never learn it had been seen.
+ */
+export function withoutKeptRestoredPosts(page: ShowcaseFeedResponse): ShowcaseFeedResponse {
+  const { keptRestoredPostIds, ...answered } = page;
+  if (!keptRestoredPostIds?.length) return answered;
+  const kept = new Set(keptRestoredPostIds);
+  return { ...answered, items: answered.items.filter((item) => !kept.has(item.id)) };
 }
 
 /**

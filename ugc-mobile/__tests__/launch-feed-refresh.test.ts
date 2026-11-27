@@ -1,7 +1,7 @@
 import { InfiniteQueryObserver, QueryClient, type InfiniteData } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { isLaunchRefreshOut, keepRestoredPage, mergeUnderRestoredPage, resetRestoredPageKeepsForTests } from '../lib/launch-feed-refresh';
+import { isLaunchRefreshOut, keepRestoredPage, mergeUnderRestoredPage, resetRestoredPageKeepsForTests, withoutKeptRestoredPosts } from '../lib/launch-feed-refresh';
 import { requestFreshRanking, resetFreshRankingForTests } from '../lib/feed-fresh-ranking';
 import { showcaseFeedLaneQueryOptions } from '../lib/showcase-feed-lane';
 import type { ShowcaseFeedResponse } from '../lib/types';
@@ -137,6 +137,18 @@ describe("the read a launch owes Home's saved page", () => {
 
     expect(merged.items.map((item) => item.id)).toEqual(['a', 'b', 'c', 'd']);
     expect(merged.feedSessionId).toBe('new-session');
+    expect(merged.keptRestoredPostIds).toEqual([]);
+  });
+
+  it('names the posts that are there only because the reader was on them, and leaves them out of what is saved', () => {
+    const merged = mergeUnderRestoredPage(page(['kept-1', 'both']), page(['new-1', 'both'], 'new-session'));
+
+    expect(merged.keptRestoredPostIds).toEqual(['kept-1']);
+    const saved = withoutKeptRestoredPosts(merged);
+    expect(saved.items.map((item) => item.id)).toEqual(['both', 'new-1']);
+    expect(saved).not.toHaveProperty('keptRestoredPostIds');
+    // A page nothing was kept on is saved as it is.
+    expect(withoutKeptRestoredPosts(page(['a'])).items.map((item) => item.id)).toEqual(['a']);
   });
 
   it('is not a page being added below, nor a refresh of a lane read in this launch', () => {

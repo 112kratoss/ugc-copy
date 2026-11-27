@@ -3,6 +3,7 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 
 import { HOME_FEED_CHIPS, type HomeFeedChipId } from './home-feed-view-model';
+import { withoutKeptRestoredPosts } from './launch-feed-refresh';
 import { createShowcaseFeedQueryKey, isLaneDataFromAnEarlierLaunch, type ShowcaseFeedPageParam } from './showcase-feed-query';
 import type { ShowcaseFeedResponse } from './types';
 
@@ -162,7 +163,9 @@ export function persistHomeFeed(
 ): Promise<void> {
   return enqueue(async () => {
     const state = queryClient.getQueryState<HomeFeedData>(createPersistedHomeFeedQueryKey(identityUserId));
-    const page = state?.data?.pages[0];
+    // As the server answered it: the posts a launch kept on top of its
+    // refresh stay that launch's (`launch-feed-refresh.ts`).
+    const page = state?.data?.pages[0] ? withoutKeptRestoredPosts(state.data.pages[0]) : undefined;
     if (!state || state.status !== 'success' || !page?.items.length) return;
 
     const persisted: PersistedHomeFeed = {
