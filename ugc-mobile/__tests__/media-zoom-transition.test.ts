@@ -43,6 +43,9 @@ import {
   type ZoomGeometry,
   type ZoomRect,
   type ZoomSourceHandle,
+  subscribeToTileOpen,
+  tileOpenHoldsTouchesUntil,
+  TILE_OPEN_TOUCH_HOLD_MAX_MS,
 } from '../lib/media-zoom-transition';
 import type { ShowcaseMediaItem } from '../lib/types';
 
@@ -491,6 +494,42 @@ describe('the flight itself', () => {
  * used to start the whole movement over, fly the poster in place of the video
  * the first tap had lent, and push a second reel on top of the first.
  */
+describe('how long the screen under an opening post leaves touches alone', () => {
+  const NOW = 2_000_000;
+
+  it('holds them from the tap, for the tap\u2019s own hold, and lets go when no reel takes the open over', () => {
+    expect(tileOpenHoldsTouchesUntil(NOW)).toBeNull();
+    const open = beginTileOpen(NOW, 600);
+    expect(tileOpenHoldsTouchesUntil(NOW)).toBe(NOW + 600);
+    expect(tileOpenHoldsTouchesUntil(NOW + 599)).toBe(NOW + 600);
+    expect(tileOpenHoldsTouchesUntil(NOW + 600)).toBeNull();
+    endTileOpen(open);
+  });
+
+  it('holds them for the reel that took the open over, until it ends the open, within a bound', () => {
+    const open = beginTileOpen(NOW, 600);
+    claimTileOpen(NOW + 400);
+    expect(tileOpenHoldsTouchesUntil(NOW + 1500)).toBe(NOW + TILE_OPEN_TOUCH_HOLD_MAX_MS);
+    expect(tileOpenHoldsTouchesUntil(NOW + TILE_OPEN_TOUCH_HOLD_MAX_MS)).toBeNull();
+    endTileOpen(open);
+    expect(tileOpenHoldsTouchesUntil(NOW + 1500)).toBeNull();
+  });
+
+  it('tells its listeners when an open begins, is taken over and ends, and no longer once they leave', () => {
+    const told = vi.fn();
+    const stop = subscribeToTileOpen(told);
+    const open = beginTileOpen(NOW, 600);
+    expect(told).toHaveBeenCalledTimes(1);
+    claimTileOpen(NOW + 100);
+    expect(told).toHaveBeenCalledTimes(2);
+    endTileOpen(open);
+    expect(told).toHaveBeenCalledTimes(3);
+    stop();
+    endTileOpen(beginTileOpen(NOW + 5000, 600));
+    expect(told).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('one open at a time', () => {
   const NOW = 1_000_000;
 
