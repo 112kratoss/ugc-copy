@@ -175,6 +175,19 @@ async function close(client: SupabaseClient, row: ExhaustedImportRow, nowMs: num
   }
 }
 
+/** Stamps `updated_at` on a row this pass failed on, so the next pass reaches the rows behind it first. */
+async function moveToBack(client: SupabaseClient, row: ExhaustedImportRow, nowMs: number): Promise<void> {
+  try {
+    const { error } = await client
+      .from('generation_output_import_jobs')
+      .update({ updated_at: new Date(nowMs).toISOString() })
+      .eq('id', row.id);
+    if (error) throw error;
+  } catch (error) {
+    logBackendError('generation_output_import_rotation_failed', { importJobId: row.id, error });
+  }
+}
+
 function holdsLiveLease(row: ExhaustedImportRow, nowMs: number): boolean {
   if (row.status !== 'processing') return false;
   const lockedAtMs = row.locked_at ? Date.parse(row.locked_at) : Number.NaN;
@@ -219,7 +232,9 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
       + 'generations!inner(id, user_id, status, category, model, template_run_id)',
     nowMs,
   )
-    .order('created_at', { ascending: true })
+    // Least recently touched first: a row this pass could not settle is
+    // stamped below and goes to the back, so a run of them cannot starve it.
+    .order('updated_at', { ascending: true })
     .limit(limit);
   if (error) throw error;
 
@@ -262,6 +277,7 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
         importJobId: row.id,
         error: rowError,
       });
+      await moveToBack(params.client, row, nowMs);
     }
   }
 

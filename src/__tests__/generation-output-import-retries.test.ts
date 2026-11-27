@@ -112,7 +112,7 @@ describe('exhausted generation output imports', () => {
       'created_at.lte.2026-11-26T12:00:00.000Z',
       'provider_completed_at.lte.2026-11-26T12:00:00.000Z',
     ].join(',')]]);
-    expect(calls).toContainEqual(['order', ['created_at', { ascending: true }]]);
+    expect(calls).toContainEqual(['order', ['updated_at', { ascending: true }]]);
   });
 
   it('reopens an exhausted import an hour after its last attempt while the provider file may still exist', async () => {
@@ -226,7 +226,7 @@ describe('exhausted generation output imports', () => {
 
   it('announces nothing when the import landed first or the generation is gone, and keeps going after a settlement error', async () => {
     const old = { provider_completed_at: new Date(NOW_MS - 30 * HOUR).toISOString() };
-    const { client, rpc } = createClient(
+    const { client, rpc, builders } = createClient(
       [{
         data: [
           exhaustedJob({ id: 'import-1', prediction_id: 'task-1', ...old }),
@@ -235,7 +235,7 @@ describe('exhausted generation output imports', () => {
           exhaustedJob({ id: 'import-4', prediction_id: 'task-4', ...old }),
         ],
         error: null,
-      }, { data: null, error: null }],
+      }, { data: null, error: null }, { data: null, error: null }],
       [
         { data: { status: 'already_succeeded' }, error: null },
         { data: { status: 'missing' }, error: null },
@@ -249,6 +249,62 @@ describe('exhausted generation output imports', () => {
     expect(summary).toEqual({ eligible: 4, reopened: 0, abandoned: 1, skipped: 2, failed: 1, deferred: 0 });
     expect(rpc).toHaveBeenCalledTimes(4);
     expect(mocks.notify).toHaveBeenCalledTimes(1);
+    // The row whose settlement failed is stamped to the back; the settled one is closed.
+    expect(builders[1].calls).toEqual([
+      ['update', [{ updated_at: '2026-11-27T12:00:00.000Z' }]],
+      ['eq', ['id', 'import-3']],
+    ]);
+    expect(builders[2].calls[0]).toEqual(['update', [expect.objectContaining({ status: 'cancelled' })]]);
+  });
+
+  it('moves a row it cannot settle to the back, so more of them than the batch cannot starve the rest', async () => {
+    // An in-memory queue that orders and limits like the query does.
+    type Job = ReturnType<typeof exhaustedJob> & { updated_at: string };
+    const past = new Date(NOW_MS - 30 * HOUR).toISOString();
+    const jobs: Job[] = Array.from({ length: 11 }, (_, index) => ({
+      ...exhaustedJob({ id: `import-${index}`, prediction_id: index < 10 ? `stuck-${index}` : 'ok', provider_completed_at: past }),
+      updated_at: new Date(NOW_MS - (60 - index) * 60_000).toISOString(),
+    }));
+    const settled: string[] = [];
+    const client = {
+      from: () => {
+        let patch: Record<string, unknown> | null = null;
+        let id: string | null = null;
+        let limitCount = Infinity;
+        const builder = {
+          select: () => builder,
+          in: () => builder,
+          or: () => builder,
+          order: () => builder,
+          update: (values: Record<string, unknown>) => { patch = values; return builder; },
+          eq: (column: string, value: unknown) => { if (column === 'id') id = String(value); return builder; },
+          limit: (count: number) => { limitCount = count; return builder; },
+          then: (resolve: (value: { data: unknown; error: null }) => unknown) => {
+            if (patch) {
+              const job = jobs.find((row) => row.id === id);
+              if (job) Object.assign(job, patch);
+              return Promise.resolve({ data: null, error: null }).then(resolve);
+            }
+            const open = jobs.filter((row) => !settled.includes(row.prediction_id) && row.status !== 'cancelled');
+            const page = [...open].sort((a, b) => a.updated_at.localeCompare(b.updated_at)).slice(0, limitCount);
+            return Promise.resolve({ data: page, error: null }).then(resolve);
+          },
+        };
+        return builder;
+      },
+      rpc: vi.fn(async (_name: string, args: Record<string, unknown>) => {
+        if (String(args.p_prediction_id).startsWith('stuck-')) return { data: null, error: { message: 'profile locked' } };
+        settled.push(String(args.p_prediction_id));
+        return { data: { status: 'failed', refunded: true }, error: null };
+      }),
+    };
+
+    const first = await retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS });
+    expect(first).toMatchObject({ eligible: 10, failed: 10, abandoned: 0 });
+
+    const second = await retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS + 10 * 60_000 });
+    expect(second).toMatchObject({ abandoned: 1 });
+    expect(settled).toEqual(['ok']);
   });
 
   it('defers what it cannot start before the run deadline', async () => {
