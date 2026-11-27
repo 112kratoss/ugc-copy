@@ -205,6 +205,33 @@ describe('the global handlers', () => {
     }
   });
 
+  // The reporter is set again whenever the API client changes (a sign-in): what a fatal error kept
+  // is sent once per launch, not again by each new reporter.
+  it('sends what an earlier launch kept once, however often the reporter is set', async () => {
+    const kept: ClientErrorReportBody[] = [{ message: 'Error: kept', stack: null, componentStack: null, fatal: true, ...context }];
+    let releaseFirst!: () => void;
+    const store = {
+      save: vi.fn(async () => undefined),
+      peek: vi.fn(async () => [...kept]),
+      drop: vi.fn(async (sent: ClientErrorReportBody[]) => {
+        for (const body of sent) kept.splice(kept.indexOf(body), 1);
+      }),
+    };
+    configureClientErrorStore(store, () => context);
+    const first = vi.fn(() => new Promise<void>((resolve) => { releaseFirst = resolve; }));
+    setClientErrorReporter({ send: first, context: () => context });
+    await settle();
+    const second = vi.fn(async (_report: unknown) => undefined);
+    setClientErrorReporter({ send: second, context: () => context });
+    await settle();
+    releaseFirst();
+    await settle();
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(store.peek).toHaveBeenCalledTimes(1);
+  });
+
   it('ends the app as before when keeping the report hangs or throws, after at most a second', async () => {
     vi.useFakeTimers();
     try {

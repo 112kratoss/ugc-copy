@@ -70,6 +70,8 @@ const state = {
   sent: 0,
   waiting: [] as Caught[],
   installed: false,
+  // Whether this launch has begun sending what an earlier launch kept: once per launch.
+  keptSendStarted: false,
   dev: typeof __DEV__ !== 'undefined' && __DEV__ === true,
   store: null as ClientErrorStore | null,
   storeContext: null as (() => ClientErrorContext) | null,
@@ -203,7 +205,8 @@ export function setClientErrorReporter(reporter: ClientErrorReporter): () => voi
   // Each leaves the device only once its send succeeded; the rest wait for the next launch.
   try {
     const store = state.store;
-    if (store && !state.dev) {
+    if (store && !state.dev && !state.keptSendStarted) {
+      state.keptSendStarted = true;
       void (async () => {
         const kept = await store.peek();
         const sent: ClientErrorReportBody[] = [];
@@ -304,4 +307,5 @@ export function resetClientErrorReportsForTests({ dev }: { dev: boolean }): void
   state.dev = dev;
   state.store = null;
   state.storeContext = null;
+  state.keptSendStarted = false;
 }
