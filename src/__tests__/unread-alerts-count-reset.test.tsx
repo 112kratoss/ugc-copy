@@ -24,18 +24,18 @@ describe('resetUnreadAlertsCount', () => {
   it('clears the previous account\'s count at once and reads the next account\'s on the next look', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ unreadCount: 7 }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    const module = await import('@/components/useUnreadAlertsCount');
-    act(() => module.publishUnreadAlertsCount(4));
-    const { result, rerender } = renderHook(() => module.useUnreadAlertsCount());
+    const unread = await import('@/components/useUnreadAlertsCount');
+    act(() => unread.publishUnreadAlertsCount(4));
+    const { result, rerender } = renderHook(() => unread.useUnreadAlertsCount());
     expect(result.current).toBe(4);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    act(() => module.resetUnreadAlertsCount());
+    act(() => unread.resetUnreadAlertsCount());
     expect(result.current).toBe(0);
 
     // The kept minute is over with the reset: the next look reads the new account's count.
     rerender();
-    const fresh = renderHook(() => module.useUnreadAlertsCount());
+    const fresh = renderHook(() => unread.useUnreadAlertsCount());
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fresh.result.current).toBe(7);
@@ -44,11 +44,11 @@ describe('resetUnreadAlertsCount', () => {
   it('drops a read that was out for the account before the reset', async () => {
     let answer: (response: Response) => void = () => {};
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { answer = resolve; })));
-    const module = await import('@/components/useUnreadAlertsCount');
-    const { result } = renderHook(() => module.useUnreadAlertsCount());
+    const unread = await import('@/components/useUnreadAlertsCount');
+    const { result } = renderHook(() => unread.useUnreadAlertsCount());
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
 
-    act(() => module.resetUnreadAlertsCount());
+    act(() => unread.resetUnreadAlertsCount());
     await act(async () => {
       answer(new Response(JSON.stringify({ unreadCount: 9 }), { status: 200 }));
       await new Promise((resolve) => setTimeout(resolve, 10));
