@@ -185,14 +185,18 @@ export default function AppShellAccount({
   const credits = profile?.credits;
   const signedInUserId = session?.user?.id ?? null;
   // The Alerts badge's count is the account's: a session of another account (or none) must not
-  // show the previous one's for the minute the count is kept, and a sign-in reads its own at the
-  // next look rather than keeping the signed-out 0.
-  const previousUnreadUserIdRef = useRef(signedInUserId);
+  // show the previous one's for the minute the count is kept. The first session this page learns
+  // of is no change (`session` starts undefined, not known yet): a reset there threw away the
+  // badge's first read on every full load.
+  const previousUnreadUserIdRef = useRef<string | null | undefined>(undefined);
+  const sessionKnown = session !== undefined;
   useEffect(() => {
-    if (previousUnreadUserIdRef.current === signedInUserId) return;
+    if (!sessionKnown) return;
+    const previous = previousUnreadUserIdRef.current;
     previousUnreadUserIdRef.current = signedInUserId;
+    if (previous === undefined || previous === signedInUserId) return;
     resetUnreadAlertsCount();
-  }, [signedInUserId]);
+  }, [sessionKnown, signedInUserId]);
   const displayName = getCreatorDisplayName({
     displayName: profile?.display_name ?? null,
     email: session?.user?.email ?? null,
