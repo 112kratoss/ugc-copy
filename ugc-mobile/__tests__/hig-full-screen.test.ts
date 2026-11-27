@@ -122,8 +122,10 @@ describe('S6 — the viewer top strip is laid out from the safe area', () => {
       expect(source).not.toContain('top: topInset + 10');
     }
     // Back and sound on the reel, and the same two on its loading shell, which
-    // draws the post's chrome while a first load runs (`ViewerShell`).
-    expect(viewer.match(/<ViewerTopControl\b/g)?.length).toBe(4);
+    // draws the post's chrome while a first load runs (`ViewerShell`): Back
+    // drawn by each, the sound control by one component both draw.
+    expect(viewer.match(/<ViewerTopControl\b/g)?.length).toBe(3);
+    expect(viewer.match(/<SoundTopControl\b/g)?.length).toBe(2);
     expect(topControl).toContain('top: viewerTopControlTop(topInset)');
     expect(topControl).toContain('width: VIEWER_TOP_CONTROL_SIZE');
     expect(topControl).toContain('height: VIEWER_TOP_CONTROL_SIZE');
@@ -164,7 +166,8 @@ describe('S6 — the reel can be silenced without leaving it', () => {
   it('renders a labelled mute control on any slide that can make a sound', () => {
     expect(viewer).toContain("label={audioMuted ? 'Unmute video' : 'Mute video'}");
     expect(topControl).toContain('accessibilityLabel={label}');
-    expect(viewer).toContain('hasImmersiveAudibleMedia(activeItem)');
+    // For the post on the page that has the screen (lib/reel-chrome-page.ts).
+    expect(viewer).toContain('return hasImmersiveAudibleMedia(items[page]) ? <SoundTopControl topInset={topInset} /> : null;');
     expect(viewer).toContain('toggleViewerAudioMuted()');
   });
 

@@ -668,6 +668,48 @@ describe('Showcase screen', () => {
     renderer.act(() => tree!.unmount());
   });
 
+  // Half a screen: a page the server hands out marks its posts served, and a
+  // longer runway would read Explore's second page as it opens.
+  it('asks for the next page half a screen before the end of the grid', () => {
+    expect(flashListProps().onEndReachedThreshold).toBe(0.5);
+  });
+
+  // FlashList asks once as the list nears its end and again only when its data
+  // changes. A page that lands inside the gate's cooldown with the grid still
+  // within its runway was refused at that render and never asked for again.
+  it('asks again, as the cooldown ends, for a page refused while one was landing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    queryState.hasNextPage = true;
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: true, nextOffset: 12 } }];
+    let tree!: renderer.ReactTestRenderer;
+    const act = (work: () => void) => renderer.act(async () => { work(); });
+    try {
+      await act(() => { tree = renderer.create(<ShowcaseScreen />); });
+      const list = () => hostElement(tree, 'flash-list').props;
+
+      await act(() => list().onEndReached());
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+      // The page lands 300 ms on, the grid still within its runway: FlashList asks again.
+      await act(() => { vi.advanceTimersByTime(300); });
+      queryState.pages = [
+        ...queryState.pages,
+        { items: [{ ...feedItem(), id: 'post-2' }], pageInfo: { hasMore: true, nextOffset: 24 } },
+      ];
+      await act(() => { tree.update(<ShowcaseScreen />); });
+      await act(() => list().onEndReached());
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+      await act(() => { vi.advanceTimersByTime(499); });
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+      await act(() => { vi.advanceTimersByTime(1); });
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(2);
+    } finally {
+      renderer.act(() => tree?.unmount());
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a visible load-more retry and clears the automatic page lock', async () => {
     queryState.hasNextPage = true;
     queryState.isFetchNextPageError = true;
@@ -1431,6 +1473,34 @@ describe('Showcase screen', () => {
 
     removePreparer();
     renderer.act(() => tile.unmount());
+  });
+
+  // Owner, 2026-11-27: opening media plays no haptic; the zoom out of the tile
+  // is the feedback (device feel audit, 2026-11-27).
+  it('opens a tile without a haptic', () => {
+    queryState.pages = [{ items: [{ ...feedItem(), body: '' }], pageInfo: { hasMore: false, nextOffset: null } }];
+    vi.mocked(router.push).mockClear();
+    const plays = (['select', 'light', 'soft', 'medium', 'success', 'error'] as const)
+      .map((kind) => vi.spyOn(haptic, kind));
+    const list = flashListProps();
+    const tile = renderAlone(
+      <FeedVideoActivationContext.Provider value={createFeedVideoActivationStore()}>
+        {list.renderItem({ item: list.data[0], index: 0, target: 'Cell' })}
+      </FeedVideoActivationContext.Provider>
+    );
+    const open = tile.root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityHint === 'Opens this post in the full-screen viewer'
+    ));
+
+    try {
+      renderer.act(() => open.props.onPress());
+
+      expect(router.push).toHaveBeenCalledTimes(1);
+      for (const play of plays) expect(play).not.toHaveBeenCalled();
+    } finally {
+      plays.forEach((play) => play.mockRestore());
+      renderer.act(() => tile.unmount());
+    }
   });
 
   it('keeps the play badge on an elected tile that Never holds on its poster', () => {

@@ -2,13 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createLeavesMediaReport, LEAVES_MEDIA_AFTER, leavesMediaPage, viewerNativeBackOptions } from '../lib/viewer-native-back';
+import { createLeavesMediaReport, LEAVES_MEDIA_AFTER, leavesMediaPage, viewerNativeBackOptions, viewerNativeBarSoundOptions } from '../lib/viewer-native-back';
 
 const viewer = readFileSync(join(__dirname, '..', 'app', 'viewer.tsx'), 'utf8');
 
 describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
   it('shows a minimal, labelled Back over the post with no bar or shade of its own', () => {
-    const options = viewerNativeBackOptions({ hidden: false, mute: null });
+    const options = viewerNativeBackOptions({ hidden: false });
     expect(options).toMatchObject({
       headerShown: true,
       headerTransparent: true,
@@ -21,16 +21,18 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
       headerBlurEffect: 'none',
       scrollEdgeEffects: { top: 'hidden', bottom: 'hidden', left: 'hidden', right: 'hidden' },
     });
-    expect(options.unstable_headerRightItems?.({ tintColor: '#ffffff', canGoBack: true })).toEqual([]);
+    // Mute is set apart, by the control that follows the page with the screen.
+    expect(options).not.toHaveProperty('unstable_headerRightItems');
+    expect(viewerNativeBarSoundOptions(null).unstable_headerRightItems?.({ tintColor: '#ffffff', canGoBack: true })).toEqual([]);
   });
 
   it('takes the bar away while Details is open or being swiped to', () => {
-    expect(viewerNativeBackOptions({ hidden: true, mute: null }).headerShown).toBe(false);
+    expect(viewerNativeBackOptions({ hidden: true }).headerShown).toBe(false);
   });
 
   it('puts Mute beside Back, saying and showing which way it goes', () => {
     const onPress = vi.fn();
-    const items = (muted: boolean) => viewerNativeBackOptions({ hidden: false, mute: { muted, onPress } })
+    const items = (muted: boolean) => viewerNativeBarSoundOptions({ muted, onPress })
       .unstable_headerRightItems?.({ tintColor: '#ffffff', canGoBack: true });
     expect(items(false)).toEqual([expect.objectContaining({
       type: 'button',
@@ -53,7 +55,9 @@ describe('the reel\'s Back on iOS is the navigation bar\'s own', () => {
     expect(viewer).toContain('...(barBack ? viewerNativeBackOptions({');
     // Our own Back and Mute stand aside for the bar's; elsewhere they stay.
     expect(viewer).toContain('{detailsOpenForActive || barBack ? null : (');
-    expect(viewer).toContain('{detailsOpenForActive || barBack || !hasImmersiveAudibleMedia(activeItem) ? null : (');
+    expect(viewer).toContain('<ReelSoundControl items={items} settledIndex={activeIndex} handoff={handoffPage} topInset={topInset} />');
+    // The bar's Mute follows the page with the screen, as ours does (lib/reel-chrome-page.ts).
+    expect(viewer).toContain('{barBack ? <ReelBarSound items={items} settledIndex={activeIndex} handoff={handoffPage} /> : null}');
   });
 
   it('hears from the active slide as its swipe leaves the media page, on iOS only', () => {

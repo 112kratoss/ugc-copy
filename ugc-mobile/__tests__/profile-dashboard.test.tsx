@@ -147,6 +147,16 @@ vi.mock('@/components/media-preview', () => ({
   StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props),
 }));
 
+// The grid's scroll handlers that hold the loading sketches still; the clock's
+// own rule is media-sketch-clock.test.ts's.
+const sketchHold = vi.hoisted(() => ({
+  onScrollBeginDrag: () => {},
+  onScrollEndDrag: () => {},
+  onMomentumScrollBegin: () => {},
+  onMomentumScrollEnd: () => {},
+}));
+vi.mock('@/components/media-sketch', () => ({ useSketchesStillWhileScrolling: () => sketchHold }));
+
 // Auth mock
 const authState = vi.hoisted(() => ({
   // Nullable: the signed-out suite below clears it.
@@ -428,6 +438,7 @@ vi.mock('@tanstack/react-query', () => ({
 
 import { ProfileDashboard } from '../components/profile-dashboard';
 import { Reveal } from '../components/reveal';
+import { haptic } from '../lib/haptics';
 import { resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
 import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS, PROFILE_MEDIA_MIN_FILL_COUNT } from '../lib/profile-media-query';
@@ -1023,6 +1034,31 @@ describe('ProfileDashboard media tiles routing', () => {
     });
   });
 
+  // Owner, 2026-11-27: opening media plays no haptic; on the S24 every tile
+  // open buzzed for 110 ms (device feel audit, 2026-11-27).
+  it('opens a tile without a haptic', async () => {
+    const plays = (['select', 'light', 'soft', 'medium', 'success', 'error'] as const)
+      .map((kind) => vi.spyOn(haptic, kind));
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
+    });
+    const tile = tree!.root.findByProps({ accessibilityLabel: 'Saved, Saved Title, 5 likes' });
+
+    try {
+      await renderer.act(async () => {
+        tile.props.onPress();
+        await Promise.resolve();
+      });
+
+      expect(routerState.push).toHaveBeenCalledTimes(1);
+      for (const play of plays) expect(play).not.toHaveBeenCalled();
+    } finally {
+      plays.forEach((play) => play.mockRestore());
+      renderer.act(() => tree!.unmount());
+    }
+  });
+
   it('opens a saved text-only post in the same dedicated viewer as Home', () => {
     queryState.savedItems = [{
       id: 'saved-text',
@@ -1306,6 +1342,21 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(authState.api.getSavedMedia).toHaveBeenCalledWith({ limit: 24, offset: 24 });
   });
 
+  // Feel audit 2026-11-27: on Android a loading sketch redraws into a new bitmap
+  // every frame; while the grid moves, they hold still.
+  it('holds the tiles\' loading sketches still while the grid moves', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+    expect(list.props.onScrollBeginDrag).toBe(sketchHold.onScrollBeginDrag);
+    expect(list.props.onScrollEndDrag).toBe(sketchHold.onScrollEndDrag);
+    expect(list.props.onMomentumScrollBegin).toBe(sketchHold.onMomentumScrollBegin);
+    expect(list.props.onMomentumScrollEnd).toBe(sketchHold.onMomentumScrollEnd);
+    renderer.act(() => tree!.unmount());
+  });
+
   it('asks for the next page when the grid reaches its end', () => {
     queryState.generationsHasNextPage = true;
 
@@ -1315,7 +1366,8 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     const list = tree!.root.find((node) => String(node.type) === 'flash-list');
-    expect(list.props.onEndReachedThreshold).toBe(0.32);
+    // Two screens of runway, so a fling never outruns the next page (feel audit 2026-11-27).
+    expect(list.props.onEndReachedThreshold).toBe(2);
 
     renderer.act(() => {
       list.props.onEndReached();
@@ -3339,6 +3391,38 @@ describe('ProfileDashboard tab switch', () => {
     renderer.act(() => { vi.advanceTimersByTime(2_000); });
     expect(warmupState.calls).toHaveLength(1);
 
+    navigationState.focused = false;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    expect(warmupState.stops).toBe(1);
+    renderer.act(() => { tree.unmount(); });
+  });
+
+  // Feel audit 2026-11-27: the first pass over pictures not yet cached janked
+  // (12.6% of frames against 2.2% once cached), each tile reading its preview
+  // over the network as the fling reached it. The pages past the first are
+  // read ahead now, and their previews go to the disk as each lands.
+  it('caches the previews of every page past the first as it lands, while Profile is in view', () => {
+    vi.useFakeTimers();
+    const many = Array.from({ length: 30 }, (_, index) => ({
+      id: `creation-${index}`, status: 'succeeded', output_url: `creation-${index}.jpg`, preview_url: `creation-${index}.webp`,
+      category: 'image', title: `Creation ${index}`, created_at: '2026-10-13T09:00:00Z',
+    }));
+    queryState.generations = many;
+    navigationState.focused = false;
+    const tree = renderDashboard();
+    expect(warmupState.calls).toHaveLength(0);
+
+    navigationState.focused = true;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    // At once, not after the switch warm-up's wait: the reader is on their way to them.
+    expect(warmupState.calls).toHaveLength(1);
+    const { images, tile } = warmupState.calls[0];
+    expect(images).toEqual(drawnPictures(tree).slice(24));
+    expect(images.map((picture) => picture.url)).toEqual(many.slice(24).map((run) => run.preview_url));
+    expect(tile?.width).toBe(130);
+    expect(tile?.height).toBeCloseTo(130 / 0.74);
+
+    // Profile leaves the front: what has not started is dropped.
     navigationState.focused = false;
     renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
     expect(warmupState.stops).toBe(1);

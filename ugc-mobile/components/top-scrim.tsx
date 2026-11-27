@@ -3,12 +3,15 @@ import { View } from 'react-native';
 
 import { hexWithAlpha, linearGradient } from '@/lib/eased-fade';
 import { useAppTheme } from '@/lib/theme-context';
+import { tabRootTopScrim } from '@/lib/top-scrim';
 import { viewerTopScrim } from '@/lib/viewer-chrome';
 
 /**
- * Fades the status-bar strip back to the app background on screens whose list
+ * Covers the status-bar strip with the app background on screens whose list
  * scrolls underneath it. Without this the system clock sits directly on artwork
  * or, worse, on a card heading — which reads as clipping rather than as design.
+ * The strip is solid and the fade runs out just below it (`tabRootTopScrim`):
+ * a fade across the strip itself left the clock over content at half strength.
  *
  * Render it as a sibling *immediately after the scroller and before any sheet*:
  * appended last it would paint a dark band across the top of an open sheet.
@@ -39,11 +42,14 @@ export function TopScrim({ topInset, over = 'app' }: { topInset: number; over?: 
       />
     );
   }
+  const { height, stops } = tabRootTopScrim(topInset);
+  const [first, second, ...rest] = stops;
   return (
     <LinearGradient
-      colors={[ground, `${ground}00`]}
+      colors={[hexWithAlpha(ground, first.alpha), hexWithAlpha(ground, second.alpha), ...rest.map((stop) => hexWithAlpha(ground, stop.alpha))]}
+      locations={[first.offset / height, second.offset / height, ...rest.map((stop) => stop.offset / height)]}
       pointerEvents="none"
-      style={{ position: 'absolute', top: 0, left: 0, right: 0, height: topInset }}
+      style={{ position: 'absolute', top: 0, left: 0, right: 0, height }}
     />
   );
 }

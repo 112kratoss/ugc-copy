@@ -7,7 +7,7 @@ import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -69,7 +69,10 @@ import {
   type ImmersivePreviewItem,
 } from '@/lib/immersive-preview-view-model';
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
-import { createLeavesMediaReport, leavesMediaPage, viewerNativeBackOptions } from '@/lib/viewer-native-back';
+import { createLeavesMediaReport, leavesMediaPage, viewerNativeBackOptions, viewerNativeBarSoundOptions } from '@/lib/viewer-native-back';
+import { createReelHandoffPage, useReelChromePage, type ReelHandoffPage } from '@/lib/reel-chrome-page';
+import { createReelClosing, useReelClosing, type ReelClosing } from '@/lib/reel-closing';
+import { reelLeaveFor } from '@/lib/reel-leave';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -86,7 +89,7 @@ import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overla
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
 import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { useCreatorFollow } from '@/lib/use-creator-follow';
+import { prefetchCreatorFollowState, useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { isAppForeground } from '@/lib/app-foreground';
 import { createPostViewLook, isReelSlideOnScreen, viewReportPostId, type PostViewLook } from '@/lib/post-view-look';
@@ -286,30 +289,63 @@ const ViewerGroundContext = createContext<string>(REEL_GROUND);
 /**
  * The reel stays dark in both schemes: it is an immersive media surface, and
  * its chrome, scrims and icon rasters are all drawn against video. Its status
- * bar is light only while the reel is in front — a screen pushed over it
- * (a creator's profile) keeps the reel mounted underneath and brings its own.
+ * bar is light only while the reel is in front (`ReelSystemBars`) — a screen
+ * pushed over it (a creator's profile) keeps the reel mounted underneath and
+ * brings its own.
  */
 export default function ImmersivePreviewViewerScreen() {
-  const isFocused = useIsFocused();
-  useNavigationBarSurface(isFocused ? 'dark' : null);
   // Out of a tile by UIKit's zoom, Back and sound come in once it has
   // crossfaded to the reel; held here, so the loading shell and the reel that
   // replaces it share the moment, and read by those controls alone, so the reel
   // is not drawn again as they come and go (lib/viewer-top-controls.ts).
   const followsZoom = Boolean(useAppleZoomSourceId());
   const [topControls] = useState(() => createViewerTopControls(!followsZoom));
+  // Whether the reel's close has set off, told by its zoom stage and read by
+  // the system bars alone (lib/reel-closing.ts).
+  const [closing] = useState(createReelClosing);
   return (
     <ThemeScope scheme="dark">
-      {isFocused ? <StatusBar style="light" /> : null}
+      <ReelSystemBars closing={closing} />
       <ViewerTopControlsContext.Provider value={topControls}>
         {followsZoom ? <AppleZoomTopControlsCue onShownChange={topControls.setShown} /> : null}
-        <ImmersivePreviewViewer />
+        <ImmersivePreviewViewer closing={closing} />
       </ViewerTopControlsContext.Provider>
     </ThemeScope>
   );
 }
 
-function ImmersivePreviewViewer() {
+/**
+ * The reel's say over the system bars: light status-bar icons, and on Android
+ * a dark navigation bar, while it is the thing in front. Not under a screen
+ * pushed over it, which brings its own, nor once its close has set off: an
+ * Android close keeps the reel's route until it has landed, and with focus
+ * alone the white icons stood over the light grid for ~300 ms (review of
+ * #947). A clip's close and a picture's alike.
+ */
+function ReelSystemBars({ closing }: { closing: ReelClosing }) {
+  const isFocused = useIsFocused();
+  const closed = useReelClosing(closing);
+  const inFront = isFocused && !closed;
+  useNavigationBarSurface(inFront ? 'dark' : null);
+  return inFront ? <StatusBar style="light" /> : null;
+}
+
+/**
+ * Takes this reel's own route away, for its zoom's exits (lib/reel-leave.ts):
+ * back the usual way while it is in front, and by its key from under a screen
+ * pushed while it closed.
+ */
+function useLeaveReel() {
+  const navigation = useNavigation();
+  const routeKey = useRoute().key;
+  return useCallback(() => {
+    const leaveBy = reelLeaveFor(navigation.getState?.(), routeKey);
+    if (leaveBy.kind === 'back') leaveViewer();
+    else if (leaveBy.kind === 'dispatch') navigation.dispatch(leaveBy.action);
+  }, [navigation, routeKey]);
+}
+
+function ImmersivePreviewViewer({ closing }: { closing: ReelClosing }) {
   const theme = useAppTheme();
   const params = useLocalSearchParams<ViewerParams>();
   const source = normalizeViewerSource(params.source);
@@ -352,11 +388,6 @@ function ImmersivePreviewViewer() {
   const insets = useSafeAreaInsets();
   const topInset = resolvedTopInset(insets.top);
   const bottomInset = resolvedBottomInset(insets.bottom);
-  const audioMuted = useViewerAudioMuted();
-  const toggleMuteFromBar = useCallback(() => {
-    haptic.select();
-    toggleViewerAudioMuted();
-  }, []);
   // iOS: the navigation bar's own Back, which UIKit pops at once. Only with a
   // screen to go back to: a reel opened first (a link) keeps its own Back,
   // which replaces it with Explore. Only with Liquid Glass too: before iOS 26
@@ -377,8 +408,10 @@ function ImmersivePreviewViewer() {
   // the list keeps mounted off-screen.
   const activeSlideRef = useRef<ImmersiveSlideHandle | null>(null);
   // The page whose video was last handed playback by the scroll handlers.
-  // Tracks activeIndex, but leads it during a fling (see onScroll below).
-  const handoffPageRef = useRef<number | null>(null);
+  // Tracks activeIndex, but leads it during a fling (see onScroll below). The
+  // top controls follow it too (lib/reel-chrome-page.ts), so it is held where
+  // they can hear it change without the reel being drawn again.
+  const [handoffPage] = useState(createReelHandoffPage);
   const [actionsOpenItemId, setActionsOpenItemId] = useState<string | null>(null);
   const [commentsOpenItemId, setCommentsOpenItemId] = useState<string | null>(null);
   const [commentsReplyToId, setCommentsReplyToId] = useState<string | null>(null);
@@ -707,8 +740,8 @@ function ImmersivePreviewViewer() {
   // same frame would otherwise be yanked back to the page they just left.
   const nativeRowRef = useRef<{ index: number; height: number } | null>(null);
   useEffect(() => {
-    handoffPageRef.current = activeIndex;
-  }, [activeIndex]);
+    handoffPage.settle(activeIndex);
+  }, [activeIndex, handoffPage]);
   useEffect(() => {
     if (!initialPositionReady) return;
     if (nativeRowRef.current?.index === activeIndex && nativeRowRef.current.height === height) return;
@@ -743,10 +776,10 @@ function ImmersivePreviewViewer() {
     const landed = items[endSlidePage];
     setEndSlidePage(null);
     nativeRowRef.current = { index: endSlidePage, height };
-    handoffPageRef.current = endSlidePage;
+    handoffPage.handTo(endSlidePage);
     playbackHandoff.handoff({ from: null, to: landed?.id });
     setActiveIndex(endSlidePage);
-  }, [endSlidePage, height, items, playbackHandoff, setActiveIndex]);
+  }, [endSlidePage, handoffPage, height, items, playbackHandoff, setActiveIndex]);
 
   const overlayOpenItemId = getImmersiveVideoBlockerId({
     actionsOpenItemId,
@@ -804,6 +837,7 @@ function ImmersivePreviewViewer() {
     fromTile: true,
   });
   const barBack = nativeBack && !flownBack;
+  const leaveReel = useLeaveReel();
   const zoom = useMediaZoomStage({
     screen: { width, height },
     initialItemId: initialId,
@@ -820,7 +854,10 @@ function ImmersivePreviewViewer() {
     // A close into the tile this video came from hands the tile its player back.
     activeVideoUrl: activeMedia.playbackUrl,
     playerFor: playbackHandoff.playerFor,
-    onExit: leaveViewer,
+    // The system bars are the screen beneath's from the moment a close sets off.
+    onCloseStart: closing.setClosing,
+    // By the reel's own route: a screen can be pushed while a close lands.
+    onExit: leaveReel,
   });
   // iOS: the reel keeps its black behind its media, and UIKit's zoom grows and
   // shrinks that page, black, buttons and all, as Instagram's does (filmed on
@@ -853,6 +890,23 @@ function ImmersivePreviewViewer() {
     const timer = setTimeout(() => setNeighbourPlayersAllowed(true), NEIGHBOUR_PLAYERS_DELAY_MS);
     return () => clearTimeout(timer);
   }, [neighbourPlayersAllowed, zoom.opened]);
+  // Whom the reader follows, asked ahead for the posts either side of the one
+  // on screen, so a slide lands with its Follow pill already right. A slide
+  // asks for itself only once it is the one on screen (`useCreatorFollow`):
+  // asked then, the pill on a creator the reader follows went blank for the
+  // round trip, after reading "Follow" from the answer the slide did not have
+  // (device audit, S24, 2026-11-27). One read a creator, kept five minutes and
+  // shared by every slide of theirs; asked once the neighbours themselves are
+  // drawn, never during a zoom into the reel.
+  useEffect(() => {
+    if (!user || !neighbourSlidesAllowed) return;
+    for (const index of [activeIndex - 1, activeIndex + 1]) {
+      const neighbour = items[index];
+      // A page of notes draws no Follow pill.
+      const target = neighbour && !neighbour.noteSet ? getReelFollowTarget(neighbour, user.id) : null;
+      if (target) void prefetchCreatorFollowState(queryClient, api, target.creatorId);
+    }
+  }, [activeIndex, api, items, neighbourSlidesAllowed, queryClient, user]);
   // The source's refetch spinner waits for a fetch to have lasted a while
   // (`lib/viewer-refresh-indicator`), unless the reader asked for the refresh.
   const [manualRefreshes, setManualRefreshes] = useState(0);
@@ -1770,11 +1824,12 @@ function ImmersivePreviewViewer() {
             // Gone as a close begins: UIKit drew the bar black over the top of
             // the shrinking reel.
             hidden: detailsOpenForActive || (activeItem != null && leavingMediaItemId === activeItem.id),
-            mute: hasImmersiveAudibleMedia(activeItem) ? { muted: audioMuted, onPress: toggleMuteFromBar } : null,
           }) : null),
           ...(Platform.OS === 'ios' && !nativeZoomSourceId && !reducedMotion && zoom.opened ? { animation: 'fade' as const } : null),
         }}
       />
+      {/* The bar's Mute, for the page that has the screen (lib/reel-chrome-page.ts). */}
+      {barBack ? <ReelBarSound items={items} settledIndex={activeIndex} handoff={handoffPage} /> : null}
       <FlatList
         keyboardShouldPersistTaps="never"
         ref={listRef}
@@ -1795,10 +1850,9 @@ function ImmersivePreviewViewer() {
           if (endSlide && nextIndex >= items.length) {
             // The closing slide. The last post stays the active one underneath,
             // paused, and the alignment effect has nothing to correct.
-            if (endSlidePage === null) haptic.soft();
             nativeRowRef.current = { index: activeIndex, height };
-            playbackHandoff.handoff({ from: items[handoffPageRef.current ?? activeIndex]?.id, to: null });
-            handoffPageRef.current = items.length;
+            playbackHandoff.handoff({ from: items[handoffPage.page() ?? activeIndex]?.id, to: null });
+            handoffPage.handTo(items.length);
             setEndSlidePage(items.length);
             setActionsOpenItemId(null);
             setUnlockRemixOpenItemId(null);
@@ -1806,10 +1860,11 @@ function ImmersivePreviewViewer() {
           }
           if (endSlidePage !== null) setEndSlidePage(null);
           const clampedIndex = Math.max(0, Math.min(items.length - 1, nextIndex));
-          // A quiet tick as each page settles: the reel feels like it has
-          // detents rather than sliding freely. Soft so it can repeat at
-          // browsing speed without nagging.
-          if (clampedIndex !== activeIndex) haptic.soft();
+          // No haptic as a page settles (owner, 2026-11-27: "having haptic on
+          // opening the media and swiping to other is not needed"). The tick it
+          // was waited for this event, 100–125 ms after the page had visibly
+          // landed, and Samsung plays `soft` as strongly as a button press
+          // (device feel audit, 2026-11-27). Like and save keep theirs.
           // The reader put the list here, so the alignment effect has nothing
           // to correct.
           nativeRowRef.current = { index: clampedIndex, height };
@@ -1818,10 +1873,10 @@ function ImmersivePreviewViewer() {
           // reel re-renders: on Android that render is a few hundred ms during
           // which the landed video would otherwise sit frozen on its first frame.
           playbackHandoff.handoff({
-            from: items[handoffPageRef.current ?? activeIndex]?.id,
+            from: items[handoffPage.page() ?? activeIndex]?.id,
             to: items[clampedIndex]?.id,
           });
-          handoffPageRef.current = clampedIndex;
+          handoffPage.handTo(clampedIndex);
           setActiveIndex(clampedIndex);
           setActionsOpenItemId(null);
           setUnlockRemixOpenItemId(null);
@@ -1864,13 +1919,16 @@ function ImmersivePreviewViewer() {
           // one: handing over to it stops the last post's video.
           const lastPage = endSlide ? items.length : items.length - 1;
           const page = Math.max(0, Math.min(lastPage, Math.round(event.nativeEvent.contentOffset.y / height)));
-          const previous = handoffPageRef.current ?? activeIndex;
+          const previous = handoffPage.page() ?? activeIndex;
           if (page === previous) return;
-          handoffPageRef.current = page;
           playbackHandoff.handoff({
             from: items[previous]?.id,
             to: items[page]?.id,
           });
+          // The sound control goes with the sound: it is drawn for this page
+          // from here, not once the list has come to rest and the reel has
+          // drawn again (lib/reel-chrome-page.ts).
+          handoffPage.handTo(page);
         }}
         scrollEventThrottle={16}
         // iOS scrolls this list to offset 0 on a tap of the status bar, which
@@ -1991,20 +2049,8 @@ function ImmersivePreviewViewer() {
           controls so people can complete their task without exiting full-screen
           mode." The reel is entered from a silent grid and is the only surface
           that makes a sound, so silencing it must not mean leaving it. */}
-      {detailsOpenForActive || barBack || !hasImmersiveAudibleMedia(activeItem) ? null : (
-        <ViewerTopControl
-          label={audioMuted ? 'Unmute video' : 'Mute video'}
-          selected={audioMuted}
-          onPress={toggleMuteFromBar}
-          topInset={topInset}
-          side="right"
-        >
-          <IconShadow>
-            {audioMuted
-              ? <VolumeX size={appTheme.icon.feature} color="#ffffff" />
-              : <Volume2 size={appTheme.icon.feature} color="#ffffff" />}
-          </IconShadow>
-        </ViewerTopControl>
+      {detailsOpenForActive || barBack ? null : (
+        <ReelSoundControl items={items} settledIndex={activeIndex} handoff={handoffPage} topInset={topInset} />
       )}
       </Animated.View>
       ) : null}
@@ -2097,7 +2143,6 @@ function ImmersivePreviewViewer() {
  * first misses does not show the tile's picture (`MediaZoomLentVideo.landing`).
  */
 function ViewerShell({ topInset, bottomInset, preview = null, video = null, post = null, children }: { topInset: number; bottomInset: number; preview?: ZoomPreview | null; video?: MediaZoomLentVideo | null; post?: ImmersivePreviewItem | null; children: React.ReactNode }) {
-  const audioMuted = useViewerAudioMuted();
   // Only over the tile's own picture: the post is drawn as the reel draws it.
   const chromePost = preview ? post : null;
   return (
@@ -2146,27 +2191,78 @@ function ViewerShell({ topInset, bottomInset, preview = null, video = null, post
       <ViewerTopControl label="Go back" onPress={leaveViewer} topInset={topInset} side="left">
         <IconShadow><BackGlyph size={appTheme.icon.feature} color="#ffffff" /></IconShadow>
       </ViewerTopControl>
-      {chromePost && hasImmersiveAudibleMedia(chromePost) ? (
-        <ViewerTopControl
-          label={audioMuted ? 'Unmute video' : 'Mute video'}
-          selected={audioMuted}
-          onPress={() => {
-            haptic.select();
-            toggleViewerAudioMuted();
-          }}
-          topInset={topInset}
-          side="right"
-        >
-          <IconShadow>
-            {audioMuted
-              ? <VolumeX size={appTheme.icon.feature} color="#ffffff" />
-              : <Volume2 size={appTheme.icon.feature} color="#ffffff" />}
-          </IconShadow>
-        </ViewerTopControl>
-      ) : null}
+      {chromePost && hasImmersiveAudibleMedia(chromePost) ? <SoundTopControl topInset={topInset} /> : null}
       {children}
     </View>
   );
+}
+
+/** The sound control's press: the one choice every clip in the reel plays by (lib/viewer-audio.ts). */
+function toggleReelSound() {
+  haptic.select();
+  toggleViewerAudioMuted();
+}
+
+/** The reel's own round sound control, top right, saying which way it goes. */
+function SoundTopControl({ topInset }: { topInset: number }) {
+  const audioMuted = useViewerAudioMuted();
+  return (
+    <ViewerTopControl
+      label={audioMuted ? 'Unmute video' : 'Mute video'}
+      selected={audioMuted}
+      onPress={toggleReelSound}
+      topInset={topInset}
+      side="right"
+    >
+      <IconShadow>
+        {audioMuted
+          ? <VolumeX size={appTheme.icon.feature} color="#ffffff" />
+          : <Volume2 size={appTheme.icon.feature} color="#ffffff" />}
+      </IconShadow>
+    </ViewerTopControl>
+  );
+}
+
+/**
+ * The reel's sound control, there only while the post on the page that has
+ * the screen can make a sound. That page is the one playback has been handed
+ * to (lib/reel-chrome-page.ts), so the control comes and goes with the clip's
+ * own sound as a swipe passes half way, and is drawn again alone: a swipe
+ * from a clip to a picture left the clip's control up ~200 ms after the
+ * picture landed (S24), and a clip's came ~190 ms late (audit, 2026-11-27).
+ * Unmounted rather than faded, as before: a fade starting at half way would
+ * still be going when the page lands.
+ */
+function ReelSoundControl({ items, settledIndex, handoff, topInset }: {
+  items: ImmersivePreviewItem[];
+  settledIndex: number;
+  handoff: ReelHandoffPage;
+  topInset: number;
+}) {
+  const page = useReelChromePage(handoff, settledIndex);
+  return hasImmersiveAudibleMedia(items[page]) ? <SoundTopControl topInset={topInset} /> : null;
+}
+
+/**
+ * iOS 26: the navigation bar's Mute (lib/viewer-native-back.ts), for the page
+ * that has the screen, as `ReelSoundControl` is. Its own options, beside the
+ * reel's: set from the reel's, it waited for the list to come to rest and the
+ * reel to draw again, and stood at least 300 ms over the picture a swipe had
+ * reached from a clip (iPhone 16e, 2026-11-27).
+ */
+function ReelBarSound({ items, settledIndex, handoff }: {
+  items: ImmersivePreviewItem[];
+  settledIndex: number;
+  handoff: ReelHandoffPage;
+}) {
+  const page = useReelChromePage(handoff, settledIndex);
+  const audible = hasImmersiveAudibleMedia(items[page]);
+  const audioMuted = useViewerAudioMuted();
+  const options = useMemo(
+    () => viewerNativeBarSoundOptions(audible ? { muted: audioMuted, onPress: toggleReelSound } : null),
+    [audible, audioMuted]
+  );
+  return <Stack.Screen options={options} />;
 }
 
 /** A post of writing in someone's lane or grid: what a page of notes gathers. */
@@ -2539,6 +2635,11 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
       return null;
     }
 
+    // No pill while whom the reader follows is not known, on this slide or on
+    // one beside it (`follow.loading`): never "Follow" for a creator they may
+    // follow. Gone or there, it moves nothing else: the creator row keeps the
+    // avatar's height, and the pill sits after the name. A signed-out reader
+    // always has it, to sign up.
     const showFollowPill = Boolean(followTarget) && (!user || !follow.loading);
 
     // Rail, caption and scrims ride inside the zoom window with the media, so

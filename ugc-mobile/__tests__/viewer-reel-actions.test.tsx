@@ -34,12 +34,15 @@ const routerState = vi.hoisted(() => ({
 }));
 
 const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
+// Whether iOS 26's glass is there, which gives the reel the navigation bar's own Back and Mute.
+const glassState = vi.hoisted(() => ({ available: false }));
 
 // One object for every render, as the real context provides.
 const authState = vi.hoisted(() => ({
   api: {
     blockUser: vi.fn(),
     deleteGeneration: vi.fn(),
+    getCreatorFollowState: vi.fn(async (_creatorId: string) => ({ following: false })),
     getCreatorProfile: vi.fn(),
     listGenerations: vi.fn(),
     listOwnerPosts: vi.fn(async () => ({ success: true, posts: [], pageInfo: { hasMore: false, nextOffset: null } })),
@@ -98,17 +101,33 @@ const screenState = vi.hoisted(() => ({
 const passThrough = vi.hoisted(() => ({ children }: { children?: unknown }) => children ?? null);
 const nothing = vi.hoisted(() => () => null);
 
+// The stack the reel's route is in, which a close takes that route out of,
+// and every say the reel has had over Android's navigation bar.
+const stackState = vi.hoisted(() => ({
+  state: undefined as undefined | { key: string; index: number; routes: { key: string }[] },
+  dispatch: vi.fn(),
+}));
+const systemBars = vi.hoisted(() => ({ surfaces: [] as (string | null)[] }));
+
 vi.mock('expo-router', () => ({
   router: routerState,
-  Stack: { Screen: nothing },
+  // Its options are what the tests read of the navigation bar.
+  Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
   useLocalSearchParams: () => routerState.params,
-  // The reel listens to its own transitions (its iOS ground) and to nothing else here.
-  useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
+  // The reel listens to its own transitions (its iOS ground), and its close
+  // reads the stack it is in and takes its own route out of it.
+  useNavigation: () => ({
+    addListener: () => () => undefined,
+    isFocused: () => true,
+    getState: () => stackState.state,
+    dispatch: stackState.dispatch,
+  }),
 }));
 
-vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
+// Its style is what the tests read of the status bar.
+vi.mock('expo-status-bar', () => ({ StatusBar: (props: MockProps) => React.createElement('status-bar', props) }));
 // The reel asks it whether iOS 26's glass is there (its navigation bar's Back).
-vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => false }));
+vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => glassState.available }));
 
 // The reel's own route, whose key its forced sign-in return is given under.
 const reelRoute = vi.hoisted(() => ({ key: 'viewer-route', name: 'viewer' }));
@@ -201,7 +220,10 @@ vi.mock('@/components/top-scrim', () => ({ TopScrim: nothing }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: nothing, StatusBlock: nothing }));
 vi.mock('@/components/unlock-remix-prompt', () => ({ UnlockRemixPrompt: nothing }));
 vi.mock('@/components/viewer-action-sheet', () => ({ ViewerActionSheet: nothing }));
-vi.mock('@/components/viewer-top-control', () => ({ ViewerTopControl: nothing }));
+// Its props are what the tests read: which controls show, and what they say.
+vi.mock('@/components/viewer-top-control', () => ({
+  ViewerTopControl: ({ children: _children, ...props }: MockProps) => React.createElement('viewer-top-control', props),
+}));
 vi.mock('@/components/zoom-post-chrome', () => ({ ZoomPostChrome: nothing }));
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
@@ -284,7 +306,9 @@ vi.mock('@/lib/use-creator-follow', async (importOriginal) => ({
 }));
 vi.mock('@/lib/use-hardware-back', () => ({ useHardwareBack: () => undefined }));
 vi.mock('@/lib/motion', () => ({ useReducedMotion: () => false }));
-vi.mock('@/lib/system-bars', () => ({ useNavigationBarSurface: () => undefined }));
+vi.mock('@/lib/system-bars', () => ({
+  useNavigationBarSurface: (surface: string | null) => { systemBars.surfaces.push(surface); },
+}));
 vi.mock('@/lib/theme-context', () => ({
   ThemeScope: passThrough,
   useAppTheme: () => ({ colors: { primary: '#ff6b5a' } }),
@@ -315,6 +339,7 @@ import {
 } from '@/lib/showcase-feed-events';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
+import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
 import { useViewerActionHandlers } from '@/lib/use-viewer-action-handlers';
 
 const LANE = { sort: 'for-you' } as const;
@@ -485,6 +510,8 @@ beforeEach(() => {
   authState.api.undoFeedFeedback.mockReset().mockImplementation(() => Promise.resolve({ ok: true, removed: true }));
   screenState.callbacksFor = null;
   screenState.zoomOptions = null;
+  stackState.state = undefined;
+  systemBars.surfaces.length = 0;
 });
 
 afterEach(() => {
@@ -1807,5 +1834,271 @@ describe('the return a forced sign-in comes back to', () => {
 
     expect(tree.root.findAllByProps({ title: 'This isn’t available anymore' })).not.toHaveLength(0);
     expect(forcedReturn()).toBe('/viewer?source=showcase-feed&initialId=post-gone');
+  });
+});
+
+/** A post whose media is a clip, so the reel draws a sound control for it. */
+function clipItem(id: string, creator: { id: string; username: string }, deliveryId: string): ShowcaseFeedItem {
+  return {
+    ...feedItem(id, creator, deliveryId),
+    mediaUrl: `https://cdn.example.com/${id}.mp4`,
+    mediaKind: 'video',
+    category: 'video',
+  } as ShowcaseFeedItem;
+}
+
+/** The list partway through a swipe: the scroll events it sends while the finger moves it, before it comes to rest. */
+function scrollTo(tree: renderer.ReactTestRenderer, pages: number) {
+  const list = tree.root.findByType('flat-list' as never).props;
+  act(() => {
+    list.onScroll({ nativeEvent: { contentOffset: { y: list.getItemLayout(null, 1).offset * pages } } });
+  });
+}
+
+// Owner, 2026-11-27: "having haptic on opening the media and swiping to other
+// is not needed". On the S24 each page settling played a 110 ms buzz, as strong
+// as a button press (Samsung plays `soft` as it plays `light`), 100–125 ms
+// after the page had visibly landed (device feel audit, 2026-11-27).
+describe("the reel's page turns", () => {
+  it('play no haptic as a page settles, nor on reaching the end of the lane', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+
+    await swipeTo(tree, 2);
+    expect(activeId()).toBe('post-c');
+    // One page past the last post: the lane's closing slide.
+    await swipeTo(tree, 4);
+    await swipeTo(tree, 1);
+    expect(activeId()).toBe('post-b');
+
+    for (const play of Object.values(haptic)) expect(play).not.toHaveBeenCalled();
+  });
+});
+
+// Audit 2026-11-27: after a swipe from a clip to a picture, the clip's sound
+// control stood ~200 ms (S24) and at least 300 ms (iPhone, iOS 26) after the
+// picture had landed; landing on a clip, its control came ~190 ms late (S24).
+// It followed the post the reel had settled on, which moves only once the list
+// has come to rest and the reel has drawn again, rather than the page the list
+// hands playback to as that page takes over the screen.
+describe("the reel's sound control", () => {
+  /** Maya's picture, Luna's clip, Luna's picture, Nova's picture. */
+  const mixedPosts = () => [
+    feedItem('post-a', maya, 'delivery-a'),
+    clipItem('post-b', luna, 'delivery-b'),
+    feedItem('post-c', luna, 'delivery-c'),
+    feedItem('post-d', nova, 'delivery-d'),
+  ];
+
+  /** What the sound control a reader can see and press says, or null when there is none. */
+  function soundControl(tree: renderer.ReactTestRenderer) {
+    const shown = tree.root.findAllByType('viewer-top-control' as never)
+      .filter((control) => control.props.side === 'right' && !control.props.hidden);
+    expect(shown.length).toBeLessThanOrEqual(1);
+    return (shown[0]?.props.label as string | undefined) ?? null;
+  }
+
+  beforeEach(() => {
+    // The reel's top controls are drawn once a zoom into it has landed.
+    screenState.zoom.landed = true;
+    screenState.zoom.drawn = true;
+  });
+
+  afterEach(() => {
+    screenState.zoom.landed = false;
+    screenState.zoom.drawn = false;
+  });
+
+  it('goes as a picture takes the screen over from a clip, before the swipe comes to rest', async () => {
+    seedLane('viewer-1', mixedPosts());
+    const tree = await renderReel('post-b');
+    // The viewer's sound is off here (`useViewerAudioMuted`).
+    expect(soundControl(tree)).toBe('Unmute video');
+
+    scrollTo(tree, 1.4);
+    expect(soundControl(tree)).toBe('Unmute video');
+    // Past half way, where playback is handed to the picture's page.
+    scrollTo(tree, 1.6);
+    expect(soundControl(tree)).toBeNull();
+
+    await swipeTo(tree, 2);
+    expect(activeId()).toBe('post-c');
+    expect(soundControl(tree)).toBeNull();
+  });
+
+  it('comes as a clip takes the screen over, and goes again when the swipe turns back', async () => {
+    seedLane('viewer-1', mixedPosts());
+    const tree = await renderReel('post-a');
+    expect(soundControl(tree)).toBeNull();
+
+    scrollTo(tree, 0.6);
+    expect(soundControl(tree)).toBe('Unmute video');
+    expect(activeId()).toBe('post-a');
+
+    scrollTo(tree, 0.3);
+    expect(soundControl(tree)).toBeNull();
+
+    scrollTo(tree, 0.9);
+    await swipeTo(tree, 1);
+    expect(activeId()).toBe('post-b');
+    expect(soundControl(tree)).toBe('Unmute video');
+  });
+
+  it('follows the post the reel moves the reader to without a swipe', async () => {
+    seedLane('viewer-1', mixedPosts());
+    const tree = await renderReel('post-b');
+    expect(soundControl(tree)).toBe('Unmute video');
+
+    // Not interested takes the clip out, and the reel moves on to Luna's picture.
+    await chooseNotInterested();
+
+    expect(activeId()).toBe('post-c');
+    expect(soundControl(tree)).toBeNull();
+  });
+
+  describe('in the navigation bar (iOS 26)', () => {
+    /** The bar's trailing items as the screen's options leave them: each Stack.Screen's laid over the one before. */
+    function barSound(tree: renderer.ReactTestRenderer) {
+      const options = tree.root.findAllByType('stack-screen' as never)
+        .reduce<Record<string, unknown>>((merged, screen) => ({ ...merged, ...(screen.props.options as Record<string, unknown>) }), {});
+      const items = (options.unstable_headerRightItems as ((props: unknown) => { accessibilityLabel?: string }[]) | undefined)
+        ?.({ tintColor: '#ffffff', canGoBack: true }) ?? [];
+      return items[0]?.accessibilityLabel ?? null;
+    }
+
+    beforeEach(() => {
+      glassState.available = true;
+    });
+
+    afterEach(() => {
+      glassState.available = false;
+    });
+
+    it('takes Mute out of the bar as a picture takes the screen over from a clip, and back as the clip does', async () => {
+      seedLane('viewer-1', mixedPosts());
+      const tree = await renderReel('post-b');
+      expect(barSound(tree)).toBe('Unmute video');
+      // The bar's own Mute, never a second one of the reel's.
+      expect(soundControl(tree)).toBeNull();
+
+      scrollTo(tree, 1.6);
+      expect(barSound(tree)).toBeNull();
+
+      scrollTo(tree, 1.2);
+      expect(barSound(tree)).toBe('Unmute video');
+    });
+  });
+});
+
+// Audit 2026-11-27 (S24): landing on a post by a creator the reader follows,
+// the pill read "Follow" for ~200 ms, was gone for ~150 ms, then read
+// "Following". A slide asked whom the reader follows only once it was the one
+// on screen, and drew "Follow" before then from the answer it did not have.
+describe('whom the reader follows, for the posts beside the one on screen', () => {
+  const askedFor = () => authState.api.getCreatorFollowState.mock.calls.map(([creatorId]) => creatorId);
+
+  beforeEach(() => {
+    // Neighbours are drawn once the reel has landed and drawn its own rail.
+    screenState.zoom.landed = true;
+    screenState.zoom.chromeDrawn = true;
+    authState.api.getCreatorFollowState.mockImplementation(async (creatorId: string) => ({ following: creatorId === luna.id }));
+  });
+
+  afterEach(() => {
+    screenState.zoom.landed = false;
+    screenState.zoom.chromeDrawn = false;
+  });
+
+  it('is asked once a creator for the posts either side, before the reader swipes onto them', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+
+    // Maya's post above, Luna's below. Luna's own post on screen asks for itself.
+    expect([...askedFor()].sort()).toEqual([luna.id, maya.id].sort());
+    expect(queryClient.getQueryData(creatorFollowStateQueryKey(luna.id))).toEqual({ following: true });
+    expect(queryClient.getQueryData(creatorFollowStateQueryKey(maya.id))).toEqual({ following: false });
+
+    await swipeTo(tree, 2);
+
+    // Nova's post is beside it now; Luna's answer is still fresh.
+    expect([...askedFor()].sort()).toEqual([luna.id, maya.id, nova.id].sort());
+  });
+
+  it('is not asked before the reel has landed, nor for a signed-out reader', async () => {
+    screenState.zoom.landed = false;
+    seedLane('viewer-1', lanePosts());
+    await renderReel('post-b');
+    expect(askedFor()).toEqual([]);
+
+    screenState.zoom.landed = true;
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    seedLane('guest-1', lanePosts());
+    await renderReel('post-b');
+    expect(askedFor()).toEqual([]);
+  });
+
+  it("is not asked about the reader's own posts", async () => {
+    authState.user = { id: maya.id, email: 'maya@example.com' };
+    authState.identityUserId = maya.id;
+    seedLane(maya.id, lanePosts());
+    await renderReel('post-b');
+
+    expect(askedFor()).toEqual([luna.id]);
+  });
+});
+
+/** What the reel handed its zoom stage: how it leaves, and what it is told as a close sets off. */
+const zoomExits = () => screenState.zoomOptions as unknown as { onExit: () => void; onCloseStart?: () => void };
+
+// Review of #947: an Android close keeps the reel's route until the picture
+// has landed in its tile, up to half a second after Back. A screen pushed in
+// that time (a forced sign-in, a notification opened) was on top when the
+// close then went back: it popped that screen, and left the reel in front,
+// out of sight and taking every touch, the app frozen.
+describe("the reel's close leaves by its own route", () => {
+  it('takes the reel out from under a screen pushed while it closed', async () => {
+    seedLane('viewer-1', lanePosts());
+    await renderReel('post-b');
+    stackState.state = { key: 'root-stack', index: 2, routes: [{ key: 'tabs' }, { key: reelRoute.key }, { key: 'auth' }] };
+
+    act(() => zoomExits().onExit());
+
+    expect(stackState.dispatch).toHaveBeenCalledTimes(1);
+    expect(stackState.dispatch).toHaveBeenCalledWith({ type: 'POP', payload: { count: 1 }, source: reelRoute.key, target: 'root-stack' });
+    expect(routerState.back).not.toHaveBeenCalled();
+  });
+
+  it('goes back as before when it is in front, and does nothing once it is gone', async () => {
+    seedLane('viewer-1', lanePosts());
+    await renderReel('post-b');
+    stackState.state = { key: 'root-stack', index: 1, routes: [{ key: 'tabs' }, { key: reelRoute.key }] };
+    act(() => zoomExits().onExit());
+    expect(routerState.back).toHaveBeenCalledTimes(1);
+    expect(stackState.dispatch).not.toHaveBeenCalled();
+
+    routerState.back.mockClear();
+    stackState.state = { key: 'root-stack', index: 1, routes: [{ key: 'tabs' }, { key: 'creator-page' }] };
+    act(() => zoomExits().onExit());
+    expect(routerState.back).not.toHaveBeenCalled();
+    expect(stackState.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+// Review of #947: the reel's light status bar and dark navigation bar stood
+// until its route was removed, after the close had landed: in the light
+// scheme, white icons over the light grid for ~300 ms.
+describe("the reel's say over the system bars", () => {
+  it('ends as its close sets off', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+    expect(tree.root.findAllByType('status-bar' as never).map((bar) => bar.props.style)).toEqual(['light']);
+    expect(systemBars.surfaces.at(-1)).toBe('dark');
+
+    expect(zoomExits().onCloseStart).toBeTypeOf('function');
+    act(() => zoomExits().onCloseStart?.());
+
+    expect(tree.root.findAllByType('status-bar' as never)).toHaveLength(0);
+    expect(systemBars.surfaces.at(-1)).toBeNull();
   });
 });

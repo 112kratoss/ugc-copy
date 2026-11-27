@@ -28,6 +28,8 @@ const queryState = vi.hoisted(() => ({
   // `enabled` of every lane query the screen made, in render order.
   enabled: [] as Array<boolean | undefined>,
   pages: [] as Array<Record<string, unknown>>,
+  // The lane's page params, where a test pages on: by default the one first page's.
+  pageParams: null as Array<{ offset: number }> | null,
   // When the lane's pages were fetched (React Query's `dataUpdatedAt`).
   dataUpdatedAt: 1,
   // The lane's paging, as React Query reports it.
@@ -109,7 +111,7 @@ vi.mock('@shopify/flash-list', () => ({
 
 vi.mock('@tanstack/react-query', () => ({
   useInfiniteQuery: (options: { enabled?: boolean }) => (queryState.enabled.push(options.enabled), {
-    data: { pages: queryState.pages, pageParams: [{ offset: 0 }] },
+    data: { pages: queryState.pages, pageParams: queryState.pageParams ?? [{ offset: 0 }] },
     dataUpdatedAt: queryState.dataUpdatedAt,
     fetchNextPage: queryState.fetchNextPage,
     fetchPreviousPage: vi.fn(() => Promise.resolve()),
@@ -645,6 +647,7 @@ describe("Home's read-ahead of Explore", () => {
     authState.isLoading = false;
     authState.identityUserId = 'viewer-1';
     queryState.pages = [];
+    queryState.pageParams = null;
     queryState.dataUpdatedAt = 1;
   });
 
@@ -734,6 +737,7 @@ describe('Home screen', () => {
     queryState.queries.length = 0;
     activeGenerationState.count = 0;
     queryState.pages = [];
+    queryState.pageParams = null;
     queryState.dataUpdatedAt = 1;
     queryState.hasNextPage = false;
     queryState.isFetching = false;
@@ -1102,6 +1106,44 @@ describe('Home screen', () => {
     });
     expect(listProps(tree).refreshControl.props.refreshing).toBe(false);
 
+    renderer.act(() => tree.unmount());
+  });
+
+  // A third of a screen: a page the server hands out marks its posts served, so
+  // a longer runway would count against posts the reader never reached.
+  it('asks for the next page a third of a screen before the end of the lane', () => {
+    const { tree } = renderHome();
+    expect(listProps(tree).onEndReachedThreshold).toBe(0.32);
+    renderer.act(() => tree.unmount());
+  });
+
+  // FlashList asks once as the list nears its end and again only when its data
+  // changes. A page that lands inside the gate's cooldown with the lane still
+  // within its runway was refused at that render and never asked for again.
+  it('asks again, as the cooldown ends, for a page refused while one was landing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    queryState.hasNextPage = true;
+    queryState.pages = [page([mediaItem('a', 'delivery-runway-a')])];
+    const { tree } = renderHome();
+    const act = (work: () => void) => renderer.act(async () => { work(); });
+
+    await act(() => listProps(tree).onEndReached());
+    expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+    // The page lands 300 ms on, the lane still within its runway: FlashList asks again.
+    now += 300;
+    queryState.pages = [...queryState.pages, page([mediaItem('b', 'delivery-runway-b')])];
+    queryState.pageParams = [{ offset: 0 }, { offset: 1 }];
+    await act(() => tree.update(<HomeDashboard />));
+    await act(() => listProps(tree).onEndReached());
+    expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+    now += 499;
+    await act(() => { vi.advanceTimersByTime(499); });
+    expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+    now += 1;
+    await act(() => { vi.advanceTimersByTime(1); });
+    expect(queryState.fetchNextPage).toHaveBeenCalledTimes(2);
     renderer.act(() => tree.unmount());
   });
 

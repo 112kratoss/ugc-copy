@@ -37,9 +37,15 @@ vi.mock('@/components/ui', () => ({
   CreatorAvatar: (props: MockProps) => React.createElement('creator-avatar', props),
 }));
 
-vi.mock('@/lib/haptics', () => ({
-  haptic: { light: () => {} },
+const haptics = vi.hoisted(() => ({
+  select: vi.fn(),
+  light: vi.fn(),
+  soft: vi.fn(),
+  medium: vi.fn(),
+  success: vi.fn(),
+  error: vi.fn(),
 }));
+vi.mock('@/lib/haptics', () => ({ haptic: haptics }));
 
 vi.mock('@/lib/motion', () => ({
   MotionView: ({ children, ...props }: MockProps) => React.createElement('motion-view', props, children),
@@ -60,6 +66,7 @@ async function renderShell(props: {
   body?: React.ReactNode;
   readMore?: React.ReactNode;
   creditLine?: React.ReactNode | null;
+  onOpen?: () => void;
 }) {
   let tree: renderer.ReactTestRenderer | null = null;
   await act(async () => {
@@ -128,6 +135,35 @@ describe('FeedCardShell metadata line', () => {
     expect(hostAbove(line, 'view').props.style).toMatchObject({ flexShrink: 1, maxWidth: '50%' });
     const byline = tree.root.find((node) => isHost(node, 'pressable') && node.props.accessibilityLabel === 'Open @ana');
     expect(byline.props.style).toMatchObject({ flex: 1 });
+
+    await act(async () => tree.unmount());
+  });
+});
+
+describe('FeedCardShell open', () => {
+  // Owner, 2026-11-27: "having haptic on opening the media ... is not needed".
+  // The card's press and the zoom that follows are the feedback; on the S24
+  // every open had buzzed for 110 ms (device feel audit, 2026-11-27).
+  it('opens the post from every part of the card without a haptic', async () => {
+    Object.values(haptics).forEach((play) => play.mockClear());
+    const onOpen = vi.fn();
+    const tree = await renderShell({
+      categoryLabel: 'Image',
+      media: React.createElement('view', { testID: 'media' }),
+      body: React.createElement('text', { testID: 'body' }, 'A caption'),
+      onOpen,
+    });
+    // The card's own target, the empty space behind its controls, and the
+    // heading and caption around a picture: each opens the post.
+    const opens = tree.root.findAll((node) => isHost(node, 'pressable') && (
+      node.props.accessibilityLabel === 'Open A launch frame' || node.props.accessible === false
+    ));
+    expect(opens).toHaveLength(4);
+
+    for (const target of opens) await act(async () => (target.props.onPress as () => void)());
+
+    expect(onOpen).toHaveBeenCalledTimes(4);
+    for (const play of Object.values(haptics)) expect(play).not.toHaveBeenCalled();
 
     await act(async () => tree.unmount());
   });

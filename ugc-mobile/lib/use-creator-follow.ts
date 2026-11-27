@@ -113,7 +113,9 @@ export function cancelReadsBeforeFollowWrite(queryClient: Pick<QueryClient, 'can
  *
  * The reel asks this for whichever creator is on screen, so the state is
  * keyed by creator (not by post) and only fetched while `enabled` — an
- * off-screen slide never asks. The flip is optimistic: the button changes
+ * off-screen slide never asks; the reel asks ahead for the slides beside it
+ * (`prefetchCreatorFollowState`), into the same cache, which such a slide
+ * reads. The flip is optimistic: the button changes
  * under the thumb and the server answer settles it, the way the profile
  * screen's own follow button behaves. The same answer is written into the
  * creator's cached grid pages, so a creator page under the reel agrees
@@ -178,8 +180,15 @@ export function useCreatorFollow({
     /** True only when the viewer is signed in and the creator is someone else. */
     canFollow,
     following,
-    /** The first answer has not arrived; the button should not claim either state yet. */
-    loading: enabled && canFollow && stateQuery.isPending,
+    /**
+     * The first answer has not arrived; the button should not claim either
+     * state yet. Whether or not this slide may ask: a slide beside the one on
+     * screen, not asking, used to claim "Follow" for a creator the reader
+     * follows, then go blank as it landed and asked, then say "Following"
+     * (device audit, S24, 2026-11-27). A read that failed is an answer of a
+     * kind, as it was: the reader is shown Follow, and can press it.
+     */
+    loading: canFollow && stateQuery.isPending,
     pending: mutation.isPending,
     toggle,
   };
