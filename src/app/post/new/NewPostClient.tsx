@@ -484,6 +484,23 @@ function getSubmissionError(
   );
 }
 
+const POST_CREATE_IN_PROGRESS_CODE = 'POST_CREATE_IN_PROGRESS';
+const IDEMPOTENCY_KEY_CONFLICT_CODE = 'IDEMPOTENCY_KEY_CONFLICT';
+const POST_CREATE_IN_PROGRESS_MESSAGE = 'Your post is still publishing. Try again in a moment.';
+const UNCONFIRMED_SAVE_MESSAGE = 'We could not confirm your post was saved. Check your posts before trying again.';
+
+/**
+ * Whether a refused publish ends its Idempotency-Key (POST /api/posts). A key the server can no
+ * longer use (409 IDEMPOTENCY_KEY_CONFLICT) and any other 4xx, which wrote nothing, end it; an
+ * earlier attempt still running (409 POST_CREATE_IN_PROGRESS), throttling (429) and a 5xx keep it,
+ * as a lost answer does, so a retry answers the same post.
+ */
+function shouldDropPublishKey(status: number, code: string | null): boolean {
+  if (status === 429 || (status === 409 && code === POST_CREATE_IN_PROGRESS_CODE)) return false;
+  if (status === 409 && code === IDEMPOTENCY_KEY_CONFLICT_CODE) return true;
+  return status >= 400 && status < 500;
+}
+
 type SaveResponseBody = Record<string, unknown> & {
   error?: string;
   field?: string;
@@ -512,7 +529,11 @@ async function readSaveResponse(
  */
 async function readResponseBody(response: Response): Promise<SaveResponseBody> {
   if (response.ok) {
-    return await response.json() as SaveResponseBody;
+    // A success whose body cannot be read (a page the platform put in its place) may follow a
+    // save that was written: the person is told so, not how the parse failed.
+    return await response.json().catch(() => {
+      throw new ComposerSubmissionError(UNCONFIRMED_SAVE_MESSAGE, 'publish');
+    }) as SaveResponseBody;
   }
   return await response.json().catch(() => ({})) as SaveResponseBody;
 }
@@ -3473,6 +3494,20 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
         forgetStagedMediaPaths();
       }
       if (!response.ok) {
+        const code = typeof data.code === 'string' ? data.code : null;
+        if (response.status === 409 && code === POST_CREATE_IN_PROGRESS_CODE) {
+          // An earlier attempt with this key is still running: the key stays, so the next press
+          // answers that same post.
+          throw new ComposerSubmissionError(
+            typeof data.error === 'string' && data.error.trim() ? data.error : POST_CREATE_IN_PROGRESS_MESSAGE,
+            'publish',
+          );
+        }
+        if (shouldDropPublishKey(response.status, code)) {
+          // Nothing was written (a refusal), or the server can no longer use this key: the next
+          // attempt is a new post.
+          publishIdempotencyKeyRef.current = null;
+        }
         throw getSubmissionError(data, 'Failed to publish post.');
       }
       // Published: whatever is composed next is another post.

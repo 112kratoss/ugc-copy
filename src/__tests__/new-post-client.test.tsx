@@ -7118,6 +7118,83 @@ describe('NewPostClient', () => {
       expect(keys[1]).toBe(keys[0]);
     });
 
+    // The key's life follows the server's contract (2026-11-27): a refusal wrote nothing, so the
+    // next attempt is a new post with a new key; a key the server can no longer use is dropped; an
+    // earlier attempt still running, throttling, a 5xx or a lost answer keep it, so a retry is
+    // the same post.
+    describe('when the publish key is kept or dropped', () => {
+      const keysSent = () => postsCalls()
+        .map(([, init]) => (init?.headers as Record<string, string> | undefined)?.['Idempotency-Key']);
+
+      async function publishTwice(first: { status: number; body: unknown }) {
+        loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+        enqueueResponse({ ok: false, status: first.status, json: async () => first.body });
+        enqueueResponse(createdPost);
+        render(<NewPostClient />);
+        writeTextPost();
+        await screen.findByRole('textbox', { name: /^display name$/i });
+        fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+        await waitFor(() => expect(postsCalls()).toHaveLength(1));
+        const alert = await screen.findByRole('alert');
+        const said = alert.textContent;
+        fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+        await waitFor(() => expect(postsCalls()).toHaveLength(2));
+        return said;
+      }
+
+      it('drops the key after a refusal, which wrote nothing', async () => {
+        await publishTwice({ status: 400, body: { error: 'Add a title.', field: 'title' } });
+        const [first, second] = keysSent();
+        expect(first).toBeTruthy();
+        expect(second).toBeTruthy();
+        expect(second).not.toBe(first);
+      });
+
+      it('drops the key the server can no longer use', async () => {
+        await publishTwice({ status: 409, body: { error: 'That key cannot be used again.', code: 'IDEMPOTENCY_KEY_CONFLICT' } });
+        const [first, second] = keysSent();
+        expect(second).not.toBe(first);
+      });
+
+      it('keeps the key while an earlier attempt is still running, and says so', async () => {
+        const said = await publishTwice({ status: 409, body: { code: 'POST_CREATE_IN_PROGRESS' } });
+        expect(said).toMatch(/still publishing/i);
+        const [first, second] = keysSent();
+        expect(second).toBe(first);
+      });
+
+      // A 200 whose body cannot be read (a page the platform put in its place) may follow a post
+      // that was written: it says so, not how the parse failed, and the retry is the same post.
+      it('keeps the key and says the publish is unconfirmed when a 200 cannot be read', async () => {
+        loadOwnProfileMock.mockResolvedValue(placeholderProfile);
+        enqueueResponse({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError('Unexpected token \'<\', "<!DOCTYPE "... is not valid JSON');
+          },
+        });
+        enqueueResponse(createdPost);
+        render(<NewPostClient />);
+        writeTextPost();
+        await screen.findByRole('textbox', { name: /^display name$/i });
+        fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent(/could not confirm/i);
+        expect(alert).not.toHaveTextContent(/unexpected token|not valid json/i);
+        fireEvent.click(screen.getAllByRole('button', { name: /save private/i })[0]);
+        await waitFor(() => expect(postsCalls()).toHaveLength(2));
+        const [first, second] = keysSent();
+        expect(second).toBe(first);
+      });
+
+      it('keeps the key when the server is throttling', async () => {
+        await publishTwice({ status: 429, body: { error: 'Too many posts. Try again shortly.' } });
+        const [first, second] = keysSent();
+        expect(second).toBe(first);
+      });
+    });
+
     // The pages read the two fields with the rest of the server render, so the
     // fields are there from the first paint and nothing is fetched for them.
     it('starts from what the server render read and does not read the profile again', () => {
