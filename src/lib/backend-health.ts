@@ -406,7 +406,15 @@ const QUEUED_START_OVERDUE_AFTER_MINUTES = 20;
 const COMPLETION_QUEUE_STALE_PENDING_AFTER_MINUTES = 15;
 const COMPLETION_QUEUE_STALE_PROCESSING_AFTER_MINUTES = 10;
 const AI_USAGE_RECENT_WINDOW_MINUTES = 60;
-const AI_USAGE_STALE_PENDING_AFTER_MINUTES = 15;
+/**
+ * A charge pending ten minutes is refunded by the next generation-completions tick
+ * (stale-ai-usage-refunds.ts), and a tick comes every ten minutes: by minute 20 when that tick
+ * works, by minute 30 when it fails once. Health speaks of a pending charge only past that. At 15
+ * it called one stale while its refund was up to five minutes away, and since backend health gates
+ * the production release, a release promoted in that gap was refused for a charge about to clear by
+ * itself. backend-health.test.ts holds this to the refund's ten minutes and the job's cadence.
+ */
+export const AI_USAGE_STALE_PENDING_AFTER_MINUTES = 30;
 const PROVIDER_DEPENDENCY_RECENT_WINDOW_MINUTES = 60;
 const PROVIDER_DEPENDENCY_SLOW_AFTER_MS = 15_000;
 const PROVIDER_DEPENDENCY_FAILURE_DEGRADED_COUNT = 5;

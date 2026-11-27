@@ -8,8 +8,9 @@ import { logBackendError, logBackendInfo } from '@/lib/backend-logger';
  * The prompt enhancer and the workflow assistant and blueprint charge first
  * (`start_ai_usage_event`) and settle after the model answers
  * (`settle_ai_usage_event`). A function that dies in between leaves the event
- * `pending` with the credits taken; backend health reports it as
- * AI_USAGE_STALE_PENDING after 15 minutes, and nothing cleared it.
+ * `pending` with the credits taken. Until 2026-11-27 backend health reported
+ * it as AI_USAGE_STALE_PENDING and nothing cleared it; health now speaks of one
+ * only after 30 minutes, once this refund has had two ticks at it.
  *
  * Those routes run for at most Vercel's 300 s, so a charge still pending after
  * ten minutes has no request left to settle it, and it is refunded through the

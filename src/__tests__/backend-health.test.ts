@@ -2,10 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import { collectBackendHealth, isPendingGenerationWaitingInQueue } from '@/lib/backend-health';
+import {
+  AI_USAGE_STALE_PENDING_AFTER_MINUTES,
+  collectBackendHealth,
+  isPendingGenerationWaitingInQueue,
+} from '@/lib/backend-health';
 import { BACKEND_ENVIRONMENT_REQUIREMENTS } from '@/lib/backend-environment';
 import { BACKEND_JOB_REGISTRY } from '@/lib/backend-jobs';
 import { MAX_COMPLETION_ATTEMPTS } from '@/lib/generation-completion-job-policy';
+import { AI_USAGE_PENDING_REFUND_AFTER_MINUTES } from '@/lib/stale-ai-usage-refunds';
 
 type QueryResult = {
   data: unknown[] | null;
@@ -663,7 +668,7 @@ describe('collectBackendHealth', () => {
               status: 'pending',
               medium: 'video',
               cost: 8,
-              created_at: '2026-06-21T09:40:00.000Z',
+              created_at: '2026-06-21T09:25:00.000Z',
             },
           ],
         },
@@ -675,7 +680,7 @@ describe('collectBackendHealth', () => {
               status: 'pending',
               medium: 'video',
               cost: 8,
-              created_at: '2026-06-21T09:40:00.000Z',
+              created_at: '2026-06-21T09:25:00.000Z',
             },
           ],
         },
@@ -699,7 +704,7 @@ describe('collectBackendHealth', () => {
       refundedCreditCost: 5,
       stalePendingCount: 1,
       stalePendingCreditCost: 8,
-      oldestStalePendingCreatedAt: '2026-06-21T09:40:00.000Z',
+      oldestStalePendingCreatedAt: '2026-06-21T09:25:00.000Z',
     });
     expect(health.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -716,7 +721,20 @@ describe('collectBackendHealth', () => {
     expect(db.builders.ai_usage_events[1].eq).toHaveBeenCalledWith('status', 'pending');
     expect(db.builders.ai_usage_events[1].lt).toHaveBeenCalledWith(
       'created_at',
-      '2026-06-21T09:45:00.000Z',
+      '2026-06-21T09:30:00.000Z',
+    );
+  });
+
+  // A charge pending ten minutes is refunded by the next generation-completions tick
+  // (stale-ai-usage-refunds.ts). At 15 minutes health called such a charge stale while its refund
+  // was still up to five minutes away, and backend health gates the production release, so a
+  // release promoted in that gap was refused for a charge about to clear by itself. Health speaks
+  // of one only once the refund has had two ticks at it: the one that should clear it and one more.
+  it('calls an AI charge stale only once the automatic refund has had two ticks at it', () => {
+    const completions = BACKEND_JOB_REGISTRY.find((job) => job.name === 'generation-completions');
+    expect(completions?.cadenceMinutes).toBeGreaterThan(0);
+    expect(AI_USAGE_STALE_PENDING_AFTER_MINUTES).toBeGreaterThanOrEqual(
+      AI_USAGE_PENDING_REFUND_AFTER_MINUTES + 2 * (completions?.cadenceMinutes ?? Number.POSITIVE_INFINITY),
     );
   });
 
