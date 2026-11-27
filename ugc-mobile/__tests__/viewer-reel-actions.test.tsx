@@ -1809,3 +1809,23 @@ describe('the return a forced sign-in comes back to', () => {
     expect(forcedReturn()).toBe('/viewer?source=showcase-feed&initialId=post-gone');
   });
 });
+
+// Owner, 2026-11-27: "having haptic on opening the media and swiping to other
+// is not needed". On the S24 each page settling played a 110 ms buzz, as strong
+// as a button press (Samsung plays `soft` as it plays `light`), 100–125 ms
+// after the page had visibly landed (archive/ux-feel-audit-2026-11-27).
+describe("the reel's page turns", () => {
+  it('play no haptic as a page settles, nor on reaching the end of the lane', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+
+    await swipeTo(tree, 2);
+    expect(activeId()).toBe('post-c');
+    // One page past the last post: the lane's closing slide.
+    await swipeTo(tree, 4);
+    await swipeTo(tree, 1);
+    expect(activeId()).toBe('post-b');
+
+    for (const play of Object.values(haptic)) expect(play).not.toHaveBeenCalled();
+  });
+});

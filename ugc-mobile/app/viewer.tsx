@@ -1795,7 +1795,6 @@ function ImmersivePreviewViewer() {
           if (endSlide && nextIndex >= items.length) {
             // The closing slide. The last post stays the active one underneath,
             // paused, and the alignment effect has nothing to correct.
-            if (endSlidePage === null) haptic.soft();
             nativeRowRef.current = { index: activeIndex, height };
             playbackHandoff.handoff({ from: items[handoffPageRef.current ?? activeIndex]?.id, to: null });
             handoffPageRef.current = items.length;
@@ -1806,10 +1805,11 @@ function ImmersivePreviewViewer() {
           }
           if (endSlidePage !== null) setEndSlidePage(null);
           const clampedIndex = Math.max(0, Math.min(items.length - 1, nextIndex));
-          // A quiet tick as each page settles: the reel feels like it has
-          // detents rather than sliding freely. Soft so it can repeat at
-          // browsing speed without nagging.
-          if (clampedIndex !== activeIndex) haptic.soft();
+          // No haptic as a page settles (owner, 2026-11-27: "having haptic on
+          // opening the media and swiping to other is not needed"). The tick it
+          // was waited for this event, 100–125 ms after the page had visibly
+          // landed, and Samsung plays `soft` as strongly as a button press
+          // (archive/ux-feel-audit-2026-11-27). Like and save keep theirs.
           // The reader put the list here, so the alignment effect has nothing
           // to correct.
           nativeRowRef.current = { index: clampedIndex, height };
