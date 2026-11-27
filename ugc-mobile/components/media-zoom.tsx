@@ -783,14 +783,28 @@ function turnOpenRound(held: NonNullable<typeof openBack>) {
   held.turnedRound = true;
   onFlightProgressed = null;
   clearPendingZoomOrigin();
-  const { geometry, preview, video, post } = held.open;
-  const close = startZoomFlight({ direction: 'close', geometry, preview, video: video ?? null, post: post ?? null, still: true });
+  // Listening before the close begins, which tells its id as it begins: with
+  // no layer to step it, a close lands inside `startZoomFlight`, before its id
+  // could be read back, and the key and the tiles would stay held until the
+  // hold ran out.
+  let closeId: number | null = null;
   const stopWaiting = subscribeToZoomFlights((event) => {
-    if (event.flight.id !== close.id || event.type !== 'landed') return;
+    if (event.type === 'begin' && closeId === null) closeId = event.flight.id;
+    if (event.type !== 'landed' || event.flight.id !== closeId) return;
     stopWaiting();
     // Home: tiles open posts again, and Back is the screen's.
     endTileOpen(held.serial);
     stopHoldingBackForOpen(held.serial);
+  });
+  const { geometry, preview, video, post } = held.open;
+  startZoomFlight({ direction: 'close', geometry, preview, video: video ?? null, post: post ?? null, still: true }, {
+    // A clip's window is kept out of sight until the layer's view of it has
+    // drawn (`startZoomFlight`), so it is shown again as the close takes off,
+    // as `dismiss` does: left hidden, the close flew an empty window.
+    whenDisplayed: () => {
+      if (video) stillOpacity.set(1);
+      takeOffZoomFlight();
+    },
   });
 }
 

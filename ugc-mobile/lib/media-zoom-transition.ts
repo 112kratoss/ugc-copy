@@ -228,10 +228,20 @@ interface TileOpen {
   /**
    * Back was pressed after the reel was pushed and before it could answer:
    * the reel closes as soon as it has taken the open over
-   * (`requestTileOpenClose`).
+   * (`requestTileOpenClose`), even past the hold (`TILE_OPEN_CLOSE_GRACE_MS`).
    */
   closeRequested: boolean;
 }
+
+/**
+ * How long past its hold an open whose Back was taken may still be taken over
+ * (`claimTileOpen`): a reel slow to come up, as a first open after a cold
+ * start can be, closes as it comes up (plainly, too late to shrink into the
+ * tile) instead of opening over a Back the layer took for it. Bounded, so a
+ * request no reel ever claimed, a push that was refused, cannot close a reel
+ * opened some other way long after.
+ */
+export const TILE_OPEN_CLOSE_GRACE_MS = 4000;
 
 let tileOpen: TileOpen | null = null;
 let tileOpenSerial = 0;
@@ -275,10 +285,14 @@ export function isTileOpenCloseRequested(serial: number | null): boolean {
   return serial !== null && tileOpen?.serial === serial && tileOpen.closeRequested;
 }
 
-/** A reel has mounted: it takes the open under way over, and ends it itself. */
+/**
+ * A reel has mounted: it takes the open under way over, and ends it itself.
+ * One whose Back was taken can be taken over a while past its hold.
+ */
 export function claimTileOpen(now: number): number | null {
   if (!tileOpen || tileOpen.claimed) return null;
-  if (now - tileOpen.startedAt >= tileOpen.holdMs) {
+  const holdMs = tileOpen.holdMs + (tileOpen.closeRequested ? TILE_OPEN_CLOSE_GRACE_MS : 0);
+  if (now - tileOpen.startedAt >= holdMs) {
     tileOpen = null;
     return null;
   }

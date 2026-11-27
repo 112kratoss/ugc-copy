@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -89,7 +91,14 @@ vi.mock('react-native-reanimated', async () => {
 
 import { MediaZoomFlightLayer, MediaZoomSourceView, MediaZoomSurface, useMediaZoomSource, useMediaZoomStage } from '../components/media-zoom';
 import type { ImmersivePreviewItem } from '../lib/immersive-preview-view-model';
-import { getHeldZoomPicture, getZoomFlight, resetMediaZoomTransitions, type ZoomPreview } from '../lib/media-zoom-transition';
+import {
+  canOpenFromTile,
+  getHeldZoomPicture,
+  getZoomFlight,
+  resetMediaZoomTransitions,
+  subscribeToZoomFlights,
+  type ZoomPreview,
+} from '../lib/media-zoom-transition';
 
 const SCREEN = { width: 402, height: 874 };
 
@@ -146,17 +155,18 @@ function profileWithTile(picture: ZoomPreview, post: ImmersivePreviewItem | null
       </MediaZoomSourceView>
     );
   }
+  /** The screen with its tile, and the layer above it unless it has gone. */
+  const app = (layer = true) => (
+    <>
+      <MediaZoomSurface>
+        <Tile />
+      </MediaZoomSurface>
+      {layer ? <MediaZoomFlightLayer /> : null}
+    </>
+  );
   let tree!: renderer.ReactTestRenderer;
   renderer.act(() => {
-    tree = renderer.create(
-      <>
-        <MediaZoomSurface>
-          <Tile />
-        </MediaZoomSurface>
-        <MediaZoomFlightLayer />
-      </>,
-      { createNodeMock }
-    );
+    tree = renderer.create(app(), { createNodeMock });
   });
   /** A finger on the tile and off it: the open flight, its picture drawn so it moves. */
   const tap = () => {
@@ -167,7 +177,41 @@ function profileWithTile(picture: ZoomPreview, post: ImmersivePreviewItem | null
     renderer.act(() => { copy[0]!.props.onDisplay(); });
     expect(getZoomFlight()?.direction).toBe('open');
   };
-  return { tree, push, tap, tapAgain: () => renderer.act(() => source.capture(push)), source: () => source };
+  return {
+    tree,
+    push,
+    tap,
+    tapAgain: () => renderer.act(() => source.capture(push)),
+    source: () => source,
+    /** Draws the screen again, with the layer or without it. */
+    rerender: (layer = true) => renderer.act(() => tree.update(app(layer))),
+  };
+}
+
+/** A playing clip the tile offers the open, which records being handed back. */
+function offerClip(source: ReturnType<typeof useMediaZoomSource>, id: string) {
+  const player = { id } as never;
+  renderer.act(() => {
+    source.offerVideo({
+      player,
+      url: `https://example.test/${id}.feed.mp4`,
+      hasFrame: () => true,
+      reattach: () => timeline.push('tile took its clip back'),
+    });
+  });
+  return player;
+}
+
+type Style = Record<string, unknown>;
+const flatten = (style: unknown): Style => (
+  Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : (style as Style | null) ?? {}
+);
+
+/** How opaque the layer's window is, as last drawn. */
+function windowOpacity(tree: renderer.ReactTestRenderer) {
+  const windows = tree.root.findAll((node) => node.type === ('animated-view' as never) && node.props.needsOffscreenAlphaCompositing);
+  expect(windows).toHaveLength(1);
+  return flatten(windows[0]!.props.style).opacity;
 }
 
 /** The reel the push brings up, mounting as a screen does. */
@@ -192,6 +236,16 @@ function mountReel() {
 }
 
 const picture = (name: string): ZoomPreview => ({ url: `https://example.test/${name}.webp`, cacheKey: name, thumbhash: null });
+
+/** The layer's timings, as the source sets them. */
+const mediaZoomCode = readFileSync(path.resolve(__dirname, '../components/media-zoom.tsx'), 'utf8');
+const constant = (name: string) => Number(mediaZoomCode.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
+const OPEN_PUSH_DEADLINE_MS = constant('OPEN_PUSH_DEADLINE_MS');
+const VIDEO_TAKEOFF_DEADLINE_MS = constant('VIDEO_TAKEOFF_DEADLINE_MS');
+const CLOSE_MS = constant('CLOSE_MS');
+const PLAIN_FADE_MS = constant('PLAIN_FADE_MS');
+/** The hold in which a reel may take a tap's open over (`ORIGIN_TTL_MS`). */
+const OPEN_HOLD_MS = 2000;
 
 describe('Back during the open flight, before the reel is pushed', () => {
   it('is taken by the layer and turns the picture round into its tile; no reel is pushed and the screen beneath stays', () => {
@@ -234,15 +288,7 @@ describe('Back during the open flight, before the reel is pushed', () => {
 
   it('gives the tile back the clip it lent the open, as the picture lands in it', () => {
     const { tree, push, source } = profileWithTile(picture('back-with-a-clip'));
-    const player = { id: 'lent-to-the-open' } as never;
-    renderer.act(() => {
-      source().offerVideo({
-        player,
-        url: 'https://example.test/clip.feed.mp4',
-        hasFrame: () => true,
-        reattach: () => timeline.push('tile took its clip back'),
-      });
-    });
+    const player = offerClip(source(), 'lent-to-the-open');
     renderer.act(() => source().prepare());
     renderer.act(() => source().capture(push));
     expect(getZoomFlight()?.video?.player).toBe(player);
@@ -263,6 +309,54 @@ describe('Back during the open flight, before the reel is pushed', () => {
     expect(getHeldZoomPicture()).toBeNull();
     expect(push).not.toHaveBeenCalled();
     expect(timeline).not.toContain('navigator went back');
+    renderer.act(() => tree.unmount());
+  });
+
+  // Review of #954: a close carrying a clip keeps its window out of sight
+  // until the layer's view of the clip has drawn, and only a close told to
+  // show it again does; turned round with nothing to say so, it flew empty.
+  it('shows a clip it turns round as it flies home, though its window had not yet said it had drawn', () => {
+    const { tree, push, source, rerender } = profileWithTile(picture('back-with-an-undrawn-clip'));
+    const player = offerClip(source(), 'lent-not-yet-drawn');
+    renderer.act(() => source().prepare());
+    renderer.act(() => source().capture(push));
+    expect(getZoomFlight()?.video?.player).toBe(player);
+    // No word from the layer's view of the clip: the open goes on its deadline.
+    advance(VIDEO_TAKEOFF_DEADLINE_MS);
+    frame();
+    frame();
+
+    expect(pressBack()).toBe(true);
+    expect(getZoomFlight()?.direction).toBe('close');
+    expect(getZoomFlight()?.video?.player).toBe(player);
+    // The close goes on the same deadline, its window shown as it goes.
+    advance(VIDEO_TAKEOFF_DEADLINE_MS);
+    rerender();
+    expect(windowOpacity(tree)).toBe(1);
+
+    flyToLanding();
+    advance(100);
+    expect(timeline).toContain('tile took its clip back');
+    expect(getHeldZoomPicture()).toBeNull();
+    expect(push).not.toHaveBeenCalled();
+    renderer.act(() => tree.unmount());
+  });
+
+  // Review of #954: a close with no layer to step it lands inside
+  // `startZoomFlight`, before a wait begun after it could hear of it.
+  it('gives the key and the tiles back at once when the close lands with no layer to step it', () => {
+    const { tree, push, tap, rerender } = profileWithTile(picture('back-no-layer'));
+    tap();
+    frame();
+    // The layer goes (a reload in development): a flight begun now lands at once.
+    rerender(false);
+
+    expect(pressBack()).toBe(true);
+    expect(getZoomFlight()).toBeNull();
+    // Home already: Back is the screen's, and tiles open posts.
+    expect(pressBack()).toBe(false);
+    expect(canOpenFromTile(Date.now())).toBe(true);
+    expect(push).not.toHaveBeenCalled();
     renderer.act(() => tree.unmount());
   });
 });
@@ -298,6 +392,65 @@ describe('Back after the push, before the reel can answer it', () => {
     renderer.act(() => tree.unmount());
   });
 
+  // Review of #954: the push also goes on its deadline, with the picture
+  // still on its way up when the frames are slow.
+  it('turns the open round mid-air when the reel was pushed on the deadline, before the picture had landed', () => {
+    const { tree, push, tap } = profileWithTile(picture('back-after-deadline-push'));
+    const openLandings: number[] = [];
+    const stopListening = subscribeToZoomFlights((event) => {
+      if (event.type === 'landed' && event.flight.direction === 'open') openLandings.push(event.flight.id);
+    });
+    tap();
+    frame();
+    // The frames stall: the reel is pushed on the deadline, the picture still in the air.
+    advance(OPEN_PUSH_DEADLINE_MS);
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(getZoomFlight()?.direction).toBe('open');
+
+    expect(pressBack()).toBe(true);
+    const { reel, exit } = mountReel();
+    // The close takes the picture over where the open had got it to.
+    expect(getZoomFlight()?.direction).toBe('close');
+    advance(16);
+    let closeFrames = 0;
+    for (; closeFrames < 40 && getZoomFlight(); closeFrames += 1) frame();
+    expect(getZoomFlight()).toBeNull();
+    expect(closeFrames).toBeLessThan(Math.ceil(CLOSE_MS / 16));
+    advance(16);
+
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(openLandings).toEqual([]);
+    expect(timeline).toEqual(['flight frames on', 'reel pushed', 'flight frames on', 'flight frames off', 'reel popped']);
+    stopListening();
+    renderer.act(() => reel.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
+  // Review of #954: the open, its Back with it, was dropped by a reel that
+  // came up after the hold, which then opened over the Back the layer took.
+  it('still closes a reel slow to come up, past the hold in which it would have grown out of the tile', () => {
+    const { tree, push, tap } = profileWithTile(picture('back-slow-reel'));
+    tap();
+    flyToLanding();
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(pressBack()).toBe(true);
+
+    // A first open after a cold start: the reel comes up after the hold.
+    advance(OPEN_HOLD_MS + 100);
+    const { reel, exit } = mountReel();
+    // The reel has taken the open over, and the key with it.
+    expect(backKey.listeners).toHaveLength(0);
+    // Too late to shrink into the tile, it goes plainly, without opening.
+    advance(PLAIN_FADE_MS + 100);
+    expect(exit).toHaveBeenCalledTimes(1);
+    advance(1000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(getHeldZoomPicture()).toBeNull();
+    expect(timeline).not.toContain('navigator went back');
+    renderer.act(() => reel.unmount());
+    renderer.act(() => tree.unmount());
+  });
+
   // A push that brings up no reel (refused, or some other screen) is never
   // taken over: the layer gives the key back once no reel could take it.
   it('is the navigator\'s again once no reel can take the open over', () => {
@@ -306,8 +459,7 @@ describe('Back after the push, before the reel can answer it', () => {
     flyToLanding();
     expect(push).toHaveBeenCalledTimes(1);
 
-    // The hold in which a reel may still take the open over (`ORIGIN_TTL_MS`).
-    advance(2000);
+    advance(OPEN_HOLD_MS);
     expect(pressBack()).toBe(false);
     expect(timeline).toContain('navigator went back');
     renderer.act(() => tree.unmount());
