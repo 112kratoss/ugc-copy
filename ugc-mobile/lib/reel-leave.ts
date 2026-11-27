@@ -30,6 +30,16 @@ export type ReelLeave =
  * wherever it stands, keeping the screens above it), and a first-screen reel,
  * which has nothing beneath to go back to, gives its place to Explore as its
  * own Back does. In front, it goes back as it always has.
+ *
+ * Neither action can be refused by the root stack, which matters because a
+ * refusal would be silent: React Navigation takes a router's null for an
+ * action addressed to its own stack (`target`) as handled, and the reel would
+ * stay in front, out of sight and taking every touch (review of #947). The
+ * POP is sent only for a reel in the stack and above its first place, which
+ * is all StackRouter asks; the REPLACE would be refused only by a stack with
+ * no `(tabs)` route, and `(tabs)` is a root route of the app with no guard
+ * over it. `reel-leave.test.ts` runs both through Expo Router's own stack
+ * router and pins that route.
  */
 export function reelLeaveFor(state: ReelStackState | undefined, routeKey: string): ReelLeave {
   if (!state) return { kind: 'back' };
