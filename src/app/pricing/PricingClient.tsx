@@ -583,7 +583,7 @@ export function PricingClient({
                                             Processing...
                                         </>
                                     ) : (
-                                        `Get ${plan.credits.toLocaleString()} Credits`
+                                        `Get ${plan.credits.toLocaleString('en-US')} Credits`
                                     )}
                                 </span>
                             </button>
