@@ -76,3 +76,32 @@ describe('refresh_post_feed_engagement_stats reads the facts once and refreshes 
     expect(body).toContain('RETURN cardinality(v_post_ids);');
   });
 });
+
+describe('refresh_user_interest_weights updates in place', () => {
+  // supabase/tests/database/user_interest_weights_refresh_incremental.test.sql
+  const { file, body } = readMigration('_user_interest_weights_refresh_in_place.sql');
+
+  it('replaces the function with the same signature, rights and search path', () => {
+    expect(file).toBeTruthy();
+    expect(body).toContain("CREATE OR REPLACE FUNCTION public.refresh_user_interest_weights(p_as_of timestamp with time zone DEFAULT timezone('utc'::text, now()), p_lookback_days integer DEFAULT 90, p_half_life_days integer DEFAULT 30, p_limit integer DEFAULT 1000)");
+    expect(body).toContain(' RETURNS integer');
+    expect(body).not.toContain('SECURITY DEFINER');
+    expect(body).toContain("SET search_path TO 'public', 'pg_temp'");
+    expect(body).toContain("SET LOCAL lock_timeout = '5s';");
+    expect(body).not.toMatch(/\bGRANT\b/);
+  });
+
+  it('no longer deletes every row of the batch, only the dimensions that disappeared', () => {
+    expect(body).not.toMatch(/DELETE FROM public\.user_interest_weights\s+WHERE user_id = ANY\(v_user_ids\);/);
+    expect(body).toContain('refreshed AS MATERIALIZED (');
+    expect(body).toContain('DELETE FROM public.user_interest_weights AS interests');
+    expect(body).toContain('AND NOT EXISTS (');
+  });
+
+  it('writes only rows whose values changed, and still records progress', () => {
+    expect(body).toContain(') IS DISTINCT FROM (');
+    expect(body).toContain('EXCLUDED.weight, EXCLUDED.positive_score');
+    expect(body).toContain('INSERT INTO public.user_interest_refresh_state (user_id, refreshed_at)');
+    expect(body).toContain('RETURN cardinality(v_user_ids);');
+  });
+});
