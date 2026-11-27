@@ -230,14 +230,6 @@ function clientSetups(clientIds: McpClientIds): ClientSetup[] {
           ),
           code: { value: clientIds.chatgpt, label: 'the ChatGPT client ID' },
         },
-        {
-          text: (
-            <>
-              In the same settings, under <strong>Default scopes</strong>, untick <strong>offline_access</strong>: Magic Booklet
-              refuses it, and signing in would fail.
-            </>
-          ),
-        },
         { text: <>Confirm the warning and choose <strong>Create as a plugin</strong>, then sign in to Magic Booklet and allow ChatGPT.</> },
       ],
     },

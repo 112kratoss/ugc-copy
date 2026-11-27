@@ -260,6 +260,10 @@ Not done by the cutover: reconnecting each client. Every creator's agents sign i
 next call (two accounts, both the owner's). The Claude connectors-directory listing and ChatGPT
 keep their client id (and the directory its secret); one reconnect from each confirms it.
 
+Later, 2026-11-27: ChatGPT's Reconnect did not work. Its plugin had kept Supabase's endpoints, so
+it was deleted and added again, with the same client id and callback (runbook, "Registered
+clients"). The directory listing had nothing to reconnect: it is not submitted yet.
+
 ## Proof
 
 On a throwaway local stack (GoTrue v2.186.0, CLI 2.75.0, never production), 2026-11-26, with the
