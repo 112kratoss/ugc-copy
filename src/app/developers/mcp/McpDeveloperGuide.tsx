@@ -379,7 +379,7 @@ export default function McpDeveloperGuide({ clientIds }: { clientIds: McpClientI
   const anyAvailable = setups.some((setup) => !isPendingClientId(clientIds[setup.surface]));
 
   return (
-    <main className="ui-page">
+    <div className="ui-page">
       <JsonLd
         data={[
           buildBreadcrumbSchema([
@@ -494,6 +494,6 @@ export default function McpDeveloperGuide({ clientIds }: { clientIds: McpClientI
           </section>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

@@ -52,7 +52,7 @@ export default async function OAuthConsentPage({ searchParams }: ConsentPageProp
   const read = gate.kind === 'account' && userId ? await readRequest(gate.authorizationId, userId) : null;
 
   return (
-    <main className="ui-page flex items-start justify-center px-4 py-10 sm:items-center">
+    <div className="ui-page flex items-start justify-center px-4 py-10 sm:items-center">
       <div className="w-full max-w-md">
         {gate.kind === 'missing' ? (
           <Surface as="section" padding="lg" className="space-y-4" role="alert">
@@ -88,6 +88,6 @@ export default async function OAuthConsentPage({ searchParams }: ConsentPageProp
           </Surface>
         )}
       </div>
-    </main>
+    </div>
   );
 }

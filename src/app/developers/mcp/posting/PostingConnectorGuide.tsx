@@ -81,7 +81,7 @@ export default function PostingConnectorGuide({ claudeClientId }: { claudeClient
   const steps = connectSteps(claudeClientId);
 
   return (
-    <main className="ui-page">
+    <div className="ui-page">
       <JsonLd
         data={[
           buildBreadcrumbSchema([
@@ -241,6 +241,6 @@ export default function PostingConnectorGuide({ claudeClientId }: { claudeClient
           </section>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

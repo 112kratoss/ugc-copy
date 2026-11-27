@@ -22,7 +22,7 @@ export default function DeleteAccountPage() {
     // ID. Named, because the page is also served on hosts Apple does not return to.
     const appleHost = getAppleWebClientId() ? new URL(getAppleWebReturnUrl()).host : null;
     return (
-        <main className="min-h-screen bg-black px-6 py-16 text-white">
+        <div className="min-h-screen bg-black px-6 py-16 text-white">
             <div className="mx-auto max-w-4xl">
                 <p className="text-sm font-semibold uppercase tracking-[0.22em] text-rose-300">Account privacy</p>
                 <h1 className="mt-4 text-4xl font-bold tracking-tight sm:text-5xl">{`Delete your ${siteConfig.name} account`}</h1>
@@ -106,6 +106,6 @@ export default function DeleteAccountPage() {
                     {' '}or contact <a className="text-white underline underline-offset-4" href={`mailto:${siteConfig.privacyEmail}`}>{siteConfig.privacyEmail}</a>.
                 </p>
             </div>
-        </main>
+        </div>
     );
 }

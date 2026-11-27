@@ -174,7 +174,7 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
   return (
     <OptionalAuth>
       <CreatorPageViewer creatorId={data.profile.id} username={data.profile.username}>
-        <main className="ui-page pb-16 pt-5 sm:pb-24 sm:pt-8">
+        <div className="ui-page pb-16 pt-5 sm:pb-24 sm:pt-8">
           {data.stats.publicCreations >= MIN_PUBLIC_POSTS_FOR_INDEXING ? (
             <JsonLd
               data={[
@@ -227,7 +227,7 @@ export default async function CreatorPage({ params }: CreatorPageProps) {
             {/* The posts, or for a viewer who blocked the creator Unblock in their place. */}
             <CreatorPosts initialData={data} profilePath={profilePath} />
           </div>
-        </main>
+        </div>
       </CreatorPageViewer>
     </OptionalAuth>
   );
