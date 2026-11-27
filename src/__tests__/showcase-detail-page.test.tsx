@@ -40,6 +40,11 @@ const mockNotFound = vi.fn(() => {
 const mockRedirect = vi.fn((target: string) => {
   throw new Error(`NEXT_REDIRECT:${target}`);
 });
+// A legacy id's post never changes, so its redirect is permanent (308): a crawler moves the old
+// address's standing to the post's own (audit 2026-11-27).
+const mockPermanentRedirect = vi.fn((target: string) => {
+  throw new Error(`NEXT_REDIRECT:${target}`);
+});
 const getPostReferenceForShowcaseIdMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 const getPublicPostDetailMock = vi.fn<(id?: string) => Promise<Record<string, unknown> | null>>();
 // What each read of the post asked for besides its id.
@@ -91,6 +96,7 @@ vi.mock('next/headers', () => ({
 vi.mock('next/navigation', () => ({
   notFound: () => mockNotFound(),
   redirect: (target: string) => mockRedirect(target),
+  permanentRedirect: (target: string) => mockPermanentRedirect(target),
   // The back affordance is a client component that pops history when the viewer
   // arrived from inside the app.
   useRouter: () => routerMock,
@@ -948,7 +954,7 @@ describe('Showcase detail page', () => {
       openedAt(openedFromCard);
 
       await expect(ShowcaseDetailPage({ params: Promise.resolve({ id: GENERATION_ID }) })).rejects.toThrow('NEXT_REDIRECT');
-      expect(mockRedirect).toHaveBeenCalledWith(`/showcase/${POST_ID}`);
+      expect(mockPermanentRedirect).toHaveBeenCalledWith(`/showcase/${POST_ID}`);
     });
   });
 
@@ -2312,6 +2318,7 @@ describe('Showcase detail page', () => {
       params: Promise.resolve({ id: POST_ID }),
     })).rejects.toThrow('NEXT_NOT_FOUND');
     expect(mockRedirect).not.toHaveBeenCalled();
+    expect(mockPermanentRedirect).not.toHaveBeenCalled();
   });
 
   it('builds metadata from the post read alone, and names a legacy id a redirect', async () => {
