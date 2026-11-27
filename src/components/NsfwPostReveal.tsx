@@ -101,6 +101,8 @@ export default function NsfwPostReveal({
       const response = await fetch(`/api/posts/${postId}/reveal`, { method: 'POST', cache: 'no-store' });
       const result = await readJsonResponse(response);
       if (!response.ok) throw new Error(result.error || 'Could not reveal this post.');
+      // A 200 with no post in it (a page the platform put in its place) revealed nothing.
+      if (!result.detail || typeof result.detail !== 'object') throw new Error('Could not reveal this post.');
       if (!document.hidden) setDetail(result.detail);
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Please retry.'); }
     finally { setBusy(false); }

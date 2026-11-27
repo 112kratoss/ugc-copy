@@ -1357,6 +1357,39 @@ describe('CreateWorkflowPage', () => {
       expect(screen.queryByText(/could not check model settings/i)).not.toBeInTheDocument();
     });
 
+    // A run start answered 200 with a body that is not the run (a page the platform put in its
+    // place) read as an empty object: the key was cleared and nothing was said, so a second press
+    // could start a second paid run (review of the 2026-11-27 fix). The start is unconfirmed: the
+    // key stays and the page says so.
+    it('keeps the run key and says the start is unconfirmed when a run answers 200 with no run', async () => {
+      await renderPageHoldingRevision(workflowCatalog.revision);
+      const fetchMock = vi.mocked(fetch);
+      const answer = fetchMock.getMockImplementation()!;
+      let unreadableAnswers = 1;
+      fetchMock.mockImplementation(async (input, init) => {
+        if (
+          unreadableAnswers > 0
+          && String(input).endsWith('/api/workflow-canvases/canvas-1/run')
+          && init?.method === 'POST'
+        ) {
+          unreadableAnswers -= 1;
+          return new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 });
+        }
+        return answer(input, init);
+      });
+
+      await clickRunBranch();
+      expect(await screen.findByText(/could not confirm the run started/i, {}, { timeout: 5_000 })).toBeInTheDocument();
+
+      await clickRunBranch();
+      await waitFor(() => {
+        expect(lastRunRequest).not.toBeNull();
+      }, { timeout: 5_000 });
+      const [unconfirmed, repeated] = runPosts();
+      expect(new Headers(repeated[1]?.headers).get('Idempotency-Key'))
+        .toBe(new Headers(unconfirmed[1]?.headers).get('Idempotency-Key'));
+    });
+
     it('repeats an unanswered run under the same key when a release lands before the retry', async () => {
       await renderPageHoldingRevision(workflowCatalog.revision);
       const fetchMock = vi.mocked(fetch);
