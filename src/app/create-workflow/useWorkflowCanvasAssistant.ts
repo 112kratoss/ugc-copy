@@ -226,7 +226,7 @@ export function useWorkflowCanvasAssistant({
           headers: await authHeaders(),
         }
       );
-      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to apply assistant proposal.' });
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the proposal was applied. Check the canvas before trying again.' });
 
       if (response.status === 409) {
         if (data.canvas) {

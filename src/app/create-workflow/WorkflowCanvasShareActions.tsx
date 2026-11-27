@@ -199,7 +199,7 @@ export function WorkflowCanvasShareActions({
         method: 'POST',
         headers: await authHeaders(),
       });
-      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to create workflow share link.' });
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the share link was created. Check before trying again.' });
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to create workflow share link.');
@@ -264,7 +264,7 @@ export function WorkflowCanvasShareActions({
         method: 'POST',
         headers: await authHeaders(),
       });
-      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to import workflow share.' });
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the share was imported. Check your canvases before trying again.' });
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to import workflow share.');

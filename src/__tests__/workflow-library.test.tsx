@@ -195,7 +195,7 @@ describe('WorkflowLibraryClient', () => {
   // A 200 whose body is not the answer (a page the platform put in its place) read as an empty
   // object after the 2026-11-27 change, and the library went on with no canvas: it crashed on
   // `undefined.id` or drew an empty list (review of that change). Each says its own message.
-  it('says its own message when a create or a rename answers 200 with no canvas', async () => {
+  it('says the result is unconfirmed when a create or a rename answers 200 with no canvas', async () => {
     const answer = vi.mocked(fetch).getMockImplementation()!;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const method = init?.method ?? 'GET';
@@ -208,14 +208,14 @@ describe('WorkflowLibraryClient', () => {
     await screen.findByRole('heading', { name: 'Product launch flow' });
 
     fireEvent.click(screen.getAllByRole('button', { name: 'New workflow' })[0]);
-    expect(await screen.findByText('Failed to create workflow.')).toBeInTheDocument();
+    expect(await screen.findByText(/could not confirm the workflow was created/i)).toBeInTheDocument();
     expect(mockPush).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Actions for Product launch flow' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Workflow name' }), { target: { value: 'Launch system' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save name' }));
-    expect(await screen.findByText('Failed to rename workflow.')).toBeInTheDocument();
+    expect(await screen.findByText(/could not confirm the new name was saved/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Product launch flow' })).toBeInTheDocument();
   });
 

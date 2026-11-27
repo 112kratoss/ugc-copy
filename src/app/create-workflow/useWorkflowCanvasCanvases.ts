@@ -159,7 +159,7 @@ export function useWorkflowCanvasCanvases({
             graph: options?.graph ?? createStarterGraph(),
           }),
         });
-        const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to create canvas' });
+        const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the canvas was created. Check your canvases before trying again.' });
         if (!response.ok) {
           throw new Error(data.error || 'Failed to create canvas');
         }
@@ -310,7 +310,7 @@ export function useWorkflowCanvasCanvases({
               graph: createStarterGraph(),
             }),
           });
-          const createData = await readJsonResponse(createResponse, { unreadableSuccess: 'Failed to create canvas' });
+          const createData = await readJsonResponse(createResponse, { unreadableSuccess: 'We could not confirm the canvas was created. Check your canvases before trying again.' });
           if (!createResponse.ok) {
             throw new Error(createData.error || 'Failed to create canvas');
           }

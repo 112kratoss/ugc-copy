@@ -69,27 +69,29 @@ describe('client reads of an API answer', () => {
 
 // A read whose success path goes on to use the body names the message it says when a 200's body
 // cannot be read (`unreadableSuccess`), instead of carrying on with `{}`: no canvas, share, run,
-// list or template (review of the 2026-11-27 change). `workflow-library.test.tsx` draws two of
+// list or template (review of the 2026-11-27 change). A pure read says it failed; an action that
+// may have been done (a create, a copy, a rename, a save, an import, an approval) says its result
+// could not be confirmed and to check before trying again. `workflow-library.test.tsx` draws two of
 // these; the rest are held here by their words.
 const SUCCESS_BODY_READS: Array<[string, string]> = [
   ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'Failed to load workflow share preview.'],
-  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'Failed to create workflow share link.'],
-  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'Failed to import workflow share.'],
+  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'We could not confirm the share link was created. Check before trying again.'],
+  ['src/app/create-workflow/WorkflowCanvasShareActions.tsx', 'We could not confirm the share was imported. Check your canvases before trying again.'],
   ['src/app/marketplace/MarketplaceBrowser.tsx', 'Could not load more recipes.'],
   ['src/app/create-workflow/useWorkflowCanvasAssistant.ts', 'Workflow assistant request failed.'],
-  ['src/app/create-workflow/useWorkflowCanvasAssistant.ts', 'Failed to apply assistant proposal.'],
+  ['src/app/create-workflow/useWorkflowCanvasAssistant.ts', 'We could not confirm the proposal was applied. Check the canvas before trying again.'],
   ['src/app/create-workflow/useWorkflowRunPolling.ts', 'Failed to refresh workflow run'],
   ['src/app/create-workflow/CreateWorkflowClient.tsx', 'Failed to load template authoring details.'],
-  ['src/app/create-workflow/CreateWorkflowClient.tsx', 'Failed to approve workflow checkpoint.'],
+  ['src/app/create-workflow/CreateWorkflowClient.tsx', 'We could not confirm the checkpoint was approved. Check the run before trying again.'],
   ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'Failed to load workflow canvas'],
-  ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'Failed to create canvas'],
+  ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'We could not confirm the canvas was created. Check your canvases before trying again.'],
   ['src/app/create-workflow/useWorkflowCanvasCanvases.ts', 'Failed to load workflow canvases'],
   ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to load workflows.'],
-  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to create workflow.'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'We could not confirm the workflow was created. Check your workflows before trying again.'],
   ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to load workflow for duplication.'],
-  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to duplicate workflow.'],
-  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'Failed to rename workflow.'],
-  ['src/app/create-workflow/useWorkflowCanvasPersistence.ts', 'Failed to save canvas'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'We could not confirm the copy was made. Check your workflows before trying again.'],
+  ['src/app/create-workflow/WorkflowLibraryClient.tsx', 'We could not confirm the new name was saved. Check the workflow before trying again.'],
+  ['src/app/create-workflow/useWorkflowCanvasPersistence.ts', 'We could not confirm the canvas was saved. Check it before trying again.'],
   ['src/app/profile/OwnerProfileMediaHub.tsx', 'Could not load your posts.'],
   ['src/app/profile/OwnerProfileMediaHub.tsx', 'Could not load saved posts.'],
   ['src/app/create-workflow/WorkflowTemplatePublishDrawer.tsx', 'Template request failed.'],
@@ -99,6 +101,7 @@ const SUCCESS_BODY_READS: Array<[string, string]> = [
 describe('client reads that use a success body', () => {
   it.each(SUCCESS_BODY_READS)('%s says "%s" for a 200 it cannot read', (file, message) => {
     const source = readFileSync(path.join(process.cwd(), file), 'utf8');
-    expect(source).toContain(`unreadableSuccess: '${message}'`);
+    // The message may be one arm of a choice (the assistant's paid send says another).
+    expect(source).toMatch(new RegExp(`unreadableSuccess:[^\\n]*'${message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`));
   });
 });

@@ -1098,7 +1098,7 @@ export default function CreateWorkflowClient({
           body: JSON.stringify({}),
         }
       );
-      const data = await readJsonResponse(response, { unreadableSuccess: 'Failed to approve workflow checkpoint.' });
+      const data = await readJsonResponse(response, { unreadableSuccess: 'We could not confirm the checkpoint was approved. Check the run before trying again.' });
       if (!response.ok) {
         throw new Error(data.error || 'Failed to approve workflow checkpoint.');
       }
