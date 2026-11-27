@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 
+import { screenErrorLayout } from '@/components/app-error-boundary';
 import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
 import { createSideMenuStore, SideMenuHostContext } from '@/lib/side-menu-host';
@@ -40,6 +41,7 @@ export default function TabLayout() {
     <Animated.View style={[styles.fill, underlayStyle]}>
       <SideMenuHostContext.Provider value={sideMenu}>
       <Tabs
+        screenLayout={screenErrorLayout}
         backBehavior="history"
         tabBar={(props) => (
           // Keep one stable tab-bar tree across route fades; MagicTabBar owns

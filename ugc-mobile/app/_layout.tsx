@@ -32,7 +32,7 @@ import { SaverNoticeBar, SaverNoticeSync } from '@/components/saver-notice-bar';
 import { RecipeUnlockedNotice } from '@/components/recipe-unlocked-notice';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
-import { AppErrorBoundary, AppErrorFallback } from '@/components/app-error-boundary';
+import { AppErrorBoundary, AppErrorFallback, screenErrorLayout } from '@/components/app-error-boundary';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
 import { useIapLaunchConfiguration } from '@/lib/use-iap-launch-configuration';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
@@ -352,6 +352,9 @@ function RootLayoutNav() {
                 <SignOutOverlay />
                 <AppErrorBoundary>
                 <Stack
+                screenLayout={screenErrorLayout}
+                // Each screen inside an error boundary of its own, so one that throws shows the
+                // error page with the navigator still up (components/app-error-boundary.tsx).
                 // A screen coming back as a reel's pop begins: the cue for a
                 // picture closing into it to uncover it (components/media-zoom.tsx).
                 // And that screen back for good as the pop ends: the cue for the
