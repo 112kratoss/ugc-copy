@@ -47,6 +47,7 @@ const queryState = vi.hoisted(() => ({
     getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
     getQueryState: vi.fn((_key: readonly unknown[]) => undefined),
     invalidateQueries: vi.fn(() => Promise.resolve()),
+    cancelQueries: vi.fn(() => Promise.resolve()),
     setQueriesData: vi.fn(),
     setQueryData: vi.fn(),
   },
@@ -1050,6 +1051,58 @@ describe('Home screen', () => {
     expect(queryState.client.setQueryData).not.toHaveBeenCalled();
 
     renderer.act(() => tree.unmount());
+  });
+
+  // Owner, 2026-11-27: a cold start drew the saved page, and seconds later,
+  // after a scroll or a post opened and closed, other posts stood in its place.
+  describe('the read a launch owes the saved page', () => {
+    beforeEach(() => {
+      queryState.client.cancelQueries.mockClear();
+    });
+
+    const touchHome = (tree: renderer.ReactTestRenderer) => {
+      const touched = tree.root.findAll((node) => typeof node.props.onTouchStart === 'function')[0];
+      renderer.act(() => touched.props.onTouchStart());
+    };
+
+    it('is let go at the first touch, the saved page staying, and is offered on the pill', () => {
+      queryState.pages = [page([mediaItem('a', 'delivery-launch-a')])];
+      // Fetched by the launch before this one, and being read again.
+      queryState.dataUpdatedAt = 1;
+      queryState.isFetching = true;
+      const { tree } = renderHome();
+      expect(hostProps(tree, 'new-posts-pill').visible).toBe(false);
+      expect(queryState.client.cancelQueries).not.toHaveBeenCalled();
+
+      touchHome(tree);
+
+      const laneKey = vi.mocked(showcaseFeedLaneQueryOptions).mock.results.at(-1)!.value.queryKey;
+      expect(queryState.client.cancelQueries).toHaveBeenCalledTimes(1);
+      expect(queryState.client.cancelQueries).toHaveBeenCalledWith({ queryKey: laneKey, exact: true }, { revert: true });
+      // The pill offers what the read would have brought.
+      expect(hostProps(tree, 'new-posts-pill').visible).toBe(true);
+
+      renderer.act(() => tree.unmount());
+    });
+
+    it('is the only read a touch lets go: not a page read in this launch, nor a saved page at rest', () => {
+      queryState.pages = [page([mediaItem('a', 'delivery-launch-b')])];
+      // Later than this launch began, whatever clock the suite has set.
+      queryState.dataUpdatedAt = Number.MAX_SAFE_INTEGER;
+      queryState.isFetching = true;
+      const refreshing = renderHome();
+      touchHome(refreshing.tree);
+      renderer.act(() => refreshing.tree.unmount());
+
+      queryState.dataUpdatedAt = 1;
+      queryState.isFetching = false;
+      const resting = renderHome();
+      touchHome(resting.tree);
+
+      expect(queryState.client.cancelQueries).not.toHaveBeenCalled();
+      expect(hostProps(resting.tree, 'new-posts-pill').visible).toBe(false);
+      renderer.act(() => resting.tree.unmount());
+    });
   });
 
   it('takes the pill’s tap to the top, then cuts the lane to its first page and refetches it, with no refresh control', async () => {
