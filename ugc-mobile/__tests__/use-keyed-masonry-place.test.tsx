@@ -92,6 +92,21 @@ describe('useKeyedMasonryPlace', () => {
     expect(list.scrollToOffset).toHaveBeenCalledTimes(4);
   });
 
+  it('leaves the list where a scroll of the app\u2019s own took it, and owes nothing to other data', () => {
+    const top = undo();
+    // To the top: nowhere the cut-short scroll could have left the list.
+    place.onScroll(0);
+    place.onScroll(6522);
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS);
+    expect(top.list.scrollToOffset).toHaveBeenCalledTimes(1);
+
+    const next = undo();
+    act(() => next.view.update(<Screen list={next.list} data={['a', 'b', 'c', 'd']} />));
+    place.onScroll(6522);
+    vi.advanceTimersByTime(KEYED_MASONRY_PLACE_OWED_MS);
+    expect(next.list.scrollToOffset).toHaveBeenCalledTimes(1);
+  });
+
   it('owes nothing once the reader takes hold of the list', () => {
     const { list } = undo();
     place.onScrollBeginDrag();

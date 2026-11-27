@@ -27,7 +27,7 @@ import { RecyclerViewManager } from '@shopify/flash-list/dist/recyclerview/Recyc
  *    that comes back (Undo) gets the layout it left with.
  * 2. A tile that has been drawn keeps its column. A post leaving above it, or
  *    a tile above it changing height, slides it within its column and never
- *    moves it across. Tiles not drawn yet still go to the shorter column, so
+ *    moves it across (short of `KEPT_COLUMN_REACH_IN_WINDOWS`). Tiles not drawn yet still go to the shorter column, so
  *    the columns even out again below what the reader has seen.
  * 3. The reader's place is kept: when tiles above the screen go or come back,
  *    the list's offset moves with the column on screen that moved least, so
@@ -35,7 +35,7 @@ import { RecyclerViewManager } from '@shopify/flash-list/dist/recyclerview/Recyc
  *    native list by `useKeyedMasonryPlace`).
  *
  * This reaches into FlashList's list manager and masonry layout by replacing
- * two methods of each. It is JavaScript only, so it ships in an OTA; the
+ * two methods of the first and three of the second. It is JavaScript only, so it ships in an OTA; the
  * test above fails when the installed FlashList is not the version this was
  * read against, or no longer has the fault.
  */
@@ -43,20 +43,18 @@ import { RecyclerViewManager } from '@shopify/flash-list/dist/recyclerview/Recyc
 const KEPT_COLUMN = Symbol('keptColumn');
 const KEEPS_COLUMNS = Symbol('keepsColumns');
 const KEPT_COLUMN_REACH = Symbol('keptColumnReach');
+const OUT_OF_ORDER = Symbol('outOfOrder');
 
 /**
- * How far ahead of the shortest column a kept column may place its tile, as a
- * share of the list's draw distance. FlashList finds the tiles to draw with a
- * binary search that takes tiles to lie in order down the grid, which the
- * shortest-column rule guarantees and a kept column does not: a tile placed
- * `reach` ahead is that far out of order. The draw window reaches at least 0.6
- * of the draw distance past the screen on its shorter side, so tiles less out
- * of order than that are all still drawn. Past the reach a tile gives its
- * column up and goes to the shortest, as FlashList would put it; the reach
- * (405 pt on Explore) is taller than a tile, so that brings the columns back
- * within it and the tiles after keep theirs.
+ * How far ahead of the shortest column a kept column may place its tile, in
+ * window heights. Kept columns stand apart by what left one and not the other,
+ * and stay so as far down as the reader has been (tiles not reached yet even
+ * them out). That is the price of a tile never changing column, and of an Undo
+ * putting every tile back; this only stops a grid from running on as one
+ * column for screens on end after many posts leave one side. Past the reach a
+ * tile gives its column up and goes to the shortest, as FlashList would put it.
  */
-const KEPT_COLUMN_REACH_OF_DRAW_DISTANCE = 0.45;
+const KEPT_COLUMN_REACH_IN_WINDOWS = 1.5;
 
 type Layout = {
   x: number;
@@ -77,9 +75,12 @@ type MasonryInternals = {
   windowSize: { width: number; height: number };
   recomputeLayouts: (startIndex: number, endIndex: number) => void;
   placeSingleColumnItem: (layout: Layout) => void;
+  getVisibleLayouts: (start: number, end: number) => unknown;
   getSpan?: (index: number, skipTracking?: boolean) => number;
   [KEEPS_COLUMNS]?: boolean;
   [KEPT_COLUMN_REACH]?: number;
+  /** How far out of order down the grid a tile can be: what the search for the tiles to draw is widened by. */
+  [OUT_OF_ORDER]?: number;
 };
 
 type ManagerInternals = {
@@ -205,9 +206,8 @@ function setKeepsColumns(manager: ManagerInternals, keeps: boolean) {
   const layoutManager = manager.layoutManager;
   if (!isMasonry(layoutManager)) return;
   layoutManager[KEEPS_COLUMNS] = keeps;
-  layoutManager[KEPT_COLUMN_REACH] = keeps
-    ? Math.max(0, manager.engagedIndicesTracker.drawDistance * KEPT_COLUMN_REACH_OF_DRAW_DISTANCE)
-    : 0;
+  layoutManager[KEPT_COLUMN_REACH] = keeps ? layoutManager.windowSize.height * KEPT_COLUMN_REACH_IN_WINDOWS : 0;
+  if (!keeps) layoutManager[OUT_OF_ORDER] = 0;
 }
 
 /** Has FlashList note the span of the tiles it has no span for, as it does for a tile new at the end. */
@@ -356,6 +356,30 @@ function followPosts(manager: ManagerInternals) {
   tracker.scrollOffset = offset;
 }
 
+/**
+ * How far out of order down the grid a tile of this layout can be: the most a
+ * tile stands ahead of the shortest column where it is placed, and, when any
+ * does, the tallest tile on top (the search asks where a tile ends, not where
+ * it begins). 0 for a grid laid out by the shortest-column rule alone.
+ */
+function outOfOrder(layoutManager: MasonryInternals) {
+  const columnWidth = layoutManager.boundedSize / layoutManager.maxColumns;
+  const heights: number[] = new Array(layoutManager.maxColumns).fill(0);
+  let ahead = 0;
+  let tallest = 0;
+  for (const layout of layoutManager.layouts) {
+    if (!layout) continue;
+    const first = Math.min(layoutManager.maxColumns - 1, Math.max(0, Math.round(layout.x / columnWidth)));
+    const last = Math.min(layoutManager.maxColumns, first + Math.max(1, Math.round(layout.width / columnWidth)));
+    if (last - first === 1) ahead = Math.max(ahead, layout.y - Math.min(...heights));
+    for (let column = first; column < last; column += 1) {
+      heights[column] = Math.max(heights[column], layout.y + layout.height);
+    }
+    tallest = Math.max(tallest, layout.height);
+  }
+  return ahead > 0.5 ? ahead + tallest : 0;
+}
+
 function columnOf(layoutManager: MasonryInternals, layout: Layout) {
   return Math.round(layout.x / (layoutManager.boundedSize / layoutManager.maxColumns));
 }
@@ -363,7 +387,7 @@ function columnOf(layoutManager: MasonryInternals, layout: Layout) {
 let installed: (() => void) | null = null;
 
 /**
- * Replaces the four FlashList methods, once. Returns what puts FlashList's own
+ * Replaces the five FlashList methods, once. Returns what puts FlashList's own
  * back (the tests' control), or null when the installed FlashList does not
  * have the methods this was written against, and is left as it is.
  */
@@ -375,11 +399,14 @@ export function installKeyedMasonryLayouts(): (() => void) | null {
   const stockUpdateLayoutParams = managerPrototype.updateLayoutParams;
   const stockPlace = masonryPrototype.placeSingleColumnItem;
   const stockRecompute = masonryPrototype.recomputeLayouts;
+  // The base class's, which the masonry inherits: ours goes on the masonry alone.
+  const stockVisible = masonryPrototype.getVisibleLayouts;
   if (
     typeof stockProcessDataUpdate !== 'function'
     || typeof stockUpdateLayoutParams !== 'function'
     || typeof stockPlace !== 'function'
     || typeof stockRecompute !== 'function'
+    || typeof stockVisible !== 'function'
   ) {
     return null;
   }
@@ -410,7 +437,7 @@ export function installKeyedMasonryLayouts(): (() => void) | null {
         this.columnHeights[kept.column] += layout.height;
         return;
       }
-      // Too far ahead of the shortest column (`KEPT_COLUMN_REACH_OF_DRAW_DISTANCE`):
+      // Too far ahead of the shortest column (`KEPT_COLUMN_REACH_IN_WINDOWS`):
       // the tile is placed as FlashList places it, and keeps that column from here.
       delete layout[KEPT_COLUMN];
     }
@@ -436,6 +463,19 @@ export function installKeyedMasonryLayouts(): (() => void) | null {
         layout[KEPT_COLUMN] = { column: columnOf(this, layout), of: this.maxColumns };
       }
     }
+    this[OUT_OF_ORDER] = outOfOrder(this);
+  };
+
+  // FlashList finds the tiles to draw with a binary search that takes them to
+  // lie in order down the grid: the shortest-column rule guarantees it, and a
+  // kept column does not, so a tile on screen could be left out (30 of them in
+  // the test, after four posts left one column). The search is widened by how
+  // far out of order a tile can be; it then finds a few more tiles than are
+  // near the screen, and never fewer. Nothing is widened while every tile is
+  // where FlashList would put it.
+  masonryPrototype.getVisibleLayouts = function getVisibleLayouts(this: MasonryInternals, start: number, end: number) {
+    const wider = this[KEEPS_COLUMNS] ? this[OUT_OF_ORDER] ?? 0 : 0;
+    return stockVisible.call(this, start - wider, end + wider);
   };
 
   installed = () => {
@@ -443,6 +483,7 @@ export function installKeyedMasonryLayouts(): (() => void) | null {
     managerPrototype.updateLayoutParams = stockUpdateLayoutParams;
     masonryPrototype.placeSingleColumnItem = stockPlace;
     masonryPrototype.recomputeLayouts = stockRecompute;
+    delete (masonryPrototype as Partial<MasonryInternals>).getVisibleLayouts;
     installed = null;
   };
   return installed;

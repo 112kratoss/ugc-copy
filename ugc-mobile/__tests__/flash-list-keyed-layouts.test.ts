@@ -22,7 +22,6 @@ import {
 
 import {
   createMasonryListDevice,
-  DEVICE_DRAW_DISTANCE,
   DEVICE_WINDOW,
   deviceTiles,
   type DeviceTile,
@@ -50,12 +49,12 @@ afterEach(() => {
 
 describe('FlashList as installed', () => {
   it('is the version the keyed layouts were read against', () => {
-    // lib/keyed-masonry-layouts.ts replaces four of FlashList's own methods
+    // lib/keyed-masonry-layouts.ts replaces five of FlashList's own methods
     // and reads its private fields. On a new version: read
     // RecyclerViewManager.processDataUpdate and updateLayoutParams,
-    // RVLayoutManager.modifyLayout and RVMasonryLayoutManagerImpl's
-    // recomputeLayouts and placeSingleColumnItem again, run this file, check
-    // Explore on a device, then move this pin.
+    // RVLayoutManager.modifyLayout and getVisibleLayouts, and
+    // RVMasonryLayoutManagerImpl's recomputeLayouts and placeSingleColumnItem
+    // again, run this file, check Explore on a device, then move this pin.
     const manifest = JSON.parse(readFileSync(
       path.resolve(__dirname, '../node_modules/@shopify/flash-list/package.json'),
       'utf8',
@@ -186,25 +185,54 @@ describe('a masonry whose tiles follow their posts', () => {
     expect(still.length).toBeGreaterThan(0);
   });
 
-  it('draws every tile on screen after posts leave one column only, all the way up and down', () => {
+  it('draws every tile on screen after posts leave one column only, and still moves none across', () => {
     // Kept columns stand apart by what left; FlashList finds the tiles to
-    // draw taking them to lie in order down the grid (review of #955, finding 1).
+    // draw taking them to lie in order down the grid (reviews of #955).
     const tiles = deviceTiles(90);
     const device = createMasonryListDevice(tiles, asFeed('all'));
     device.scrollTo(5200);
+    const columnsBefore = new Map([...device.layouts()].map(([id, layout]) => [id, layout.x]));
+    const reachedBefore = device.layouts();
+    const offsetBefore = device.offset();
     const left = tiles.slice(4, 30).filter((tile) => device.layoutOf(tile.id).x === 0).slice(0, 4);
     expect(left).toHaveLength(4);
+    const lost = left.reduce((sum, tile) => sum + tile.height, 0);
+    expect(lost).toBeGreaterThan(900);
+
     device.setData(tiles.filter((tile) => !left.includes(tile)));
-    device.scrollTo(0, 37);
-    device.scrollTo(9000, 37);
+    // Every tile the reader had reached is in the column it was in.
+    device.layouts().forEach((layout, id) => {
+      if (reachedBefore.get(id)!.y < offsetBefore + DEVICE_WINDOW.height) expect(layout.x).toBe(columnsBefore.get(id));
+    });
+    expect(device.scrollTo(0, 37)).toBe(0);
+    device.scrollTo(5200, 37);
     device.scrollTo(0, 113);
     expect(device.undrawn()).toBe(0);
-    // The columns are back within a tile or so of each other below what left.
+
+    // And the four come back to a grid exactly as it was.
+    device.scrollTo(device.offset());
+    device.setData(tiles);
+    const reached = (layouts: typeof reachedBefore) => new Map(
+      [...layouts].filter(([id]) => reachedBefore.get(id)!.y < offsetBefore + DEVICE_WINDOW.height),
+    );
+    expect(reached(device.layouts())).toEqual(reached(reachedBefore));
+  });
+
+  it('gives kept columns up past a window and a half, so a grid never runs on as one column', () => {
+    const tiles = deviceTiles(120);
+    const device = createMasonryListDevice(tiles, asFeed('all'));
+    device.scrollTo(9000);
+    const left = tiles.slice(4, 60).filter((tile) => device.layoutOf(tile.id).x === 0).slice(0, 9);
+    expect(left.reduce((sum, tile) => sum + tile.height, 0)).toBeGreaterThan(DEVICE_WINDOW.height * 1.5 + 400);
+    device.setData(tiles.filter((tile) => !left.includes(tile)));
+    device.scrollTo(0, 61);
+    device.scrollTo(20000, 61);
+    expect(device.undrawn()).toBe(0);
     const layouts = [...device.layouts().values()];
     const ends = [0, DEVICE_WINDOW.width / 2].map((x) => Math.max(
       ...layouts.filter((layout) => layout.x === x).map((layout) => layout.y + layout.height),
     ));
-    expect(Math.abs(ends[0] - ends[1])).toBeLessThanOrEqual(DEVICE_DRAW_DISTANCE * 0.45 + 1);
+    expect(Math.abs(ends[0] - ends[1])).toBeLessThanOrEqual(DEVICE_WINDOW.height * 1.5 + 1);
   });
 
   it('stays where it is when posts it has never held arrive above the screen (a refresh)', () => {

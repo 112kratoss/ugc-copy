@@ -28,9 +28,10 @@ export const KEYED_MASONRY_PLACE_RETRY_MS = [60, 180, 400, 800];
  * old end, and a scroll made as the content reports its new size did not always
  * take either (Pixel 9a emulator, 2026-11-28). So the scroll stays owed and is
  * made again, at each size the content reports, at each scroll event that
- * leaves the list elsewhere, and a few times on a clock, until a scroll event
- * says the list is there, the reader takes hold of the list (nothing moves a
- * list under a finger), or the time above runs out.
+ * leaves the list short of it, and a few times on a clock, until a scroll event
+ * says the list is there or somewhere else altogether, the reader takes hold
+ * of the list (nothing moves a list under a finger), other data arrives, or
+ * the time above runs out.
  *
  * While the screen is covered on Android the scroll view may take none of
  * them, and `useScrollWithinContent` brings it to the list's offset as the
@@ -40,7 +41,7 @@ export function useKeyedMasonryPlace(
   listRef: RefObject<KeyedMasonryList | null>,
   data: readonly unknown[],
 ) {
-  const owed = useRef<{ offset: number; until: number } | null>(null);
+  const owed = useRef<{ offset: number; from: number; until: number } | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const place = useMemo(() => {
@@ -59,9 +60,10 @@ export function useKeyedMasonryPlace(
       listRef.current?.scrollToOffset({ offset: due.offset, animated: false });
     };
     return {
-      owe: (offset: number) => {
+      /** `shift`: how far down the list is being sent to get to `offset`. */
+      owe: (offset: number, shift: number) => {
         stop();
-        owed.current = { offset, until: Date.now() + KEYED_MASONRY_PLACE_OWED_MS };
+        owed.current = { offset, from: offset - shift, until: Date.now() + KEYED_MASONRY_PLACE_OWED_MS };
         timers.current = KEYED_MASONRY_PLACE_RETRY_MS.map((wait) => setTimeout(bring, wait));
       },
       stop,
@@ -70,7 +72,10 @@ export function useKeyedMasonryPlace(
       onScroll: (offset: number) => {
         const due = owed.current;
         if (!due) return;
-        if (Math.abs(offset - due.offset) <= 1) stop();
+        // There; or somewhere the cut-short scroll could not have left it, which
+        // is a scroll of the app's own (to the top, on a tab's second press or
+        // "New posts") or the reader's, and is not undone.
+        if (Math.abs(offset - due.offset) <= 1 || offset < due.from - 2 || offset > due.offset + 1) stop();
         else bring();
       },
       onScrollBeginDrag: stop,
@@ -79,11 +84,15 @@ export function useKeyedMasonryPlace(
 
   useLayoutEffect(() => {
     const shift = takeKeyedMasonryShift(data);
-    if (!shift) return;
+    // Other data, and nothing to keep: what the data before it was owed goes with it.
+    if (!shift) {
+      place.stop();
+      return;
+    }
     const list = listRef.current;
     if (!list) return;
     const offset = list.getAbsoluteLastScrollOffset();
-    if (shift > 0) place.owe(offset);
+    if (shift > 0) place.owe(offset, shift);
     else place.stop();
     list.scrollToOffset({ offset, animated: false });
   }, [data, listRef, place]);
