@@ -316,9 +316,20 @@ export const MOBILE_MEDIA_DIAGNOSTICS_RATE_LIMIT = {
 } as const;
 
 /**
- * The mobile app's error reports (`/api/mobile/client-errors`): an app sends five per session at
- * most, so this only stops a crash loop or a hostile sender. Keyed by the account for a signed-in
- * report and by the network for a guest's, so people behind one network are not one budget.
+ * The mobile app's error reports (`/api/mobile/client-errors`), per network: applied first, before
+ * the body is read or a token looked up, and the only budget of a guest's report or one with no
+ * token (a guest session costs nothing to mint). Wider than the account's, so a few people behind
+ * one network are not one budget.
+ */
+export const MOBILE_CLIENT_ERRORS_NETWORK_RATE_LIMIT = {
+  scope: 'mobile:client-errors-network',
+  limit: 60,
+  windowSeconds: 10 * 60,
+} as const;
+
+/**
+ * A registered account's own budget of error reports: an app sends five per session at most, so
+ * this only stops a crash loop.
  */
 export const MOBILE_CLIENT_ERRORS_RATE_LIMIT = {
   scope: 'mobile:client-errors',

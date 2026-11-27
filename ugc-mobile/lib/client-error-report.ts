@@ -48,7 +48,10 @@ export type ClientErrorReportBody = ClientErrorContext & {
 /** Where a fatal error's report waits for the next launch (`lib/client-error-store.ts`). */
 export type ClientErrorStore = {
   save: (reports: ClientErrorReportBody[]) => Promise<void>;
-  take: () => Promise<ClientErrorReportBody[]>;
+  /** What is kept, left in place. */
+  peek: () => Promise<ClientErrorReportBody[]>;
+  /** Lets go of reports that were sent. */
+  drop: (sent: ClientErrorReportBody[]) => Promise<void>;
 };
 
 /** The longest a fatal error waits for its report to be kept before the app ends as before. */
@@ -197,14 +200,26 @@ export function setClientErrorReporter(reporter: ClientErrorReporter): () => voi
   const waiting = state.waiting.splice(0);
   for (const caught of waiting) deliver(caught);
   // What a fatal error kept at an earlier launch, sent now and never counted against this session.
+  // Each leaves the device only once its send succeeded; the rest wait for the next launch.
   try {
     const store = state.store;
     if (store && !state.dev) {
-      void Promise.resolve(store.take())
-        .then((kept) => {
-          for (const body of (Array.isArray(kept) ? kept : []).slice(0, CLIENT_ERROR_LIMITS.perSession)) send(body);
-        })
-        .catch(() => undefined);
+      void (async () => {
+        const kept = await store.peek();
+        const sent: ClientErrorReportBody[] = [];
+        for (const body of (Array.isArray(kept) ? kept : []).slice(0, CLIENT_ERROR_LIMITS.perSession)) {
+          try {
+            await reporter.send(body);
+            sent.push(body);
+          } catch (error) {
+            // Offline or busy: kept for the next launch. Refused as invalid (a 4xx other than a
+            // rate limit): it would be refused at every launch, so it is let go of.
+            const status = (error as { status?: unknown } | null)?.status;
+            if (typeof status === 'number' && status >= 400 && status < 500 && status !== 429) sent.push(body);
+          }
+        }
+        if (sent.length > 0) await store.drop(sent);
+      })().catch(() => undefined);
     }
   } catch {
     // Kept reports wait for the next launch.

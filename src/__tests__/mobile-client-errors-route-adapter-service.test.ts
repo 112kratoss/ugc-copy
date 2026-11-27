@@ -6,6 +6,7 @@ import operations from '../../contracts/mobile-api-operations-v1.json';
 import {
   BackendRateLimitError,
   MOBILE_CLIENT_ERRORS_DAILY_CAP,
+  MOBILE_CLIENT_ERRORS_NETWORK_RATE_LIMIT,
   MOBILE_CLIENT_ERRORS_RATE_LIMIT,
 } from '@/lib/backend-rate-limit';
 import { parseMobileClientErrorReport } from '@/lib/mobile-client-errors';
@@ -48,7 +49,7 @@ function dependencies(overrides: Partial<NonNullable<Parameters<typeof postMobil
       createServiceClient: () => admin.client,
       enforceBackendRateLimit: vi.fn(async () => ({ allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-11-27T10:10:00.000Z' })),
       getRateLimitKey: () => 'network-1',
-      getOptionalUserId: vi.fn(async () => null),
+      getOptionalIdentity: vi.fn(async () => null),
       logError: vi.fn(),
       ...overrides,
     },
@@ -63,7 +64,7 @@ describe('POST /api/mobile/client-errors', () => {
   });
 
   it('stores the contract\'s report, answering 204 with nothing', async () => {
-    const { admin, deps } = dependencies({ getOptionalUserId: vi.fn(async () => 'user-1') });
+    const { admin, deps } = dependencies({ getOptionalIdentity: vi.fn(async () => ({ userId: 'user-1', registered: true })) });
     const response = await postMobileClientErrorsRouteResponse({
       request: post(contract.request, { authorization: 'Bearer token' }),
       dependencies: deps,
@@ -83,15 +84,43 @@ describe('POST /api/mobile/client-errors', () => {
       stack: contract.request.stack,
       component_stack: contract.request.componentStack,
     }]);
-    // A signed-in report is limited by its account, so people behind one network are not one budget.
-    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: 'user:user-1' });
+    // A registered account's report is limited by its account too, so people behind one network
+    // are not one budget.
+    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_NETWORK_RATE_LIMIT, key: 'network-1' });
+    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: 'user-1' });
     expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_DAILY_CAP, key: 'all' });
   });
 
-  it('limits a guest\'s report by its network', async () => {
-    const { deps } = dependencies();
-    await postMobileClientErrorsRouteResponse({ request: post(contract.request), dependencies: deps });
-    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: 'network:network-1' });
+  // A guest session costs nothing to mint, so it never earns a budget of its own: an anonymous
+  // session's report, and one with no token, are held to the network's.
+  it('limits a guest\'s report and one with no token by the network alone, keeping the guest on the row', async () => {
+    for (const identity of [null, { userId: 'guest-1', registered: false }]) {
+      const { admin, deps } = dependencies({ getOptionalIdentity: vi.fn(async () => identity) });
+      await postMobileClientErrorsRouteResponse({ request: post(contract.request), dependencies: deps });
+      const scopes = (deps.enforceBackendRateLimit as ReturnType<typeof vi.fn>).mock.calls.map((call) => (call as [unknown, { scope: string; key: string }])[1]);
+      expect(scopes).toEqual([
+        { ...MOBILE_CLIENT_ERRORS_NETWORK_RATE_LIMIT, key: 'network-1' },
+        { ...MOBILE_CLIENT_ERRORS_DAILY_CAP, key: 'all' },
+      ]);
+      expect(admin.inserted[0].user_id).toBe(identity?.userId ?? null);
+    }
+  });
+
+  // A bogus token must not cost an auth round trip for free: the network's limit comes first.
+  it('applies the network limit before it reads the body or looks the token up', async () => {
+    const limited = new BackendRateLimitError({ allowed: false, limit: 60, remaining: 0, retryAfterSeconds: 60, resetAt: '2026-11-27T10:10:00.000Z' });
+    const readBoundedJsonBody = vi.fn();
+    const getOptionalIdentity = vi.fn(async () => null);
+    const { admin, deps } = dependencies({
+      enforceBackendRateLimit: vi.fn(async () => { throw limited; }) as never,
+      readBoundedJsonBody: readBoundedJsonBody as never,
+      getOptionalIdentity,
+    });
+    const response = await postMobileClientErrorsRouteResponse({ request: post(contract.request, { authorization: 'Bearer bogus' }), dependencies: deps });
+    expect(response.status).toBe(429);
+    expect(readBoundedJsonBody).not.toHaveBeenCalled();
+    expect(getOptionalIdentity).not.toHaveBeenCalled();
+    expect(admin.inserted).toEqual([]);
   });
 
   // Many addresses must not fill the table: past the day's cap a report is dropped quietly.
@@ -109,7 +138,7 @@ describe('POST /api/mobile/client-errors', () => {
   });
 
   it('keeps a report whose session could not be verified, without an account', async () => {
-    const { admin, deps } = dependencies({ getOptionalUserId: vi.fn(async () => null) });
+    const { admin, deps } = dependencies({ getOptionalIdentity: vi.fn(async () => null) });
     const response = await postMobileClientErrorsRouteResponse({ request: post(contract.request), dependencies: deps });
     expect(response.status).toBe(204);
     expect(admin.inserted[0].user_id).toBeNull();

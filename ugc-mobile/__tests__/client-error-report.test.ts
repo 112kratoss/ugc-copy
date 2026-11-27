@@ -165,7 +165,10 @@ describe('the global handlers', () => {
         save: vi.fn((bodies: ClientErrorReportBody[]) => new Promise<void>((resolve) => {
           finishSave = () => { saved.push(...bodies); resolve(); };
         })),
-        take: vi.fn(async () => saved.splice(0)),
+        peek: vi.fn(async () => [...saved]),
+        drop: vi.fn(async (sent: ClientErrorReportBody[]) => {
+          for (const body of sent) saved.splice(saved.indexOf(body), 1);
+        }),
       };
       configureClientErrorStore(store, () => context);
       const previous = vi.fn();
@@ -183,12 +186,20 @@ describe('the global handlers', () => {
       expect(previous).toHaveBeenCalledTimes(1);
       expect(saved).toEqual([expect.objectContaining({ message: 'Error: fatal boom', fatal: true, route: context.route })]);
 
-      // The next launch: the reporter, once set, sends what was kept.
+      // The next launch, offline: the send fails and the report stays on the device.
+      resetClientErrorReportsForTests({ dev: false });
+      configureClientErrorStore(store, () => context);
+      reporter(vi.fn(async (_report: unknown) => { throw new Error('Network request failed'); }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(saved).toHaveLength(1);
+
+      // The launch after, online: sent, and only then let go of.
       resetClientErrorReportsForTests({ dev: false });
       configureClientErrorStore(store, () => context);
       const send = reporter();
       await vi.advanceTimersByTimeAsync(0);
       expect(send).toHaveBeenCalledWith(expect.objectContaining({ message: 'Error: fatal boom', fatal: true }));
+      expect(saved).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -197,7 +208,7 @@ describe('the global handlers', () => {
   it('ends the app as before when keeping the report hangs or throws, after at most a second', async () => {
     vi.useFakeTimers();
     try {
-      configureClientErrorStore({ save: () => new Promise<void>(() => undefined), take: async () => [] }, () => context);
+      configureClientErrorStore({ save: () => new Promise<void>(() => undefined), peek: async () => [], drop: async () => undefined }, () => context);
       const previous = vi.fn();
       let installed: ((error: unknown, isFatal?: boolean) => void) | null = null;
       installGlobalErrorHandlers({
@@ -210,7 +221,7 @@ describe('the global handlers', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(previous).toHaveBeenCalledTimes(1);
 
-      configureClientErrorStore({ save: () => { throw new Error('disk'); }, take: async () => [] }, () => context);
+      configureClientErrorStore({ save: () => { throw new Error('disk'); }, peek: async () => [], drop: async () => undefined }, () => context);
       expect(() => installed!(new Error('throws'), true)).not.toThrow();
       await vi.advanceTimersByTimeAsync(0);
       expect(previous).toHaveBeenCalledTimes(2);

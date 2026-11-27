@@ -31,25 +31,33 @@ beforeEach(() => {
 
 // A fatal error's report waits on the device for the next launch (audit 2026-11-27 review, E).
 describe('the client error store', () => {
-  it('keeps reports across a launch and hands them over once', async () => {
+  it('keeps reports across a launch, and lets go only of the ones it is told were sent', async () => {
     const store = createClientErrorStore();
     await store.save([report('a')]);
     await store.save([report('b')]);
 
     const next = createClientErrorStore();
-    expect((await next.take()).map((body) => body.message)).toEqual(['a', 'b']);
-    expect(await next.take()).toEqual([]);
+    const kept = await next.peek();
+    expect(kept.map((body) => body.message)).toEqual(['a', 'b']);
+    // Offline at this launch: nothing was sent, and both wait for the next.
+    expect((await next.peek()).map((body) => body.message)).toEqual(['a', 'b']);
+    await next.drop([kept[0]]);
+    expect((await next.peek()).map((body) => body.message)).toEqual(['b']);
+    await next.drop([kept[1]]);
+    expect(await next.peek()).toEqual([]);
     expect(storage.values.has(CLIENT_ERROR_STORE_KEY)).toBe(false);
   });
 
-  it('keeps five at most, and reads anything unreadable as nothing', async () => {
+  it('keeps five at most, reads anything unreadable as nothing, and never throws', async () => {
     const store = createClientErrorStore();
     for (let index = 0; index < 8; index += 1) await store.save([report(`e${index}`)]);
-    expect((await store.take()).map((body) => body.message)).toEqual(['e3', 'e4', 'e5', 'e6', 'e7']);
+    expect((await store.peek()).map((body) => body.message)).toEqual(['e3', 'e4', 'e5', 'e6', 'e7']);
 
     storage.values.set(CLIENT_ERROR_STORE_KEY, '{not json');
-    expect(await store.take()).toEqual([]);
+    expect(await store.peek()).toEqual([]);
     storage.getItem.mockRejectedValueOnce(new Error('disk'));
-    expect(await store.take()).toEqual([]);
+    expect(await store.peek()).toEqual([]);
+    storage.getItem.mockRejectedValueOnce(new Error('disk'));
+    await expect(store.drop([report('x')])).resolves.toBeUndefined();
   });
 });

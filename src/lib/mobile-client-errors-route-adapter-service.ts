@@ -5,11 +5,13 @@ import { logBackendRouteError } from '@/lib/backend-logger';
 import {
   BackendRateLimitError,
   MOBILE_CLIENT_ERRORS_DAILY_CAP,
+  MOBILE_CLIENT_ERRORS_NETWORK_RATE_LIMIT,
   MOBILE_CLIENT_ERRORS_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
 } from '@/lib/backend-rate-limit';
 import { readBoundedJsonBody } from '@/lib/bounded-json-request';
+import { isGuestUser } from '@/lib/account-identity';
 import { getClientNetworkKey } from '@/lib/client-network-key';
 import { parseMobileClientErrorReport, recordMobileClientError } from '@/lib/mobile-client-errors';
 import { getVerifiedAuthUserResult } from '@/lib/server-auth-user';
@@ -22,22 +24,25 @@ type MobileClientErrorsRouteDependencies = {
   createServiceClient?: typeof createServiceClient;
   enforceBackendRateLimit?: typeof enforceBackendRateLimit;
   getRateLimitKey?: (headers: Headers) => string;
-  getOptionalUserId?: (request: Request) => Promise<string | null>;
+  getOptionalIdentity?: (request: Request) => Promise<ReportIdentity | null>;
   logError?: typeof logBackendRouteError;
   readBoundedJsonBody?: typeof readBoundedJsonBody;
   recordMobileClientError?: typeof recordMobileClientError;
 };
 
+type ReportIdentity = { userId: string; registered: boolean };
+
 /**
- * The account a report came from, when it came with a session. A session that cannot be verified
- * is no account here, never a 401: the app reads a 401 as its session ending, and an error report
- * must never sign anybody out.
+ * The identity a report came from, when it came with a session: a registered account or a guest.
+ * A session that cannot be verified is no identity here, never a 401: the app reads a 401 as its
+ * session ending, and an error report must never sign anybody out.
  */
-async function getOptionalUserId(request: Request): Promise<string | null> {
+async function getOptionalIdentity(request: Request): Promise<ReportIdentity | null> {
   if (!request.headers.get('Authorization')) return null;
   try {
     const { data: { user }, error } = await getVerifiedAuthUserResult(createUserClient(request));
-    return error || !user?.id ? null : user.id;
+    if (error || !user?.id) return null;
+    return { userId: user.id, registered: !isGuestUser(user) };
   } catch {
     return null;
   }
@@ -48,7 +53,7 @@ function resolveDependencies(dependencies: MobileClientErrorsRouteDependencies |
     createServiceClient: dependencies?.createServiceClient ?? createServiceClient,
     enforceBackendRateLimit: dependencies?.enforceBackendRateLimit ?? enforceBackendRateLimit,
     getRateLimitKey: dependencies?.getRateLimitKey ?? getClientNetworkKey,
-    getOptionalUserId: dependencies?.getOptionalUserId ?? getOptionalUserId,
+    getOptionalIdentity: dependencies?.getOptionalIdentity ?? getOptionalIdentity,
     logError: dependencies?.logError ?? logBackendRouteError,
     readBoundedJsonBody: dependencies?.readBoundedJsonBody ?? readBoundedJsonBody,
     recordMobileClientError: dependencies?.recordMobileClientError ?? recordMobileClientError,
@@ -56,6 +61,20 @@ function resolveDependencies(dependencies: MobileClientErrorsRouteDependencies |
 }
 
 async function handleMobileClientErrorPost(request: Request, dependencies: ReturnType<typeof resolveDependencies>) {
+  const admin = dependencies.createServiceClient();
+  // The network's budget first: before the body is read or a token looked up, so a bogus token
+  // costs no auth round trip.
+  try {
+    await dependencies.enforceBackendRateLimit(admin, {
+      ...MOBILE_CLIENT_ERRORS_NETWORK_RATE_LIMIT,
+      key: dependencies.getRateLimitKey(request.headers),
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) return createBackendRateLimitResponse(error);
+    dependencies.logError('Client error report rate limit failed:', error);
+    return Response.json({ error: 'Failed to check client error report limits.' }, { status: 500 });
+  }
+
   const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   if (contentType !== 'application/json') {
     return Response.json({ error: 'Unsupported client error report content type.' }, { status: 415 });
@@ -78,19 +97,18 @@ async function handleMobileClientErrorPost(request: Request, dependencies: Retur
   const report = parseMobileClientErrorReport(body.value);
   if (!report) return Response.json({ error: 'Invalid client error report.' }, { status: 400 });
 
-  const admin = dependencies.createServiceClient();
-  const userId = await dependencies.getOptionalUserId(request);
-  try {
-    // The sender's own budget: its account when signed in, its network when a guest's.
-    await dependencies.enforceBackendRateLimit(admin, {
-      ...MOBILE_CLIENT_ERRORS_RATE_LIMIT,
-      key: userId ? `user:${userId}` : `network:${dependencies.getRateLimitKey(request.headers)}`,
-    });
-  } catch (error) {
-    if (error instanceof BackendRateLimitError) return createBackendRateLimitResponse(error);
-    dependencies.logError('Client error report rate limit failed:', error);
-    return Response.json({ error: 'Failed to check client error report limits.' }, { status: 500 });
+  const identity = await dependencies.getOptionalIdentity(request);
+  // A registered account has a budget of its own as well; a guest session, free to mint, does not.
+  if (identity?.registered) {
+    try {
+      await dependencies.enforceBackendRateLimit(admin, { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: identity.userId });
+    } catch (error) {
+      if (error instanceof BackendRateLimitError) return createBackendRateLimitResponse(error);
+      dependencies.logError('Client error report rate limit failed:', error);
+      return Response.json({ error: 'Failed to check client error report limits.' }, { status: 500 });
+    }
   }
+  const userId = identity?.userId ?? null;
   try {
     await dependencies.enforceBackendRateLimit(admin, { ...MOBILE_CLIENT_ERRORS_DAILY_CAP, key: 'all' });
   } catch (error) {
@@ -111,8 +129,8 @@ async function handleMobileClientErrorPost(request: Request, dependencies: Retur
 /**
  * `POST /api/mobile/client-errors`: the mobile app's error reports (audit 2026-11-27). Public in
  * the route policy, so a guest's report and one sent while the session is what is failing both
- * arrive; rate-limited per account (per network for a guest), held to a global daily cap that
- * drops quietly, body-capped, and validated and truncated again here.
+ * arrive; limited per network first, per registered account too, and by a global daily cap that
+ * drops quietly; body-capped, and validated and truncated again here.
  */
 export async function postMobileClientErrorsRouteResponse({
   dependencies,
