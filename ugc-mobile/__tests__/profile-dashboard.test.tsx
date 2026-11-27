@@ -3372,6 +3372,38 @@ describe('ProfileDashboard tab switch', () => {
     renderer.act(() => { tree.unmount(); });
   });
 
+  // Feel audit 2026-11-27: the first pass over pictures not yet cached janked
+  // (12.6% of frames against 2.2% once cached), each tile reading its preview
+  // over the network as the fling reached it. The pages past the first are
+  // read ahead now, and their previews go to the disk as each lands.
+  it('caches the previews of every page past the first as it lands, while Profile is in view', () => {
+    vi.useFakeTimers();
+    const many = Array.from({ length: 30 }, (_, index) => ({
+      id: `creation-${index}`, status: 'succeeded', output_url: `creation-${index}.jpg`, preview_url: `creation-${index}.webp`,
+      category: 'image', title: `Creation ${index}`, created_at: '2026-10-13T09:00:00Z',
+    }));
+    queryState.generations = many;
+    navigationState.focused = false;
+    const tree = renderDashboard();
+    expect(warmupState.calls).toHaveLength(0);
+
+    navigationState.focused = true;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    // At once, not after the switch warm-up's wait: the reader is on their way to them.
+    expect(warmupState.calls).toHaveLength(1);
+    const { images, tile } = warmupState.calls[0];
+    expect(images).toEqual(drawnPictures(tree).slice(24));
+    expect(images.map((picture) => picture.url)).toEqual(many.slice(24).map((run) => run.preview_url));
+    expect(tile?.width).toBe(130);
+    expect(tile?.height).toBeCloseTo(130 / 0.74);
+
+    // Profile leaves the front: what has not started is dropped.
+    navigationState.focused = false;
+    renderer.act(() => { tree.update(<ProfileDashboard initialTab="Creations" />); });
+    expect(warmupState.stops).toBe(1);
+    renderer.act(() => { tree.unmount(); });
+  });
+
   it('caches nothing before the shown tab has answered', () => {
     vi.useFakeTimers();
     queryState.generationsIsFetched = false;

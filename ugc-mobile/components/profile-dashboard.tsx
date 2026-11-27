@@ -95,6 +95,7 @@ import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
   PROFILE_MEDIA_MIN_FILL_COUNT,
+  PROFILE_MEDIA_PAGE_SIZE,
   PROFILE_RENDERING_REFRESH_INTERVAL_MS,
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
@@ -489,6 +490,28 @@ export function ProfileDashboard({
       stop?.();
     };
   }, [accessToken, pageWidth, scale, switchImagesKey, switchWarmReady]);
+  // The shown tab's tiles past its first page's worth, which the grid mounts
+  // only as a scroll nears them: their previews go into the disk cache under
+  // the tiles' own keys as each page lands, one at a time and each once a
+  // launch (`warmImages`), while Profile is in view. The next page is asked for
+  // two screens ahead, so by the time a fling reaches its tiles they read their
+  // previews from the disk rather than the network: they draw within a frame or
+  // two of mounting instead of over the scroll, and fewer wait the 350 ms that
+  // brings up the loading sketch (feel audit 2026-11-27: the first pass over
+  // pictures not cached janked, 12.6% of frames against 2.2% once cached).
+  // At once, not after the switch warm-up's wait: the reader is on the way.
+  // Previews only, as for a switch, and decoded no larger than a tile.
+  const laterPageImages = tabCards
+    .slice(PROFILE_MEDIA_PAGE_SIZE)
+    .flatMap((card) => profileTilePreview(card) ?? []);
+  const laterPageImagesKey = JSON.stringify(laterPageImages);
+  const laterPageWarmReady = isFocused && !isMediaLoading && laterPageImages.length > 0;
+  useEffect(() => {
+    if (!laterPageWarmReady) return undefined;
+    const images = JSON.parse(laterPageImagesKey) as WarmImage[];
+    const tileWidth = (pageWidth / PROFILE_GALLERY_COLUMNS) * scale;
+    return warmImages(images, accessToken, { width: tileWidth, height: tileWidth / PROFILE_GALLERY_ASPECT_RATIO });
+  }, [accessToken, laterPageImagesKey, laterPageWarmReady, pageWidth, scale]);
   const activeTabPaging = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
