@@ -242,8 +242,24 @@ describe('useCreatorFollow', () => {
     const result = render({ creatorId: 'creator-1', enabled: true });
 
     expect(result.canFollow).toBe(false);
+    // Nothing to wait for: a signed-out viewer is shown Follow, which signs them up.
+    expect(result.loading).toBe(false);
     act(() => result.toggle());
     expect(state.mutate).not.toHaveBeenCalled();
+  });
+
+  // Device audit 2026-11-27 (S24): a slide beside the one on screen, not yet
+  // allowed to ask, drew "Follow" for a creator the reader follows; landing on
+  // it hid the pill while the read ran, then drew "Following".
+  it('says the answer has not come for a slide not yet asking, as for one asking', () => {
+    const notAsking = render({ creatorId: 'creator-1', enabled: false });
+    expect(notAsking.loading).toBe(true);
+
+    // An answer in hand, asked for ahead by the reel, is drawn by either.
+    state.queryData = { following: true };
+    const answered = render({ creatorId: 'creator-1', enabled: false });
+    expect(answered.loading).toBe(false);
+    expect(answered.following).toBe(true);
   });
 
   it('flips the state optimistically and reports loading until the first answer', async () => {

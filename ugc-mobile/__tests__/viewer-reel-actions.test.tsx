@@ -40,6 +40,7 @@ const authState = vi.hoisted(() => ({
   api: {
     blockUser: vi.fn(),
     deleteGeneration: vi.fn(),
+    getCreatorFollowState: vi.fn(async (_creatorId: string) => ({ following: false })),
     getCreatorProfile: vi.fn(),
     listGenerations: vi.fn(),
     listOwnerPosts: vi.fn(async () => ({ success: true, posts: [], pageInfo: { hasMore: false, nextOffset: null } })),
@@ -315,6 +316,7 @@ import {
 } from '@/lib/showcase-feed-events';
 import { serializeShowcaseFeedLane, showcaseFeedLaneQueryOptions } from '@/lib/showcase-feed-lane';
 import type { CreatorProfileResponse, ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
+import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
 import { useViewerActionHandlers } from '@/lib/use-viewer-action-handlers';
 
 const LANE = { sort: 'for-you' } as const;
@@ -1827,5 +1829,63 @@ describe("the reel's page turns", () => {
     expect(activeId()).toBe('post-b');
 
     for (const play of Object.values(haptic)) expect(play).not.toHaveBeenCalled();
+  });
+});
+
+// Audit 2026-11-27 (S24): landing on a post by a creator the reader follows,
+// the pill read "Follow" for ~200 ms, was gone for ~150 ms, then read
+// "Following". A slide asked whom the reader follows only once it was the one
+// on screen, and drew "Follow" before then from the answer it did not have.
+describe('whom the reader follows, for the posts beside the one on screen', () => {
+  const askedFor = () => authState.api.getCreatorFollowState.mock.calls.map(([creatorId]) => creatorId);
+
+  beforeEach(() => {
+    // Neighbours are drawn once the reel has landed and drawn its own rail.
+    screenState.zoom.landed = true;
+    screenState.zoom.chromeDrawn = true;
+    authState.api.getCreatorFollowState.mockImplementation(async (creatorId: string) => ({ following: creatorId === luna.id }));
+  });
+
+  afterEach(() => {
+    screenState.zoom.landed = false;
+    screenState.zoom.chromeDrawn = false;
+  });
+
+  it('is asked once a creator for the posts either side, before the reader swipes onto them', async () => {
+    seedLane('viewer-1', lanePosts());
+    const tree = await renderReel('post-b');
+
+    // Maya's post above, Luna's below. Luna's own post on screen asks for itself.
+    expect([...askedFor()].sort()).toEqual([luna.id, maya.id].sort());
+    expect(queryClient.getQueryData(creatorFollowStateQueryKey(luna.id))).toEqual({ following: true });
+    expect(queryClient.getQueryData(creatorFollowStateQueryKey(maya.id))).toEqual({ following: false });
+
+    await swipeTo(tree, 2);
+
+    // Nova's post is beside it now; Luna's answer is still fresh.
+    expect([...askedFor()].sort()).toEqual([luna.id, maya.id, nova.id].sort());
+  });
+
+  it('is not asked before the reel has landed, nor for a signed-out reader', async () => {
+    screenState.zoom.landed = false;
+    seedLane('viewer-1', lanePosts());
+    await renderReel('post-b');
+    expect(askedFor()).toEqual([]);
+
+    screenState.zoom.landed = true;
+    authState.user = null;
+    authState.identityUserId = 'guest-1';
+    seedLane('guest-1', lanePosts());
+    await renderReel('post-b');
+    expect(askedFor()).toEqual([]);
+  });
+
+  it("is not asked about the reader's own posts", async () => {
+    authState.user = { id: maya.id, email: 'maya@example.com' };
+    authState.identityUserId = maya.id;
+    seedLane(maya.id, lanePosts());
+    await renderReel('post-b');
+
+    expect(askedFor()).toEqual([luna.id]);
   });
 });

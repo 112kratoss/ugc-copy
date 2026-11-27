@@ -86,7 +86,7 @@ import { getReelFollowAttribution, getReelFollowTarget } from '@/lib/reel-overla
 import { announceRecipeUnlocked } from '@/lib/recipe-unlocked-notice';
 import { launchShowcaseRemix, showcaseRemixCreateHref, startShowcaseRemix } from '@/lib/remix-start';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
-import { useCreatorFollow } from '@/lib/use-creator-follow';
+import { prefetchCreatorFollowState, useCreatorFollow } from '@/lib/use-creator-follow';
 import { useHardwareBack } from '@/lib/use-hardware-back';
 import { isAppForeground } from '@/lib/app-foreground';
 import { createPostViewLook, isReelSlideOnScreen, viewReportPostId, type PostViewLook } from '@/lib/post-view-look';
@@ -853,6 +853,23 @@ function ImmersivePreviewViewer() {
     const timer = setTimeout(() => setNeighbourPlayersAllowed(true), NEIGHBOUR_PLAYERS_DELAY_MS);
     return () => clearTimeout(timer);
   }, [neighbourPlayersAllowed, zoom.opened]);
+  // Whom the reader follows, asked ahead for the posts either side of the one
+  // on screen, so a slide lands with its Follow pill already right. A slide
+  // asks for itself only once it is the one on screen (`useCreatorFollow`):
+  // asked then, the pill on a creator the reader follows went blank for the
+  // round trip, after reading "Follow" from the answer the slide did not have
+  // (device audit, S24, 2026-11-27). One read a creator, kept five minutes and
+  // shared by every slide of theirs; asked once the neighbours themselves are
+  // drawn, never during a zoom into the reel.
+  useEffect(() => {
+    if (!user || !neighbourSlidesAllowed) return;
+    for (const index of [activeIndex - 1, activeIndex + 1]) {
+      const neighbour = items[index];
+      // A page of notes draws no Follow pill.
+      const target = neighbour && !neighbour.noteSet ? getReelFollowTarget(neighbour, user.id) : null;
+      if (target) void prefetchCreatorFollowState(queryClient, api, target.creatorId);
+    }
+  }, [activeIndex, api, items, neighbourSlidesAllowed, queryClient, user]);
   // The source's refetch spinner waits for a fetch to have lasted a while
   // (`lib/viewer-refresh-indicator`), unless the reader asked for the refresh.
   const [manualRefreshes, setManualRefreshes] = useState(0);
@@ -2539,6 +2556,11 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
       return null;
     }
 
+    // No pill while whom the reader follows is not known, on this slide or on
+    // one beside it (`follow.loading`): never "Follow" for a creator they may
+    // follow. Gone or there, it moves nothing else: the creator row keeps the
+    // avatar's height, and the pill sits after the name. A signed-out reader
+    // always has it, to sign up.
     const showFollowPill = Boolean(followTarget) && (!user || !follow.loading);
 
     // Rail, caption and scrims ride inside the zoom window with the media, so
