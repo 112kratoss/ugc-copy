@@ -10,6 +10,13 @@ import { refreshShowcaseFeedsInBackground } from '@/lib/showcase-feed-cache';
 const POST_STATS_REFRESH_LIMIT = 1000;
 const CREATOR_STATS_REFRESH_LIMIT = 1000;
 const USER_INTEREST_REFRESH_LIMIT = 1000;
+/**
+ * Longer than FEED_EVENT_RETENTION_DAYS (30) on purpose. Feed events are pruned at 30 days, so
+ * for them the extra 60 days read nothing. The other input is not pruned: a creator's own
+ * completed generations (`generations.completed_at`) seed their interests over the full 90 days
+ * and keep a creator with no recent feed activity in the refresh batch (the cold-start case in
+ * `refresh_user_interest_weights`). Lowering this to 30 would drop those creations' weight.
+ */
 const USER_INTEREST_LOOKBACK_DAYS = 90;
 const USER_INTEREST_HALF_LIFE_DAYS = 30;
 import {
