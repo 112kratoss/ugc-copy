@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import AlertsBadge from '@/components/AlertsBadge';
@@ -29,11 +29,17 @@ describe('AlertsBadge', () => {
         vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ unreadCount: 3 }) })));
         render(<AlertsBadge />);
 
-        expect(await screen.findByLabelText('3 unread alerts')).toHaveTextContent('3');
+        // The count's words are text a screen reader reads: an aria-label on a plain span is not
+        // allowed to name it, and some readers skip it. The figure itself is hidden from them.
+        const words = await screen.findByText('3 unread alerts');
+        const pill = words.parentElement!;
+        expect(pill).not.toHaveAttribute('aria-label');
+        expect(words.className.split(' ')).toContain('sr-only');
+        expect(within(pill).getByText('3')).toHaveAttribute('aria-hidden', 'true');
 
         act(() => publishUnreadAlertsCount(0));
 
-        expect(screen.queryByLabelText(/unread alerts/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/unread alerts/)).not.toBeInTheDocument();
     });
 
     it('loads no Supabase client and asks nothing in a browser with no session cookie', async () => {
@@ -48,6 +54,6 @@ describe('AlertsBadge', () => {
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
         expect(mocks.supabaseLoaded).not.toHaveBeenCalled();
         expect(fetchMock).not.toHaveBeenCalled();
-        expect(screen.queryByLabelText(/unread alerts/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/unread alerts/)).not.toBeInTheDocument();
     });
 });

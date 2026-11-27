@@ -478,6 +478,14 @@ describe('AppShellClient', () => {
     ]);
     expect(within(screen.getByRole('banner')).getByRole('combobox', { name: 'Search creators, posts, and recipes' })).toBeInTheDocument();
     expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Open alerts' })).toBeInTheDocument();
+    // The bell's aria-label replaces its content, so the count is in the label itself.
+    act(() => publishUnreadAlertsCount(3));
+    try {
+      expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Open alerts, 3 unread' })).toBeInTheDocument();
+    } finally {
+      act(() => publishUnreadAlertsCount(0));
+    }
+    expect(within(screen.getByRole('banner')).getByRole('link', { name: 'Open alerts' })).toBeInTheDocument();
     expect(
       within(screen.getByRole('navigation', { name: 'Primary mobile navigation' }))
         .queryByRole('link', { name: /invite/i })
@@ -1258,7 +1266,8 @@ describe('AppShellClient', () => {
           const menuButton = screen.getByRole('button', { name: /^Open navigation/ });
           // In the button's name too: a screen reader hears a button by its name, not its badge.
           expect(menuButton.getAttribute('aria-label'), pathname).toBe(shown ? 'Open navigation, 3 unread alerts' : 'Open navigation');
-          const badge = within(menuButton).queryByLabelText('3 unread alerts');
+          // The count's words are text a screen reader reads, not an aria-label on a plain span.
+          const badge = within(menuButton).queryByText('3 unread alerts')?.parentElement ?? null;
           expect(Boolean(badge), pathname).toBe(shown);
           // From 640px the bell shows the count: one count on the top bar.
           if (badge) expect(badge.className.split(' ')).toContain('sm:hidden');

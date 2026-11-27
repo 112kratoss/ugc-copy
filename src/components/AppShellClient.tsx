@@ -107,6 +107,33 @@ function SidebarToggle() {
 }
 
 /**
+ * The top bar's bell. Its aria-label replaces what it holds, the badge's words included, so the
+ * count goes into the label as the menu button's does ("Open alerts, 3 unread"). Its own component,
+ * so the count's changes redraw this link and not the frame.
+ */
+function AlertsBellLink({ active, onNavigate }: { active: boolean; onNavigate: AppNavClickHandler }) {
+  const unread = useUnreadAlertsCount();
+  const label = unread > 0 ? `Open alerts, ${unread} unread` : 'Open alerts';
+
+  return (
+    <Link
+      href={ALERTS_NAV_ITEM.href}
+      prefetch={false}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      data-app-nav-tab={ALERTS_NAV_ITEM.id}
+      onClick={(event) => onNavigate(event, ALERTS_NAV_ITEM)}
+      className={`ui-focus-ring relative hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex ${
+        active ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)]'
+      }`}
+    >
+      <Bell className="h-[18px] w-[18px]" aria-hidden />
+      <AlertsBadge className="absolute -right-1 -top-1" />
+    </Link>
+  );
+}
+
+/**
  * The top bar's menu button, hidden from 768px in px, as the side navigation shows
  * (globals.css): a rem breakpoint moved with the browser's text size and, on a creator, left a
  * small-text window with no navigation at all. Where the page hides the bottom navigation (the
@@ -622,20 +649,7 @@ const AppShellFrame = memo(function AppShellFrame({
             {/* Alerts' only control from 768px, where the side navigation does
                 not name it: pressed on Alerts, it brings the page to its top as
                 the tabs do. */}
-            <Link
-              href={ALERTS_NAV_ITEM.href}
-              prefetch={false}
-              aria-label="Open alerts"
-              aria-current={activeItem?.id === 'alerts' ? 'page' : undefined}
-              data-app-nav-tab={ALERTS_NAV_ITEM.id}
-              onClick={(event) => handleAppNavClick(event, ALERTS_NAV_ITEM)}
-              className={`ui-focus-ring relative hidden h-12 w-12 items-center justify-center rounded-full border border-[var(--ui-border-default)] bg-[var(--ui-surface-2)] transition hover:bg-[var(--ui-surface-3)] hover:text-[var(--ui-text-primary)] sm:inline-flex ${
-                activeItem?.id === 'alerts' ? 'text-[var(--ui-primary)]' : 'text-[var(--ui-text-muted)]'
-              }`}
-            >
-              <Bell className="h-[18px] w-[18px]" aria-hidden />
-              <AlertsBadge className="absolute -right-1 -top-1" />
-            </Link>
+            <AlertsBellLink active={activeItem?.id === 'alerts'} onNavigate={handleAppNavClick} />
             <button
               type="button"
               popoverTarget={APP_SHELL_CREATE_MENU_ID}
