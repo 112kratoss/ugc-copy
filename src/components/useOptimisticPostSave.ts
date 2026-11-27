@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { creatorSeesSaverFields, syncSaverNotice, type SaverNoticeFields } from './saver-notice';
@@ -130,7 +131,7 @@ async function requestSave(id: string, run: SaveRun, shouldSave: boolean) {
     }),
   });
 
-  const data = await response.json() as SaveResponse;
+  const data = await readJsonResponse(response) as SaveResponse;
   if (!response.ok || !data.success) {
     throw new Error(data.error || 'Failed to save showcase item');
   }

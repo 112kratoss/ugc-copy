@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { WorkflowCanvasRecord, WorkflowCanvasGraph } from '@/lib/workflow-canvas';
@@ -49,7 +50,7 @@ class WorkflowAssistantRequestError extends Error {
 }
 
 async function readAssistantResponse(response: Response) {
-  const data = await response.json();
+  const data = await readJsonResponse(response);
   if (!response.ok) {
     throw new WorkflowAssistantRequestError(
       data.error || 'Workflow assistant request failed.',
@@ -216,7 +217,7 @@ export function useWorkflowCanvasAssistant({
           headers: await authHeaders(),
         }
       );
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (response.status === 409) {
         if (data.canvas) {
@@ -262,7 +263,7 @@ export function useWorkflowCanvasAssistant({
       );
 
       if (!response.ok) {
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         throw new Error(data.error || 'Failed to discard assistant proposal.');
       }
 

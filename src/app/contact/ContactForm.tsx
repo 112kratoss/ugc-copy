@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useRef, useState } from 'react';
 import { Send } from 'lucide-react';
 
@@ -46,7 +47,7 @@ export function ContactForm() {
       });
 
       if (!response.ok) {
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         throw new Error(data.error || 'Failed to send message');
       }
 

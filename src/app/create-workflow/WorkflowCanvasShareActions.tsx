@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import {
   useCallback,
   useEffect,
@@ -157,7 +158,7 @@ export function WorkflowCanvasShareActions({
       const response = await fetch(`/api/workflow-shares/${shareId}`, {
         headers: await authHeaders(),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to load workflow share preview.');
@@ -198,7 +199,7 @@ export function WorkflowCanvasShareActions({
         method: 'POST',
         headers: await authHeaders(),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to create workflow share link.');
@@ -263,7 +264,7 @@ export function WorkflowCanvasShareActions({
         method: 'POST',
         headers: await authHeaders(),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to import workflow share.');

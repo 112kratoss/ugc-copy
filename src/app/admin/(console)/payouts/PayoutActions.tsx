@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { BadgeCheck, Ban } from 'lucide-react';
@@ -37,7 +38,7 @@ export function PayoutActions({ requestId, amountUsd }: { requestId: string; amo
           externalReference: reference.trim() || null,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         setError(typeof data?.error === 'string' ? data.error : 'Failed to settle the payout.');

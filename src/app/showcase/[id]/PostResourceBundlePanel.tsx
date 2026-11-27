@@ -1,5 +1,6 @@
 'use client';
 
+import { isUnconfirmedOutcome, readJsonResponse } from '@/lib/read-json-response';
 import { createBatchedUrlResolver } from '@/components/ResourceMediaPreview';
 import { requestConfirmation } from '@/components/feedback-state';
 
@@ -628,7 +629,7 @@ export default function PostResourceBundlePanel({
           }
         : undefined,
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response);
 
     if (!response.ok || !data?.bundle) {
       throw new Error(data.error || 'Failed to refresh recipe access.');
@@ -708,7 +709,7 @@ export default function PostResourceBundlePanel({
           Authorization: `Bearer ${session?.access_token}`,
         },
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to get the free recipe.');
@@ -757,7 +758,7 @@ export default function PostResourceBundlePanel({
           clientIntentKey,
         }),
       });
-      const orderData = await orderResponse.json();
+      const orderData = await readJsonResponse(orderResponse);
 
       if (!orderResponse.ok) {
         if (
@@ -893,7 +894,7 @@ export default function PostResourceBundlePanel({
         },
         body: JSON.stringify({ expectedPriceCredits: confirmedPriceCredits }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok || !data?.success) {
         if (response.status === 402 && data?.code === 'INSUFFICIENT_CREDITS') {
@@ -911,6 +912,10 @@ export default function PostResourceBundlePanel({
           setError(priceCredits > 0 ? `The price changed to ${priceCredits.toLocaleString('en-US')} credits.` : 'This recipe is free now.');
           router.refresh();
           return;
+        }
+        if (isUnconfirmedOutcome(response, data)) {
+          // An HTML 502/504 (or an unreadable success) after the charge may have run.
+          throw new Error('We could not confirm the unlock. Check your balance and this recipe before trying again.');
         }
         throw new Error(data.error || 'Failed to unlock with credits.');
       }
@@ -947,7 +952,7 @@ export default function PostResourceBundlePanel({
       },
       body: JSON.stringify({ storagePath, disposition }),
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response);
 
     if (!response.ok || !data.signedUrl) {
       throw new Error(data.error || 'Failed to open resource file.');
@@ -969,7 +974,7 @@ export default function PostResourceBundlePanel({
       },
       body: JSON.stringify({ storagePaths, disposition: 'inline' }),
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response);
 
     if (!response.ok || !Array.isArray(data.files)) {
       throw new Error(data.error || 'Failed to open resource file.');

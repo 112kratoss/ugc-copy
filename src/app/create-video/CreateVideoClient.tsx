@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
 
@@ -4375,7 +4376,7 @@ function VideoCreator({
                     assetType,
                 }),
             });
-        const data = await response.json();
+        const data = await readJsonResponse(response);
 
         if (!response.ok || !data.success) {
             throw new Error(data.error || 'Seedance asset request failed');

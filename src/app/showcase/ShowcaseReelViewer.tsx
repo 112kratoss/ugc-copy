@@ -1,5 +1,6 @@
 'use client';
 
+import { isUnconfirmedOutcome, readJsonResponse } from '@/lib/read-json-response';
 import PostComments from '@/components/PostComments';
 import PostResourceBundlePanel from '@/app/showcase/[id]/PostResourceBundlePanel';
 import { buildRecipePanelProps } from '@/app/showcase/[id]/recipe-panel-props';
@@ -512,7 +513,7 @@ export default function ShowcaseReelViewer({
           }
         : undefined,
     });
-    const data = await response.json();
+    const data = await readJsonResponse(response);
 
     if (!response.ok || !data?.bundle) {
       throw new Error(data.error || 'Failed to refresh recipe access.');
@@ -1219,7 +1220,7 @@ export default function ShowcaseReelViewer({
           Authorization: `Bearer ${session?.access_token}`,
         },
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to get the free recipe.');
@@ -1273,7 +1274,7 @@ export default function ShowcaseReelViewer({
           clientIntentKey,
         }),
       });
-      const orderData = await orderResponse.json();
+      const orderData = await readJsonResponse(orderResponse);
 
       if (!orderResponse.ok) {
         if (
@@ -1401,7 +1402,7 @@ export default function ShowcaseReelViewer({
         },
         body: JSON.stringify({ expectedPriceCredits: confirmedPriceCredits }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
 
       if (!response.ok || !data?.success) {
         if (response.status === 402 && data?.code === 'INSUFFICIENT_CREDITS') {
@@ -1420,6 +1421,10 @@ export default function ShowcaseReelViewer({
           trackProductEvent('recipe_unlock_failed', { method: 'credits', post_id: item.id });
           setUnlockError(priceCredits > 0 ? `The price changed to ${priceCredits.toLocaleString('en-US')} credits.` : 'This recipe is free now.');
           return;
+        }
+        if (isUnconfirmedOutcome(response, data)) {
+          // An HTML 502/504 (or an unreadable success) after the charge may have run.
+          throw new Error('We could not confirm the unlock. Check your balance and this recipe before trying again.');
         }
         throw new Error(data.error || 'Failed to unlock with credits.');
       }

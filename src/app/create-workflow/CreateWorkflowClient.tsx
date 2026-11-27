@@ -1,5 +1,6 @@
 'use client';
 
+import { isUnconfirmedOutcome, readJsonResponse } from '@/lib/read-json-response';
 import '@xyflow/react/dist/style.css';
 
 import {
@@ -398,7 +399,7 @@ export default function CreateWorkflowClient({
         const response = await fetch(`/api/templates/${initialTemplateId}`, {
           headers: await authHeaders(),
         });
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         if (!response.ok) {
           throw new Error(data.error || 'Failed to load template authoring details.');
         }
@@ -1020,7 +1021,7 @@ export default function CreateWorkflowClient({
           catalogRevision: catalogCheck.revision,
         }),
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (!response.ok) {
         // Only deterministic pre-creation rejections clear the intent. A 429
         // can follow an earlier request whose response was lost; clearing the
@@ -1028,6 +1029,10 @@ export default function CreateWorkflowClient({
         // Preserve the key on throttling, conflicts and 5xx ambiguity.
         if ([400, 401, 403, 404].includes(response.status)) {
           pendingRunIntentRef.current = null;
+        }
+        if (isUnconfirmedOutcome(response, data)) {
+          // The run may have started and spent credits; the kept key makes a retry the same run.
+          throw new Error('We could not confirm the run started. Check the canvas for a running step before running again.');
         }
         throw new Error(data.error || 'Failed to start workflow run.');
       }
@@ -1086,7 +1091,7 @@ export default function CreateWorkflowClient({
           body: JSON.stringify({}),
         }
       );
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (!response.ok) {
         throw new Error(data.error || 'Failed to approve workflow checkpoint.');
       }

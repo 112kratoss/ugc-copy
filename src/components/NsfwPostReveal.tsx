@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { EyeOff } from 'lucide-react';
@@ -93,12 +94,12 @@ export default function NsfwPostReveal({
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ showMature: true, confirmAdult: confirmed }),
         });
-        const result = await preferences.json();
+        const result = await readJsonResponse(preferences);
         if (!preferences.ok) throw new Error(result.error || 'Could not enable mature content.');
         setEnabled(true);
       }
       const response = await fetch(`/api/posts/${postId}/reveal`, { method: 'POST', cache: 'no-store' });
-      const result = await response.json();
+      const result = await readJsonResponse(response);
       if (!response.ok) throw new Error(result.error || 'Could not reveal this post.');
       if (!document.hidden) setDetail(result.detail);
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Please retry.'); }

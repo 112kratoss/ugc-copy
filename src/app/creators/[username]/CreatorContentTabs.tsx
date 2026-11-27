@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { MouseEvent, ReactNode } from 'react';
@@ -395,7 +396,7 @@ function CreatorContentTabsView({
         session?.access_token ? { headers: { Authorization: `Bearer ${session.access_token}` } } : undefined
       );
       // Later pages carry no totals; the first page's stay in `initialData`.
-      const nextPage = await response.json() as CreatorProfilePage;
+      const nextPage = await readJsonResponse(response) as CreatorProfilePage;
       if (!response.ok || !Array.isArray(nextPage.items)) {
         throw new Error('Could not load more posts.');
       }

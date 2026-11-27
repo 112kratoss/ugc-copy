@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
@@ -274,7 +275,7 @@ export function WorkflowTemplatePublishDrawer({
   );
 
   const readJson = useCallback(async (response: Response) => {
-    const data = await response.json();
+    const data = await readJsonResponse(response);
     if (!response.ok) {
       throw new Error(data.error || 'Template request failed.');
     }

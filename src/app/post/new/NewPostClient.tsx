@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { readVideoDurationSeconds } from '@/lib/video-metadata-probe';
 
 import InlineMediaVideo from '@/components/InlineMediaVideo';
@@ -753,7 +754,7 @@ async function uploadResourceFile(
       }),
       signal: options.signal,
     });
-    const uploadIntent = await signResponse.json() as {
+    const uploadIntent = await readJsonResponse(signResponse) as {
       bucket?: 'post_resource_files';
       uploadId?: string;
       path?: string;
@@ -1756,7 +1757,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
             Authorization: `Bearer ${session.access_token}`,
           },
         });
-        const payload = await response.json();
+        const payload = await readJsonResponse(response);
 
         if (!response.ok) {
           throw new Error(payload.error || 'Failed to load generation.');
@@ -1970,7 +1971,7 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
 
     void fetch('/api/source-tools')
       .then(async (response) => {
-        const payload = await response.json();
+        const payload = await readJsonResponse(response);
         if (!cancelled && Array.isArray(payload.tools)) {
           setSourceToolsData(payload.tools as SourceToolOption[]);
         }
