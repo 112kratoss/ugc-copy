@@ -6,7 +6,8 @@ import type { EditableCreatorProfile } from '@/lib/profile';
 
 // What comes under the profile editor (Connected apps on /profile/edit, the one place to disconnect
 // an agent) waits in the editor's own boundary, so an editor that failed to draw took it down too,
-// and the page with it: `src/app` has no error.tsx (review of #841). The card's boundary keeps the
+// and the page with it: `src/app` had no error.tsx (review of #841; the root one, added 2026-11-27,
+// would still replace the whole page). The card's boundary keeps the
 // failure to the editor: an error card whose Try again reloads the page, and what comes under it
 // still drawn. A reload, as Alerts' card does: it fetches the chunk names of the deployment that is
 // live now, where Turbopack's runtime in production hands an in-place retry the same failed load.

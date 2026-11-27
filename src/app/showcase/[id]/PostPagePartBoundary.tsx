@@ -15,8 +15,9 @@ interface PostPagePartBoundaryProps {
  * notice a block draws, the invite hand-off bar, the creator's Owner tools. Its load can fail: a
  * deploy renamed the chunk while the page was open, or the connection dropped. `next/dynamic` is a
  * React.lazy in a Suspense with nothing to catch that, so the failure reached the showcase folder's
- * error.tsx, which put "Could not load Explore" in the place of the post, and its Retry met the same
- * failure at once: the lazy keeps it until a reload. Kept to the part here, as Alerts' signed-in half
+ * error.tsx, which put "Could not load Explore" in the place of the post (the post's own error.tsx,
+ * "Could not load this post", since 2026-11-27), and its Retry met the same failure at once: the
+ * lazy keeps it until a reload. Kept to the part here, as Alerts' signed-in half
  * keeps its own (`SignedInAlertsBoundary`): each use says what stands in its place.
  */
 export class PostPagePartBoundary extends Component<PostPagePartBoundaryProps, { failed: boolean }> {
