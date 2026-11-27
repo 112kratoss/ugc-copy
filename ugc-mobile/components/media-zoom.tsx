@@ -1558,6 +1558,32 @@ export function useMediaZoomStage({
     onExitRef.current();
   }, []);
 
+  // A picture that flew home alone lets go of its tile a frame or two after it
+  // lands (`finishZoomFlight`), and its reel is popped once it has: popped at
+  // the landing, the route's removal, a render that holds the JS thread
+  // (~120 ms on the S24), ran before the release could, and the landed picture
+  // stood over its tile, and over the tab bar or status strip in front of it,
+  // for that long (review of #947). A frame after the release, so the layer's
+  // commit is on screen before that render starts. The safety net in `dismiss`
+  // still pops a reel whose picture is never let go.
+  const releaseWaitRef = useRef<(() => void) | null>(null);
+  const leaveOnceReleased = useCallback(() => {
+    const landed = getHeldZoomPicture();
+    if (!landed) {
+      requestAnimationFrame(leave);
+      return;
+    }
+    releaseWaitRef.current?.();
+    const stopWaiting = subscribeToHeldZoomPicture(() => {
+      if (getHeldZoomPicture() === landed) return;
+      stopWaiting();
+      releaseWaitRef.current = null;
+      requestAnimationFrame(leave);
+    });
+    releaseWaitRef.current = stopWaiting;
+  }, [leave]);
+  useEffect(() => () => releaseWaitRef.current?.(), []);
+
   // A reel that goes without closing — replaced after its post is deleted, a
   // deep link, a reset of the stack — must not leave the screen beneath it
   // hidden: that screen is drawn again before the reel starts to come off it,
@@ -1849,8 +1875,9 @@ export function useMediaZoomStage({
           }
         }
         // A picture that flew home alone has landed: the reel, out of sight
-        // since it set off, goes now (`whenDisplayed` below).
-        if (event.type === 'landed' && close.popsAtLanding) leave();
+        // since it set off (`whenDisplayed` below), goes once the picture has
+        // let go of the tile.
+        if (event.type === 'landed' && close.popsAtLanding) leaveOnceReleased();
         return;
       }
       if (event.flight.id !== origin.flightId || event.type !== 'landed') return;
@@ -1859,7 +1886,7 @@ export function useMediaZoomStage({
       if (openedRef.current) following.set(0);
       else handoff();
     });
-  }, [following, handoff, leave, leaveIntoTile, nativeZoom, origin, stageOpacity]);
+  }, [following, handoff, leave, leaveIntoTile, leaveOnceReleased, nativeZoom, origin, stageOpacity]);
 
   // The navigator's own transition. Its length differs by platform and
   // direction; the event is the honest signal, the timer the safety net.
