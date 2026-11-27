@@ -1486,8 +1486,9 @@ export function useMediaZoomStage({
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
   /**
-   * The close under way. `popsAtLanding`: a picture flying home alone on
-   * Android, whose reel is popped once it has landed (`whenDisplayed`).
+   * The close under way. `popsAtLanding`: a picture's close on Android, flying
+   * home alone or turned round before the hand-off, whose reel is popped once
+   * the picture has landed and let go (`leaveOnceReleased`).
    */
   const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean; popsAtLanding: boolean } | null>(null);
   /** Gives the tile back to UIKit's zoom after a picture-only close (`withholdAppleZoomSource`). */
@@ -1854,8 +1855,13 @@ export function useMediaZoomStage({
     if (ready) handoff();
   }, [handoff, ready]);
 
+  // Nothing more of the reel is built once a close has begun (`dismiss`): a
+  // close before the hand-off flies with the reel still standing under it,
+  // out of sight, and its rail and caption (mounted once it has drawn) and its
+  // neighbours (once those are laid out) would each hold the UI thread the
+  // flight's frames are made on, for a reel that is about to go.
   const markDrawn = useCallback(() => {
-    if (drawnRef.current) return;
+    if (drawnRef.current || dismissingRef.current) return;
     drawnRef.current = true;
     setDrawn(true);
     handoff();
@@ -1876,7 +1882,7 @@ export function useMediaZoomStage({
   }, [handoff]);
 
   const reportChromeDrawn = useCallback(() => {
-    if (chromeDrawnRef.current) return;
+    if (chromeDrawnRef.current || dismissingRef.current) return;
     chromeDrawnRef.current = true;
     setChromeDrawn(true);
     handoff();
@@ -1886,6 +1892,7 @@ export function useMediaZoomStage({
   useEffect(() => {
     if (!zooming || !landed) return;
     const deadline = setTimeout(() => {
+      if (dismissingRef.current) return;
       chromeDrawnRef.current = true;
       setChromeDrawn(true);
       reportNeighbourDrawn();
@@ -1920,9 +1927,9 @@ export function useMediaZoomStage({
             leaveIntoTile();
           }
         }
-        // A picture that flew home alone has landed: the reel, out of sight
-        // since it set off (`whenDisplayed` below), goes once the picture has
-        // let go of the tile.
+        // A picture's close has landed, flown home alone or turned round
+        // before the hand-off: the reel, out of sight since it set off
+        // (`whenDisplayed` below), goes once the picture has let go of the tile.
         if (event.type === 'landed' && close.popsAtLanding) leaveOnceReleased();
         return;
       }
@@ -1973,6 +1980,7 @@ export function useMediaZoomStage({
 
   // The reel has drawn its own picture: the tile's copy gives way to it.
   const reportPainted = useCallback(() => {
+    if (dismissingRef.current) return;
     markDrawn();
     if (!carryingRef.current) return;
     carryingRef.current = false;
@@ -2164,16 +2172,22 @@ export function useMediaZoomStage({
       // standing over it until it lets go.
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
-      // Android: a picture flying home alone out of a reel at rest leaves the
-      // reel standing, out of sight, until it has landed, as a live close does.
-      // Popped first, the flight waited for the route's removal to be rendered
-      // (the reel's unmount, the screen beneath taking the focus) before its
-      // first frame: 100–133 ms on an iPhone 16e when iOS had the same order
-      // (#718), and the S24 measured ~160 ms from Back to the first movement
-      // (audit, 2026-11-27). A close begun before the reel was uncovered keeps
-      // the old order: that reel may still be mounting, which would hold the
-      // frames of the flight.
-      const popsAtLanding = alone && !nativeZoom;
+      // Android: every close leaves the reel standing, out of sight, until it
+      // has landed: a live close until its hand-back (`leaveIntoTile`), a
+      // picture flying home alone and a close begun before the hand-off until
+      // the picture has let go of its tile (`leaveOnceReleased`). Popped
+      // first, the flight waited for the route's removal to be rendered (the
+      // reel's unmount, the screen beneath taking the focus) before its first
+      // frame: 100–133 ms on an iPhone 16e when iOS had the same order (#718),
+      // and ~160 ms from Back to the first movement on the S24, both out of a
+      // reel at rest (feel audit, 2026-11-27) and for Back pressed while the
+      // reel was still being built under the landed picture, which stood as
+      // if Back had not been heard (the owner: "fix the back mid-opening wait
+      // too"). A reel still being built builds no more once its close has
+      // begun (`markDrawn`), so its flight's frames have only what it had
+      // already started to share the UI thread with. iOS pops at once
+      // (`whenDisplayed`), under UIKit's zoom or the flight's cover.
+      const popsAtLanding = !live && !nativeZoom;
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         // A picture closing alone has the reel hidden (and on iOS the screen
         // covered) once it is up, so going on the usual deadline before it had
@@ -2209,16 +2223,9 @@ export function useMediaZoomStage({
           // covers the picture's place for a frame first, as it did. The pop
           // comes once it has landed (the flight's `landed`, above), and the
           // net is timed from the take-off, not the press.
-          if (popsAtLanding) {
-            requestAnimationFrame(() => {
-              takeOffZoomFlight();
-              armCloseBackstop();
-            });
-            return;
-          }
           requestAnimationFrame(() => {
-            leave();
-            requestAnimationFrame(takeOffZoomFlight);
+            takeOffZoomFlight();
+            armCloseBackstop();
           });
         },
       });
