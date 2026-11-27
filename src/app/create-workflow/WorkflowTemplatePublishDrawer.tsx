@@ -136,7 +136,7 @@ function renderConsumerTestSetupWindow(
     </style>
   </head>
   <body>
-    <div aria-live="polite">
+    <main aria-live="polite">
       <div class="brand">Magic Booklet · Creator test</div>
       <div class="mark" aria-hidden="true">${isError ? '!' : '<div class="spinner"></div>'}</div>
       <h1>${isError ? 'We couldn\u2019t prepare this test' : 'Preparing your consumer test'}</h1>
@@ -145,7 +145,7 @@ function renderConsumerTestSetupWindow(
         : 'Saving and validating this exact workflow revision. This tab will continue automatically.'}</p>
       <div class="detail" id="test-setup-detail"></div>
       ${isError ? '<button type="button" id="close-test-setup">Close this tab</button>' : ''}
-    </div>
+    </main>
   </body>
 </html>`);
     popupDocument.close();
