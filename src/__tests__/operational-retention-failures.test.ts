@@ -13,6 +13,7 @@ const supplementary = [
   'prune_account_merge_tickets',
   'prune_referral_risk_signals',
   'prune_mobile_client_errors',
+  'prune_post_create_claims',
   'prune_upload_byte_reservations',
 ];
 // The guest steps (D5, then guests with content) run last; with no candidates

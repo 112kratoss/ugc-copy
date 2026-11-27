@@ -16,7 +16,7 @@ describe('the key a composed post is created under', () => {
     expect(createPostCreateKey()).not.toBe(createPostCreateKey());
   });
 
-  it('survives a failure the server may have acted on, and one it refused', () => {
+  it('survives a failure the server may have acted on, "in progress" and a rate limit', () => {
     const key = createPostCreateKey();
     const lost = new ApiError('Network request failed', 0, { sent: true });
     const failed = new ApiError('Failed to create post.', 500, { error: 'Failed to create post.' });
@@ -28,8 +28,22 @@ describe('the key a composed post is created under', () => {
       idempotency.errors.inProgress.response.code,
     );
 
-    for (const error of [lost, failed, saving, new Error('offline')]) {
+    const limited = new ApiError('Too many requests', 429, { code: 'RATE_LIMITED' }, undefined, 'RATE_LIMITED');
+    for (const error of [lost, failed, saving, limited, new Error('offline')]) {
       expect(postCreateKeyAfterFailure(key, error)).toBe(key);
+    }
+  });
+
+  it('is replaced on any other refusal: the request was read and made nothing', () => {
+    const key = createPostCreateKey();
+    for (const error of [
+      new ApiError('Choose a tool from the list or create one.', 400, { field: 'sourceTools' }),
+      new ApiError('Forbidden', 403, {}),
+      new ApiError('Too large', 413, {}),
+    ]) {
+      const next = postCreateKeyAfterFailure(key, error);
+      expect(next).toMatch(UUID);
+      expect(next).not.toBe(key);
     }
   });
 

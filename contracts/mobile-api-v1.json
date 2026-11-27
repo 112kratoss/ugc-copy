@@ -3622,17 +3622,17 @@
       "idempotency": {
         "header": "Idempotency-Key",
         "format": "uuid",
-        "rule": "A UUID the client makes once per composed post and sends on every retry of it. It becomes the new post's id. A repeat by the same account answers that post in the shape of a fresh create and creates nothing; a header that is missing or not a UUID creates as before.",
+        "rule": "A UUID the client makes once per composed post and sends on every retry of it. The server derives the post's id from the account and the key (never the key itself) and claims the key before it writes anything. A repeat by the same account answers that post in the shape of a fresh create and creates nothing, without spending a rate-limit count; a request for public whose post was left a private draft gets the same 500 the first attempt got. 409 POST_CREATE_IN_PROGRESS while an earlier attempt with the key is running; 409 IDEMPOTENCY_KEY_CONFLICT when the key can no longer be used. A client clears its key on IDEMPOTENCY_KEY_CONFLICT and on any other 4xx except POST_CREATE_IN_PROGRESS and 429, and keeps it on POST_CREATE_IN_PROGRESS, 5xx and network errors. A header that is missing or not a UUID creates as before.",
         "key": "3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
         "replay": {
           "status": 200,
           "response": {
             "success": true,
-            "postId": "3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
+            "postId": "post-1",
             "visibility": "public",
-            "showcasePath": "/showcase/3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
-            "ownerPath": "/post/3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a/edit",
-            "resourceBundlePath": "/showcase/3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a#recipe",
+            "showcasePath": "/showcase/post-1",
+            "ownerPath": "/post/post-1/edit",
+            "resourceBundlePath": "/showcase/post-1#recipe",
             "resourceBundleStatus": null
           }
         },

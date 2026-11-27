@@ -39,6 +39,7 @@ function createClient(result: {
   freeUnlockOrders?: { data?: unknown; error?: unknown };
   referralRiskSignals?: { data?: unknown; error?: unknown };
   mobileClientErrors?: { data?: unknown; error?: unknown };
+  postCreateClaims?: { data?: unknown; error?: unknown };
 }) {
   const calls: RpcCall[] = [];
   return {
@@ -69,6 +70,12 @@ function createClient(result: {
         }
         if (fn === 'prune_account_merge_tickets') {
           return { data: 0, error: null };
+        }
+        if (fn === 'prune_post_create_claims') {
+          return {
+            data: result.postCreateClaims?.data ?? 0,
+            error: result.postCreateClaims?.error ?? null,
+          };
         }
         if (fn === 'prune_mobile_client_errors') {
           return {
@@ -113,6 +120,7 @@ describe('operational data retention', () => {
       freeUnlockOrders: { data: 2 },
       referralRiskSignals: { data: 5 },
       mobileClientErrors: { data: 9 },
+      postCreateClaims: { data: 4 },
     });
 
     const summary = await pruneOperationalBackendData(client);
@@ -146,6 +154,8 @@ describe('operational data retention', () => {
       referralRiskSignalsCleared: 5,
       // The app's error reports, kept 30 days (20261127060127).
       mobileClientErrorsDeleted: 9,
+      // The composer's create claims, kept a day (20261127060127).
+      postCreateClaimsDeleted: 4,
       uploadByteReservationsDeleted: 0,
       supplementaryBatchLimitReached: false,
       expiredUploadReservationsScanned: 0,
@@ -190,6 +200,7 @@ describe('operational data retention', () => {
       'prune_account_merge_tickets',
       'prune_referral_risk_signals',
       'prune_mobile_client_errors',
+      'prune_post_create_claims',
       'prune_upload_byte_reservations',
       'list_idle_guest_identities',
       'list_idle_guest_identities_with_content',

@@ -8,7 +8,9 @@
 -- What a row holds, and nothing else: the error's message, stack and component stack (truncated by
 -- the app and again by the server: 500, 4,000 and 2,000 characters), whether it was fatal, the
 -- route it happened on (a path, never its query), the app version and OTA update id, the platform,
--- and the account when the report came with a session. Nothing a person typed is sent.
+-- and the account when the report came with a session. No form field, prompt or request body is
+-- sent; an error's own text can still quote what it was handed (a server's error message, text a
+-- parser could not read), so a message is treated as possibly personal and kept 30 days.
 --
 -- Rows live 30 days: prune_mobile_client_errors() is a supplementary step of the daily retention
 -- run (src/lib/operational-data-retention.ts), beside the share-event prunes, and
@@ -81,3 +83,65 @@ $$;
 
 revoke all on function public.prune_mobile_client_errors(integer) from public, anon, authenticated;
 grant execute on function public.prune_mobile_client_errors(integer) to service_role;
+
+-- The composer's Idempotency-Key (audit 2026-11-27, finding 4): POST /api/posts takes a claim on
+-- (account, key) before it writes anything (src/lib/post-create-route-service.ts). Only the request
+-- that inserted the claim creates the post, under an id derived from the account and the key, so
+-- two requests with one key never copy media to the same paths or write the same post row. A claim
+-- older than the route can run (330 s) belongs to a request that died: the key is then refused and
+-- the client makes a new one. Claims are kept a day, then pruned by the daily retention run.
+
+create table public.post_create_claims (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  idempotency_key uuid not null,
+  post_id uuid not null,
+  claimed_at timestamptz not null default now(),
+  primary key (user_id, idempotency_key)
+);
+
+comment on table public.post_create_claims is
+  'One row per composer create under an Idempotency-Key: the request that inserted it is the one that creates the post. Service role only; pruned after a day.';
+
+create index post_create_claims_claimed_idx
+  on public.post_create_claims (claimed_at);
+
+alter table public.post_create_claims enable row level security;
+
+-- Inserted, read and, by the request that holds it after an attempt that made nothing, deleted.
+revoke all on public.post_create_claims from public, anon, authenticated, service_role;
+grant select, insert, delete on public.post_create_claims to service_role;
+
+create policy "No client access to post_create_claims"
+  on public.post_create_claims for all to anon, authenticated
+  using (false)
+  with check (false);
+
+create or replace function public.prune_post_create_claims(p_limit integer default 5000)
+returns integer
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_limit integer := greatest(1, least(coalesce(p_limit, 5000), 5000));
+  v_deleted integer;
+begin
+  with victims as (
+    select claims.user_id, claims.idempotency_key
+    from public.post_create_claims as claims
+    where claims.claimed_at < now() - interval '1 day'
+    order by claims.claimed_at
+    limit v_limit
+    for update skip locked
+  )
+  delete from public.post_create_claims as claims
+  using victims
+  where claims.user_id = victims.user_id
+    and claims.idempotency_key = victims.idempotency_key;
+  get diagnostics v_deleted = row_count;
+  return v_deleted;
+end;
+$$;
+
+revoke all on function public.prune_post_create_claims(integer) from public, anon, authenticated;
+grant execute on function public.prune_post_create_claims(integer) to service_role;

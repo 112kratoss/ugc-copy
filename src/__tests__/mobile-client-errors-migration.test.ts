@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-const sql = readFileSync('supabase/migrations/20261127060127_mobile_client_errors.sql', 'utf8');
+const sql = readFileSync('supabase/migrations/20261127060127_mobile_client_errors_and_post_create_claims.sql', 'utf8');
 
 // Audit 2026-11-27: errors on phones reach nobody. The app's own reporter sends what it catches to
 // POST /api/mobile/client-errors, which the service role writes here for 30 days.
@@ -30,7 +30,7 @@ describe('mobile_client_errors migration', () => {
   it('gives no client access under RLS, and the service role only appends and reads', () => {
     expect(sql).toContain('alter table public.mobile_client_errors enable row level security');
     expect(sql).toMatch(/create policy "No client access to mobile_client_errors"\s+on public\.mobile_client_errors for all to anon, authenticated\s+using \(false\)\s+with check \(false\)/u);
-    expect(sql.match(/create policy/gu)).toHaveLength(1);
+    expect(sql.match(/create policy[^\n]*mobile_client_errors/gu)).toHaveLength(1);
     expect(sql).toContain('revoke all on public.mobile_client_errors from public, anon, authenticated, service_role');
     expect(sql).toContain('grant select, insert on public.mobile_client_errors to service_role');
     expect(sql).not.toMatch(/grant [^;]*on public\.mobile_client_errors to (anon|authenticated)/u);
@@ -46,5 +46,23 @@ describe('mobile_client_errors migration', () => {
     expect(sql).toContain('grant execute on function public.prune_mobile_client_errors(integer) to service_role');
     // A supplementary step: the main retention function is not replaced.
     expect(sql).not.toContain('prune_operational_backend_data(');
+  });
+
+  // Audit 2026-11-27, finding 4: the claim a keyed create takes before it writes anything.
+  it('creates post_create_claims keyed on the account and the key, service role only, pruned after a day', () => {
+    expect(sql).toContain('create table public.post_create_claims');
+    expect(sql).toContain('user_id uuid not null references auth.users(id) on delete cascade');
+    expect(sql).toContain('idempotency_key uuid not null');
+    expect(sql).toContain('post_id uuid not null');
+    expect(sql).toContain('claimed_at timestamptz not null default now()');
+    expect(sql).toContain('primary key (user_id, idempotency_key)');
+    expect(sql).toContain('alter table public.post_create_claims enable row level security');
+    expect(sql).toMatch(/create policy "No client access to post_create_claims"\s+on public\.post_create_claims for all to anon, authenticated\s+using \(false\)\s+with check \(false\)/u);
+    expect(sql).toContain('revoke all on public.post_create_claims from public, anon, authenticated, service_role');
+    expect(sql).toContain('grant select, insert, delete on public.post_create_claims to service_role');
+    expect(sql).not.toMatch(/grant [^;]*on public\.post_create_claims to (anon|authenticated)/u);
+    expect(sql).toContain('create or replace function public.prune_post_create_claims(p_limit integer default 5000)');
+    expect(sql).toContain("where claims.claimed_at < now() - interval '1 day'");
+    expect(sql).toContain('grant execute on function public.prune_post_create_claims(integer) to service_role');
   });
 });
