@@ -16,7 +16,7 @@ import { applyArchivedScopeChange } from '@/lib/profile-media-refresh';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
   applyShowcaseFeedLaneChange,
-  markShowcaseFeedLanesStale,
+  refreshShowcaseFeedTimelines,
   type ShowcaseFeedLaneChange,
 } from '@/lib/showcase-feed-lane-refresh';
 import type { GenerationListItem, GenerationListResponse, OwnerPostsResponse } from '@/lib/types';
@@ -67,7 +67,7 @@ export async function applyPostVisibilityToCaches(
 
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-    markShowcaseFeedLanesStale(queryClient),
+    refreshShowcaseFeedTimelines(queryClient),
     // The header counts and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
   ]);
@@ -222,7 +222,7 @@ export async function refreshViewerMediaCaches(
 
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-    markShowcaseFeedLanesStale(queryClient),
+    refreshShowcaseFeedTimelines(queryClient),
     // Home's shelf draws posts too, and leaves out what the feed leaves out.
     queryClient.invalidateQueries({ queryKey: ['home-shelf'] }),
     queryClient.invalidateQueries({ queryKey: ['profile-saved-media', userId] }),

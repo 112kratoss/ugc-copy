@@ -3,7 +3,7 @@ import type { InfiniteData, QueryClient } from '@tanstack/react-query';
 import Constants from 'expo-constants';
 
 import { HOME_FEED_CHIPS, type HomeFeedChipId } from './home-feed-view-model';
-import { createShowcaseFeedQueryKey, type ShowcaseFeedPageParam } from './showcase-feed-query';
+import { createShowcaseFeedQueryKey, isLaneDataFromAnEarlierLaunch, type ShowcaseFeedPageParam } from './showcase-feed-query';
 import type { ShowcaseFeedResponse } from './types';
 
 // Home's For You lane, carried from one launch to the next.
@@ -47,9 +47,6 @@ export const PERSISTED_HOME_FEED_SESSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 // come back under the lane of a device with no identity.
 const PERSISTED_HOME_FEED_FORMAT = 2;
 const CLOCK_SKEW_ALLOWANCE_MS = 60_000;
-// Lane data older than this module was fetched by an earlier launch, and the
-// only way it reaches this one is the restore below.
-const moduleLoadedAt = Date.now();
 
 type HomeFeedData = InfiniteData<ShowcaseFeedResponse, ShowcaseFeedPageParam>;
 
@@ -89,7 +86,9 @@ export function createPersistedHomeFeedQueryKey(identityUserId: string | null | 
 
 /** Whether lane data predates this launch, which only a restored page can. */
 export function isPersistedHomeFeedData(dataUpdatedAt: number) {
-  return dataUpdatedAt > 0 && dataUpdatedAt < moduleLoadedAt;
+  // One clock with the lane's own freshness rule (`rankedLaneStaleTime`): the
+  // page this calls restored is the page that rule lets go stale.
+  return isLaneDataFromAnEarlierLaunch(dataUpdatedAt);
 }
 
 // Storage calls run one at a time, in the order they were asked for, so a

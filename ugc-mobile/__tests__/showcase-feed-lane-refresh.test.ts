@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createShowcaseFeedQueryKey } from '../lib/showcase-feed-query';
 import {
   applyShowcaseFeedLaneChange,
-  markShowcaseFeedLanesStale,
+  refreshShowcaseFeedTimelines,
 } from '../lib/showcase-feed-lane-refresh';
 import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '../lib/types';
 import { applyPostVisibilityToCaches, refreshViewerMediaCaches } from '../lib/viewer-media-cache';
@@ -71,16 +71,17 @@ afterEach(() => {
 });
 
 describe('a mounted ranked lane', () => {
-  it('is marked stale, not read again, so the posts under the reader stay where they are', async () => {
-    await markShowcaseFeedLanesStale(queryClient);
+  it('is neither read again nor marked out of date, so its posts stay where they are', async () => {
+    await refreshShowcaseFeedTimelines(queryClient);
 
     expect(readRanked).not.toHaveBeenCalled();
     expect(laneIds(FOR_YOU)).toEqual([['a', 'b'], ['c', 'd']]);
-    expect(queryClient.getQueryState(FOR_YOU)?.isInvalidated).toBe(true);
+    // Marked, it would be read again the next time the reader came back to its filter.
+    expect(queryClient.getQueryState(FOR_YOU)?.isInvalidated).toBe(false);
   });
 
   it('lets the timeline read again: a post just published belongs at its top', async () => {
-    await markShowcaseFeedLanesStale(queryClient);
+    await refreshShowcaseFeedTimelines(queryClient);
 
     expect(readRecent).toHaveBeenCalledTimes(1);
     expect(laneIds(RECENT)).toEqual([['new-post', 'recent-1']]);

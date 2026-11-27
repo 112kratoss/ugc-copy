@@ -9,6 +9,7 @@ import {
   createShowcaseFeedQueryKey,
   getNextShowcaseFeedPageParam,
   getShowcaseFeedPageParams,
+  rankedLaneStaleTime,
   type ShowcaseFeedCategory,
   type ShowcaseFeedFilters,
   type ShowcaseFeedPageParam,
@@ -116,14 +117,16 @@ export function showcaseFeedLaneQueryOptions(
     // on the server.
     getPreviousPageParam: getPreviousFeedPageParam,
     maxPages: filters.sort === 'recent' ? FEED_WINDOW_PAGE_LIMIT : 0,
-    staleTime: SHOWCASE_FEED_STALE_TIME_MS,
     // A ranked lane is not read again because the app came back to the
-    // foreground or a reader mounted. Such a refetch re-reads every loaded
-    // page as a new ranked session: other posts under the reader's thumb, and
-    // up to 60 deliveries served that nobody sees (audit 02-2). Pull-to-refresh
-    // and the end-of-feed Refresh still renew it. Recent is a timeline and
-    // keeps the defaults.
-    ...(filters.sort === 'recent' ? {} : { refetchOnWindowFocus: false, refetchOnMount: false }),
+    // foreground, a reader mounted, or the reader came back to its filter
+    // (`rankedLaneStaleTime`). Such a refetch re-reads every loaded page as a
+    // new ranked session: other posts under the reader's thumb, and up to 60
+    // deliveries served that nobody sees (audit 02-2). Pull-to-refresh and the
+    // end-of-feed Refresh still renew it. Recent is a timeline and keeps the
+    // defaults.
+    ...(filters.sort === 'recent'
+      ? { staleTime: SHOWCASE_FEED_STALE_TIME_MS }
+      : { staleTime: rankedLaneStaleTime, refetchOnWindowFocus: false, refetchOnMount: false }),
   };
 }
 

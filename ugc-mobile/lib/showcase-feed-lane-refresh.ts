@@ -7,15 +7,19 @@ import type { ShowcaseFeedItem, ShowcaseFeedResponse } from './types';
 /**
  * What a post action does to the feed lanes, short of reading them again.
  *
- * A lane that is on screen, or mounted behind a reel or the composer, is never
- * read again because something else changed: a ranked lane read again more than
- * two minutes after its last ranking is a new session, every loaded page in a
- * new order at the same scroll position, and the reader comes back to other
+ * A ranked lane that is on screen, or mounted behind a reel or the composer,
+ * is never read again because something else changed: read again more than
+ * two minutes after its last ranking it is a new session, every loaded page in
+ * a new order at the same scroll position, and the reader comes back to other
  * posts where theirs were (owner, 2026-11-27; the foreground half of this was
- * audit 02-2, `showcaseFeedLaneQueryOptions`). So what an action changes is
- * written into the pages (`applyShowcaseFeedLaneChange`), and the lanes are
- * told they are out of date (`markShowcaseFeedLanesStale`), which a pull, the
- * "New posts" pill or the next lane switch then acts on.
+ * audit 02-2, `showcaseFeedLaneQueryOptions`). Nor is it marked out of date:
+ * a lane marked so is read again when the reader next comes back to its
+ * filter, which is the same swap a moment later (`rankedLaneStaleTime`). So
+ * what an action changes is written into the pages
+ * (`applyShowcaseFeedLaneChange`), and only the Recent timeline, whose order a
+ * read does not change, is read again (`refreshShowcaseFeedTimelines`). A
+ * ranked lane takes new posts when the reader asks: a pull, Refresh, the "New
+ * posts" pill.
  */
 
 const SHOWCASE_FEED_QUERY_KEY = ['showcase-feed'] as const;
@@ -39,22 +43,12 @@ function isTimelineLaneKey(queryKey: QueryKey) {
   return typeof lane === 'object' && lane !== null && (lane as { sort?: unknown }).sort === 'recent';
 }
 
-/**
- * Every lane out of date, and only the timeline read again now. A ranked lane
- * keeps the posts it is showing until the reader asks for new ones.
- */
-export function markShowcaseFeedLanesStale(queryClient: Pick<QueryClient, 'invalidateQueries'>) {
-  return Promise.all([
-    queryClient.invalidateQueries({
-      queryKey: SHOWCASE_FEED_QUERY_KEY,
-      predicate: (query) => !isTimelineLaneKey(query.queryKey),
-      refetchType: 'none',
-    }),
-    queryClient.invalidateQueries({
-      queryKey: SHOWCASE_FEED_QUERY_KEY,
-      predicate: (query) => isTimelineLaneKey(query.queryKey),
-    }),
-  ]);
+/** The timeline lanes read again now: a post just published belongs at the top of Recent. */
+export function refreshShowcaseFeedTimelines(queryClient: Pick<QueryClient, 'invalidateQueries'>) {
+  return queryClient.invalidateQueries({
+    queryKey: SHOWCASE_FEED_QUERY_KEY,
+    predicate: (query) => isTimelineLaneKey(query.queryKey),
+  });
 }
 
 function changeLane(data: LaneData, change: ShowcaseFeedLaneChange): LaneData {

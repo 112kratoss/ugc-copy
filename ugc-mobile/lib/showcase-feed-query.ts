@@ -3,6 +3,34 @@ import type { ShowcaseFeedItem, ShowcaseFeedResponse } from '@/lib/types';
 export const SHOWCASE_FEED_PAGE_SIZE = 12;
 export const SHOWCASE_FEED_STALE_TIME_MS = 5 * 60 * 1000;
 
+// Lane data older than this module was read by an earlier launch: the only way
+// it reaches this one is Home's saved first page (`persisted-home-feed.ts`).
+const laneReadsBeganAt = Date.now();
+
+/** Whether lane data predates this launch, which only a restored page can. */
+export function isLaneDataFromAnEarlierLaunch(dataUpdatedAt: number) {
+  return dataUpdatedAt > 0 && dataUpdatedAt < laneReadsBeganAt;
+}
+
+/**
+ * How long a ranked lane's pages count as fresh: for as long as the app runs.
+ *
+ * A reader of a lane whose pages are stale reads them again the moment it
+ * moves onto the lane, whatever `refetchOnMount` says, and for an infinite
+ * query that is every loaded page: for a ranked lane a new session, a new
+ * order under posts the reader was just shown. With a five-minute age, a
+ * filter or chip the reader came back to after that drew its lane as it was
+ * left, then replaced it a few seconds later (owner, 2026-11-27). So a ranked
+ * lane read in this launch does not age: it is read again when the reader asks
+ * (a pull, Refresh, the "New posts" pill, product decision D2) and when
+ * something invalidates it. The page a launch restores is the exception, by
+ * design: it is owed one read as soon as Home mounts on it
+ * (`persisted-home-feed.ts`).
+ */
+export function rankedLaneStaleTime(query: { state: { dataUpdatedAt: number } }) {
+  return isLaneDataFromAnEarlierLaunch(query.state.dataUpdatedAt) ? SHOWCASE_FEED_STALE_TIME_MS : Infinity;
+}
+
 export type ShowcaseFeedSort = 'for-you' | 'recent' | 'top-saves' | 'top-remixes' | 'top-sales';
 export type ShowcaseFeedCategory = 'all' | 'media' | ShowcaseFeedItem['category'];
 export type ShowcaseFeedUnlock = 'all' | 'with-unlock' | 'free' | 'paid';
