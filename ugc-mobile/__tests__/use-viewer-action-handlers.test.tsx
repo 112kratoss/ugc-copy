@@ -269,6 +269,10 @@ describe('Save from the menu', () => {
     mountHandlers(postItem()).handleAction('save');
 
     await vi.waitFor(() => expect(refreshViewerMediaCaches).toHaveBeenCalledTimes(1));
+    // The lanes take the answer as it came; none is read again for a save.
+    expect(refreshViewerMediaCaches).toHaveBeenCalledWith(mocks.queryClient, 'viewer-1', {
+      saveState: { postId: 'post-1', isSaved: true, saveCount: 1 },
+    });
     // Through the saver notice, for the signed-in account, so the creator's
     // alert may name whoever saved: the request carries exactly what it gave.
     expect(mocks.creatorSeesSaverFields).toHaveBeenCalledWith('viewer-1', true);
@@ -402,7 +406,8 @@ describe('Block user', () => {
     mountHandlers(postItem(), { onSourceRefresh }).handleAction('block-user');
 
     await vi.waitFor(() => expect(onSourceRefresh).toHaveBeenCalledTimes(1));
-    expect(refreshViewerMediaCaches).toHaveBeenCalledWith(mocks.queryClient, 'viewer-1');
+    // The feed lanes lose the creator's posts where they stand; none is read again.
+    expect(refreshViewerMediaCaches).toHaveBeenCalledWith(mocks.queryClient, 'viewer-1', { blockedCreatorId: 'creator-1' });
     expect(mocks.queryClient.invalidateQueries).not.toHaveBeenCalled();
     expect(blockedGrid('creator-1')).toMatchObject({ pages: [{ items: [], viewer: { blockedByViewer: true } }] });
     expect(mocks.queryClient.setQueryData).toHaveBeenCalledWith(['creator-follow-state', 'creator-1'], { following: false });

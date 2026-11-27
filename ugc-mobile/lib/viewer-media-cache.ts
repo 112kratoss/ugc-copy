@@ -14,6 +14,11 @@ import {
 } from '@/lib/profile-media-query';
 import { applyArchivedScopeChange } from '@/lib/profile-media-refresh';
 import { invalidateProfileStats } from '@/lib/profile-stats';
+import {
+  applyShowcaseFeedLaneChange,
+  markShowcaseFeedLanesStale,
+  type ShowcaseFeedLaneChange,
+} from '@/lib/showcase-feed-lane-refresh';
 import type { GenerationListItem, GenerationListResponse, OwnerPostsResponse } from '@/lib/types';
 
 /**
@@ -54,9 +59,15 @@ export async function applyPostVisibilityToCaches(
     }));
   }
 
+  // A post that is no longer public leaves the feed lanes where it stands. One
+  // made public is found by the next read the reader asks for: reading the
+  // lanes again here re-ranked every loaded page under them
+  // (`showcase-feed-lane-refresh.ts`).
+  if (visibility !== 'public') applyShowcaseFeedLaneChange(queryClient, { removedPostId: postId });
+
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-    queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+    markShowcaseFeedLanesStale(queryClient),
     // The header counts and the seller total ride on the profile.
     invalidateProfileStats(queryClient, userId),
   ]);
@@ -193,8 +204,15 @@ export function removeGenerationFromCaches(queryClient: QueryClient, userId: str
  */
 export async function refreshViewerMediaCaches(
   queryClient: QueryClient,
-  userId: string | undefined
+  userId: string | undefined,
+  /**
+   * What the action changed in the feed lanes, written into their pages. The
+   * lanes themselves are not read again (`showcase-feed-lane-refresh.ts`).
+   */
+  feedChange?: ShowcaseFeedLaneChange
 ) {
+  if (feedChange) applyShowcaseFeedLaneChange(queryClient, feedChange);
+
   // Collapse the paginated profile caches so invalidation refetches one page, not all of them.
   queryClient.setQueryData(['profile-saved-media', userId], truncateInfiniteDataToFirstPage);
   queryClient.setQueryData(['profile-generations', userId], truncateInfiniteDataToFirstPage);
@@ -204,7 +222,7 @@ export async function refreshViewerMediaCaches(
 
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: ['immersive-preview-source'] }),
-    queryClient.invalidateQueries({ queryKey: ['showcase-feed'] }),
+    markShowcaseFeedLanesStale(queryClient),
     // Home's shelf draws posts too, and leaves out what the feed leaves out.
     queryClient.invalidateQueries({ queryKey: ['home-shelf'] }),
     queryClient.invalidateQueries({ queryKey: ['profile-saved-media', userId] }),

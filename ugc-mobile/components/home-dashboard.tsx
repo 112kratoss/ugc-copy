@@ -43,6 +43,7 @@ import {
   type HomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
+import { applyShowcaseFeedLaneChange } from '@/lib/showcase-feed-lane-refresh';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { homeShelfGuestReturnTo, isHomeShelfInView, readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
@@ -868,7 +869,14 @@ export function HomeDashboard() {
           return;
         }
         void remixLaunch.close();
-        void queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
+        // The lanes' copy of this one post is brought up to date, so its card
+        // offers the recipe. Reading the lanes again for it re-ranked every
+        // loaded page under the reader (`showcase-feed-lane-refresh.ts`).
+        void api.getShowcasePost(item.id)
+          .then((response) => {
+            if (response?.item) applyShowcaseFeedLaneChange(queryClient, { refreshedPost: response.item });
+          })
+          .catch(() => null);
         showMessageDialog({
           title: 'Unlock needed',
           message: 'The creator has put this remix behind a recipe. Open the post to get it.',
