@@ -30,6 +30,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PostViewCountChip, withSpokenViewCount } from '@/components/post-view-count';
 import { StableMediaImage } from '@/components/media-preview';
+import { useSketchesStillWhileScrolling } from '@/components/media-sketch';
 import { ReturnedVideoPreview } from '@/components/returned-video-preview';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
@@ -901,6 +902,9 @@ function ProfileMediaList({
     listRef.current = list;
     attachPullScroll(list?.getNativeScrollRef?.());
   }, [attachPullScroll]);
+  // The tiles' loading sketches hold still while the grid moves: on Android each
+  // frame of one costs a bitmap and its upload, on the frames of the fling.
+  const sketchesStill = useSketchesStillWhileScrolling();
 
   return (
     // Saved tiles here are what the reel grows out of and returns to.
@@ -912,6 +916,10 @@ function ProfileMediaList({
         ref={attachList}
         data={isLoading ? [] : cards}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
+        onScrollBeginDrag={sketchesStill.onScrollBeginDrag}
+        onScrollEndDrag={sketchesStill.onScrollEndDrag}
+        onMomentumScrollBegin={sketchesStill.onMomentumScrollBegin}
+        onMomentumScrollEnd={sketchesStill.onMomentumScrollEnd}
         drawDistance={400}
         extraData={`${activeTab}:${isFocused}`}
         getItemType={(item) => (item.runFailed ? 'failed' : item.mediaKind ?? item.previewKind)}

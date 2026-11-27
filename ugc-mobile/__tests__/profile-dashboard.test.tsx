@@ -147,6 +147,16 @@ vi.mock('@/components/media-preview', () => ({
   StableMediaImage: (props: MockProps) => React.createElement('stable-media-image', props),
 }));
 
+// The grid's scroll handlers that hold the loading sketches still; the clock's
+// own rule is media-sketch-clock.test.ts's.
+const sketchHold = vi.hoisted(() => ({
+  onScrollBeginDrag: () => {},
+  onScrollEndDrag: () => {},
+  onMomentumScrollBegin: () => {},
+  onMomentumScrollEnd: () => {},
+}));
+vi.mock('@/components/media-sketch', () => ({ useSketchesStillWhileScrolling: () => sketchHold }));
+
 // Auth mock
 const authState = vi.hoisted(() => ({
   // Nullable: the signed-out suite below clears it.
@@ -1330,6 +1340,21 @@ describe('ProfileDashboard media tiles routing', () => {
       visibility: 'all',
     });
     expect(authState.api.getSavedMedia).toHaveBeenCalledWith({ limit: 24, offset: 24 });
+  });
+
+  // Feel audit 2026-11-27: on Android a loading sketch redraws into a new bitmap
+  // every frame; while the grid moves, they hold still.
+  it('holds the tiles\' loading sketches still while the grid moves', () => {
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+    const list = tree!.root.find((node) => String(node.type) === 'flash-list');
+    expect(list.props.onScrollBeginDrag).toBe(sketchHold.onScrollBeginDrag);
+    expect(list.props.onScrollEndDrag).toBe(sketchHold.onScrollEndDrag);
+    expect(list.props.onMomentumScrollBegin).toBe(sketchHold.onMomentumScrollBegin);
+    expect(list.props.onMomentumScrollEnd).toBe(sketchHold.onMomentumScrollEnd);
+    renderer.act(() => tree!.unmount());
   });
 
   it('asks for the next page when the grid reaches its end', () => {

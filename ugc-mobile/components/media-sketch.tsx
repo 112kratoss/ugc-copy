@@ -26,6 +26,7 @@ import {
   mediaSketchTip,
   sketchStrokePath,
 } from '@/lib/media-sketch';
+import { createListMotion, createSketchClock } from '@/lib/media-sketch-clock';
 import { useReducedMotion } from '@/lib/motion';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -34,20 +35,57 @@ const AnimatedPath = Animated.createAnimatedComponent(Path);
 
 // One clock for every sketch on screen, as the skeleton bones share one pulse:
 // a grid of loading tiles draws in step instead of each running its own timer.
-// It runs while any sketch is mounted and stops with the last one.
+// It runs while any sketch is mounted and stops with the last one, and stands
+// still while a list holds it (`useSketchesStillWhileScrolling`): on Android
+// each of its frames redraws every sketch into a new bitmap (lib/media-sketch-clock.ts).
 const sketchPhase = makeMutable(0);
-let sketchSubscribers = 0;
+const sketchClock = createSketchClock({
+  start: () => {
+    sketchPhase.value = 0;
+    sketchPhase.value = withRepeat(withTiming(1, { duration: MEDIA_SKETCH_CYCLE_MS, easing: Easing.linear }), -1, false);
+  },
+  stop: () => cancelAnimation(sketchPhase),
+});
 
-function retainSketchClock() {
-  sketchSubscribers += 1;
-  if (sketchSubscribers > 1) return;
-  sketchPhase.value = 0;
-  sketchPhase.value = withRepeat(withTiming(1, { duration: MEDIA_SKETCH_CYCLE_MS, easing: Easing.linear }), -1, false);
-}
+/** How long after a drag let go with no momentum its list counts as at rest. */
+const LIST_SETTLE_MS = 120;
 
-function releaseSketchClock() {
-  sketchSubscribers = Math.max(0, sketchSubscribers - 1);
-  if (sketchSubscribers === 0) cancelAnimation(sketchPhase);
+/**
+ * The scroll handlers of a list whose tiles draw the sketch: while the list
+ * moves, every sketch holds still where it is, and a new drawing starts once it
+ * rests. A sketch passing under a finger or a fling is not looked at, and each
+ * of its frames costs a raster, an allocation and a texture upload on Android,
+ * landing on the frames of the scroll (feel audit 2026-11-27).
+ */
+export function useSketchesStillWhileScrolling() {
+  const [list] = useState(() => {
+    let release: (() => void) | null = null;
+    const motion = createListMotion({
+      settleMs: LIST_SETTLE_MS,
+      onMove: () => {
+        release = sketchClock.hold();
+      },
+      onRest: () => {
+        release?.();
+        release = null;
+      },
+      schedule: (run, ms) => {
+        const timer = setTimeout(run, ms);
+        return () => clearTimeout(timer);
+      },
+    });
+    return {
+      motion,
+      handlers: {
+        onScrollBeginDrag: () => motion.report('dragBegin'),
+        onScrollEndDrag: () => motion.report('dragEnd'),
+        onMomentumScrollBegin: () => motion.report('momentumBegin'),
+        onMomentumScrollEnd: () => motion.report('momentumEnd'),
+      },
+    };
+  });
+  useEffect(() => () => list.motion.dispose(), [list]);
+  return list.handlers;
 }
 
 const PENCIL_SIZE = 14;
@@ -87,8 +125,7 @@ function SketchChip({ scale }: { scale: number }) {
 
   useEffect(() => {
     if (still) return undefined;
-    retainSketchClock();
-    return releaseSketchClock;
+    return sketchClock.retain();
   }, [still]);
 
   return (
