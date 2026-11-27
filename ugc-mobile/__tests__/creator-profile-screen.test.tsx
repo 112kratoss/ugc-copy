@@ -86,11 +86,13 @@ vi.mock('@shopify/flash-list', () => ({
     renderItem: (info: { item: unknown; index: number }) => React.ReactNode;
     ListFooterComponent?: React.ReactNode;
     stickyHeaderIndices?: number[];
+    onEndReached?: () => void;
+    onEndReachedThreshold?: number;
   }) => {
     mocks.list.stickyHeaderIndices = props.stickyHeaderIndices;
     return React.createElement(
       'flash-list',
-      null,
+      { onEndReached: props.onEndReached, onEndReachedThreshold: props.onEndReachedThreshold },
       props.data.map((item, index) => React.createElement(React.Fragment, { key: props.keyExtractor(item) }, props.renderItem({ item, index }))),
       props.ListFooterComponent ?? null,
     );
@@ -792,5 +794,56 @@ describe("a tile's views", () => {
       .map((node) => node.props.style.bottom);
     // Dots 5 tall, 10 up, and a gap of 6; the corner's inset of 8 without them.
     expect(placements).toEqual([21, 8]);
+  });
+});
+
+describe('paging the grid', () => {
+  const grid = (tree: renderer.ReactTestRenderer) => byType(tree, 'flash-list')[0].props;
+  const pageAsks = () => mocks.api.getCreatorProfile.mock.calls
+    .filter(([, options]) => ((options as { offset?: number } | undefined)?.offset ?? 0) > 0);
+
+  // Two screens of runway so a fling never outruns the next page (feel audit
+  // 2026-11-27: a third of a screen ran out under a fling on the S24).
+  it('asks for the next page two screens before the end of the grid', async () => {
+    mocks.api.getCreatorProfile.mockResolvedValue(creatorPage());
+    const tree = await renderScreen(newQueryClient());
+    expect(grid(tree).onEndReachedThreshold).toBe(2);
+  });
+
+  // FlashList asks once as the list nears its end and again only when its data
+  // changes. A page that lands inside the gate's cooldown with the grid still
+  // within its runway was refused at that render and never asked for again.
+  it('asks again, as the cooldown ends, for a page refused while one was landing', async () => {
+    let now = Date.parse('2026-11-27T10:00:00.000Z');
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      mocks.api.getCreatorProfile.mockImplementation(async (_username: string, options?: { offset?: number }) => {
+        const offset = options?.offset ?? 0;
+        return creatorPage({
+          items: [post(`post-${offset + 1}`), post(`post-${offset + 2}`)],
+          pageInfo: { hasMore: true, nextLimit: 24, nextOffset: offset + 24, limit: 24, offset },
+        });
+      });
+      const tree = await renderScreen(newQueryClient());
+
+      await act(async () => grid(tree).onEndReached());
+      await settle();
+      expect(pageAsks()).toHaveLength(1);
+
+      // The page has landed, 10 ms short of the cooldown's end, with the grid
+      // still within its runway: FlashList asks again, and the gate refuses.
+      now += 790;
+      await act(async () => grid(tree).onEndReached());
+      await settle();
+      expect(pageAsks()).toHaveLength(1);
+
+      // The cooldown ends with nothing drawn again: the gate asks by itself.
+      now += 10;
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+      await settle();
+      expect(pageAsks()).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });

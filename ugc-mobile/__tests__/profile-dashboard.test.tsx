@@ -1341,7 +1341,8 @@ describe('ProfileDashboard media tiles routing', () => {
     });
 
     const list = tree!.root.find((node) => String(node.type) === 'flash-list');
-    expect(list.props.onEndReachedThreshold).toBe(0.32);
+    // Two screens of runway, so a fling never outruns the next page (feel audit 2026-11-27).
+    expect(list.props.onEndReachedThreshold).toBe(2);
 
     renderer.act(() => {
       list.props.onEndReached();

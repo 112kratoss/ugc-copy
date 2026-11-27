@@ -90,6 +90,7 @@ import {
   refreshProfileFailedCreationsHead,
   refreshProfileLibraryHead,
 } from '@/lib/profile-library-head';
+import { FEED_NEXT_PAGE_RUNWAY_SCREENS } from '@/lib/feed-pagination';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
@@ -937,7 +938,12 @@ function ProfileMediaList({
         numColumns={PROFILE_GALLERY_COLUMNS}
         onContentSizeChange={keepScrollWithinContent}
         onEndReached={onEndReached}
-        onEndReachedThreshold={0.32}
+        // Two screens of runway: at a third of one, a fling on the S24 ran past
+        // the loaded rows into the spinner for half a second (feel audit
+        // 2026-11-27). A page is 24 tiles, under two screens, so the first page
+        // asks for the second at once, and a page landing inside the cooldown is
+        // asked for again as it ends (useNextFeedPageRequest).
+        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
         refreshControl={pull.refreshControl}
         removeClippedSubviews={false}
         renderItem={({ item, index }) => (

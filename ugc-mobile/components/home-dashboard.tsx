@@ -33,7 +33,7 @@ import { useAutoplayPolicy } from '@/lib/autoplay-preference';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
 import { feedWindowPaginationPosition } from '@/lib/feed-page-window';
-import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { FEED_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
   homeFeedEmptyState,
@@ -119,6 +119,7 @@ import { cancelScheduledPersistHomeShelf, schedulePersistHomeShelf } from '@/lib
 import { formatCreditBalance } from '@/lib/pricing';
 import { reportStartupMilestone } from '@/lib/startup-interactive';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
+import { useAskAgainAfterCooldown } from '@/lib/use-next-feed-page-request';
 import { getMagicTabBarMetrics } from '@/lib/tab-bar-layout';
 import { appTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -294,6 +295,10 @@ export function HomeDashboard() {
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
+  // The latest render's request, which a request the gate put off asks with
+  // as its cooldown ends (`requestNextPage`).
+  const requestNextPageRef = useRef<() => void>(() => undefined);
+  const { askAgainIn, cancel: cancelAskAgain } = useAskAgainAfterCooldown(requestNextPageRef);
   const qualifiedImpressionsRef = useRef(new Set<string>());
   const restoringCommentContextRef = useRef<string | null>(null);
   const feedEventRuntimeRef = useRef({
@@ -635,9 +640,15 @@ export function HomeDashboard() {
     return cancelScheduledPersistHomeShelf;
   }, [identityUserId, isAuthLoading, queryClient, shelfQuery.dataUpdatedAt, shelfQuery.isSuccess]);
 
+  // Asked two screens from the end (`FEED_NEXT_PAGE_RUNWAY_SCREENS`), so a page
+  // can land inside the gate's cooldown with the lane still that near its end:
+  // FlashList asks as it lands, is refused, and asks no more until its data
+  // changes. A request refused only for the cooldown is asked again as it ends.
   const requestNextPage = () => {
+    cancelAskAgain();
+    if (!isFocused) return;
     const now = Date.now();
-    if (!isFocused || !canRequestNextFeedPage({
+    const wait = nextFeedPageRequestDelay({
       cooldownMs: LOAD_MORE_COOLDOWN_MS,
       hasNextPage: feedQuery.hasNextPage,
       isBusy: feedQuery.isFetching,
@@ -646,7 +657,12 @@ export function HomeDashboard() {
       lastRequestedPageCount: lastLoadMorePageCountRef.current,
       now,
       pageCount: feedPageCount,
-    })) return;
+    });
+    if (wait === null) return;
+    if (wait > 0) {
+      askAgainIn(wait);
+      return;
+    }
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
@@ -655,6 +671,9 @@ export function HomeDashboard() {
       loadingMoreRef.current = false;
     });
   };
+  useEffect(() => {
+    requestNextPageRef.current = requestNextPage;
+  });
 
   const requestPreviousPage = () => {
     if (!isFocused || !feedQuery.hasPreviousPage || feedQuery.isFetching || loadingMoreRef.current) return;
@@ -686,6 +705,7 @@ export function HomeDashboard() {
     start: () => {
       lastLoadMorePageCountRef.current = null;
       lastLoadMoreAtRef.current = 0;
+      cancelAskAgain();
       queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
         if (!current?.pages.length) return current;
         return { pages: current.pages.slice(0, 1), pageParams: [{ offset: 0 }] };
@@ -728,6 +748,7 @@ export function HomeDashboard() {
     recordAttention(attention.setVisible([], Date.now()));
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
+    cancelAskAgain();
     feedViewableRef.current = [];
     playbackController.dispatch({ type: 'reset' });
     setActiveChipId(chipId);
@@ -1199,7 +1220,10 @@ export function HomeDashboard() {
         onStartReached={requestPreviousPage}
         onStartReachedThreshold={0.25}
         onEndReached={requestNextPage}
-        onEndReachedThreshold={0.32}
+        // Two screens of runway: a third of one ran out under a fling (feel
+        // audit 2026-11-27). Impressions and dwell come from viewability alone,
+        // so a page read early files neither for cards not yet drawn.
+        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
         refreshControl={pull.refreshControl}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}

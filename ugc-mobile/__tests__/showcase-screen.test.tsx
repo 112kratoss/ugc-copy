@@ -668,6 +668,48 @@ describe('Showcase screen', () => {
     renderer.act(() => tree!.unmount());
   });
 
+  // Two screens of runway so a fling never outruns the next page (feel audit
+  // 2026-11-27: the profile grid's third of a screen ran out under a fling).
+  it('asks for the next page two screens before the end of the grid', () => {
+    expect(flashListProps().onEndReachedThreshold).toBe(2);
+  });
+
+  // FlashList asks once as the list nears its end and again only when its data
+  // changes. A page that lands inside the gate's cooldown with the grid still
+  // within its runway was refused at that render and never asked for again.
+  it('asks again, as the cooldown ends, for a page refused while one was landing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    queryState.hasNextPage = true;
+    queryState.pages = [{ items: [feedItem()], pageInfo: { hasMore: true, nextOffset: 12 } }];
+    let tree!: renderer.ReactTestRenderer;
+    const act = (work: () => void) => renderer.act(async () => { work(); });
+    try {
+      await act(() => { tree = renderer.create(<ShowcaseScreen />); });
+      const list = () => hostElement(tree, 'flash-list').props;
+
+      await act(() => list().onEndReached());
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+      // The page lands 300 ms on, the grid still within its runway: FlashList asks again.
+      await act(() => { vi.advanceTimersByTime(300); });
+      queryState.pages = [
+        ...queryState.pages,
+        { items: [{ ...feedItem(), id: 'post-2' }], pageInfo: { hasMore: true, nextOffset: 24 } },
+      ];
+      await act(() => { tree.update(<ShowcaseScreen />); });
+      await act(() => list().onEndReached());
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+
+      await act(() => { vi.advanceTimersByTime(499); });
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(1);
+      await act(() => { vi.advanceTimersByTime(1); });
+      expect(queryState.fetchNextPage).toHaveBeenCalledTimes(2);
+    } finally {
+      renderer.act(() => tree?.unmount());
+      vi.useRealTimers();
+    }
+  });
+
   it('shows a visible load-more retry and clears the automatic page lock', async () => {
     queryState.hasNextPage = true;
     queryState.isFetchNextPageError = true;

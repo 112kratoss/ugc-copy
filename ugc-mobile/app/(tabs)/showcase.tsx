@@ -45,11 +45,12 @@ import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
-import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { FEED_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import type { NativeMenuModel } from '@/lib/native-menu';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
 import { useTabBarAmbientFeed } from '@/lib/tab-bar-ambient';
+import { useAskAgainAfterCooldown } from '@/lib/use-next-feed-page-request';
 import { isShowcaseCoverVideoStreaming, isShowcaseVideoPreviewCandidate } from '@/lib/showcase-display';
 import {
   INITIAL_SHOWCASE_ACTIVATION_STATE,
@@ -319,6 +320,10 @@ export default function ShowcaseScreen() {
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
+  // The latest render's request, which a request the gate put off asks with
+  // as its cooldown ends (`requestNextPage`).
+  const requestNextPageRef = useRef<() => void>(() => undefined);
+  const { askAgainIn, cancel: cancelAskAgain } = useAskAgainAfterCooldown(requestNextPageRef);
   // Where the screen is in the list, and the ratios waiting for their cards to
   // pass below it. See `partitionAspectRatiosByViewport` for why a measurement
   // cannot be applied to a card on or above the screen.
@@ -586,6 +591,7 @@ export default function ShowcaseScreen() {
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
+    cancelAskAgain();
     // Another filter or tool is another feed, so it opens at the top, as a
     // first visit does. The list keeps its offset across a data change, and a
     // tool can arrive by link (a creator's tool) while this grid sits deep in
@@ -612,9 +618,14 @@ export default function ShowcaseScreen() {
     router.setParams({ tool: undefined } as never);
   };
 
+  // Asked two screens from the end (`FEED_NEXT_PAGE_RUNWAY_SCREENS`), so a page
+  // can land inside the gate's cooldown with the grid still that near its end:
+  // FlashList asks as it lands, is refused, and asks no more until its data
+  // changes. A request refused only for the cooldown is asked again as it ends.
   const requestNextPage = () => {
+    cancelAskAgain();
     const now = Date.now();
-    if (!canRequestNextFeedPage({
+    const wait = nextFeedPageRequestDelay({
       cooldownMs: LOAD_MORE_COOLDOWN_MS,
       hasNextPage: showcaseQuery.hasNextPage,
       isBusy: showcaseQuery.isFetching,
@@ -623,7 +634,12 @@ export default function ShowcaseScreen() {
       lastRequestedPageCount: lastLoadMorePageCountRef.current,
       now,
       pageCount: showcasePageCount,
-    })) return;
+    });
+    if (wait === null) return;
+    if (wait > 0) {
+      askAgainIn(wait);
+      return;
+    }
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
@@ -632,6 +648,9 @@ export default function ShowcaseScreen() {
       loadingMoreRef.current = false;
     });
   };
+  useEffect(() => {
+    requestNextPageRef.current = requestNextPage;
+  });
 
   const retryNextPage = () => {
     lastLoadMorePageCountRef.current = null;
@@ -654,6 +673,7 @@ export default function ShowcaseScreen() {
     start: () => {
       lastLoadMorePageCountRef.current = null;
       lastLoadMoreAtRef.current = 0;
+      cancelAskAgain();
       queryClient.setQueryData<InfiniteData<ShowcaseFeedResponse>>(queryKey, (current) => {
         if (!current?.pages.length) return current;
         return {
@@ -1005,10 +1025,11 @@ export default function ShowcaseScreen() {
         // to diverge from strict alternation so variable-height cards stay balanced.
         optimizeItemArrangement={true}
         onEndReached={requestNextPage}
-        // Pending-preview posts now keep their place in the masonry feed, so a
-        // half-screen runway is enough to hide the next-page round trip without
-        // prefetching as aggressively as the temporary filtered-feed tuning.
-        onEndReachedThreshold={0.5}
+        // Two screens of runway (`FEED_NEXT_PAGE_RUNWAY_SCREENS`). Half a screen
+        // was chosen when pending-preview posts stopped being filtered out; the
+        // feel audit of 2026-11-27 saw a third of a screen run out under a fling
+        // on the profile grid. A masonry grid measures its end at its tallest column.
+        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
         refreshControl={pull.refreshControl}
         renderItem={renderCard}
         scrollEnabled={!isSwipingMedia}
