@@ -8,7 +8,7 @@ import { AlertCircle, AlertTriangle, Check, ChevronDown, Copy, Film, Image as Im
 import { createPortal } from 'react-dom';
 
 import CreatorIdentity from '@/components/CreatorIdentity';
-import { getFocusableElements } from '@/lib/focusable-elements';
+import { keepTabInside } from '@/lib/focusable-elements';
 import type { GenerationInputMediaItem } from '@/lib/generation-input-media';
 import type { ShowcaseCreator } from '@/lib/showcase';
 
@@ -198,32 +198,8 @@ function MediaDetailsPreviewDialog({
         return;
       }
 
-      if (event.key !== 'Tab') {
-        return;
-      }
-
       // Tab goes round the viewer's own controls, never on to the page under it.
-      const dialog = dialogRef.current;
-      const focusable = getFocusableElements(dialog);
-      if (!dialog || focusable.length === 0) {
-        event.preventDefault();
-        dialog?.focus();
-        return;
-      }
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (!dialog.contains(active)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && (active === first || active === dialog)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      keepTabInside(event, dialogRef.current);
     };
 
     window.addEventListener('keydown', handleKeyDown);

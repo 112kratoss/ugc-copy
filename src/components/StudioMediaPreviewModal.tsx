@@ -6,7 +6,7 @@ import { createPortal } from 'react-dom';
 
 import type { StudioMediaPreviewType } from '@/components/CreatorStudio';
 import InlineMediaVideo from '@/components/InlineMediaVideo';
-import { getFocusableElements } from '@/lib/focusable-elements';
+import { keepTabInside } from '@/lib/focusable-elements';
 import { isSignedMediaUrlExpiring } from '@/lib/template-run-stable-media';
 
 const PREVIEW_VISUAL_CLASS = 'preview-modal-visual max-h-[45dvh] w-full object-contain sm:max-h-[68vh]';
@@ -109,27 +109,7 @@ export function StudioMediaPreviewModal({
         if (!event.defaultPrevented) onClose();
         return;
       }
-      if (event.key !== 'Tab') return;
-      const dialog = dialogRef.current;
-      const focusable = getFocusableElements(dialog);
-      if (!dialog || focusable.length === 0) {
-        event.preventDefault();
-        dialog?.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (!dialog.contains(active)) {
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && (active === first || active === dialog)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      }
+      keepTabInside(event, dialogRef.current);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

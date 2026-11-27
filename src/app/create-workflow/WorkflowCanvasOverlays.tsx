@@ -3,7 +3,7 @@
 import RecoverableMediaAudio from '@/components/RecoverableMediaAudio';
 
 import Image from 'next/image';
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef } from 'react';
 import { useAuth } from '@/components/AuthProvider';
 import GenerationResultVideo from '@/components/GenerationResultVideo';
 import { Layers3, PencilLine, Play, Plus, Trash2, X, ZoomIn } from 'lucide-react';
@@ -13,6 +13,7 @@ import type {
   CanvasSelectionState,
   PreviewMediaState,
 } from './workflowCanvasUiTypes';
+import { keepTabInside } from '@/lib/focusable-elements';
 import { getNodeLabel, placeMenuAtPointer } from './workflowCanvasUiUtils';
 
 interface WorkflowCanvasOverlaysProps {
@@ -71,9 +72,11 @@ function CanvasSelectionHud({
         <button
           type="button"
           onClick={onClear}
+          aria-label="Clear selection"
+          title="Clear selection"
           className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-300 transition hover:bg-white/[0.06] hover:text-white"
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4" aria-hidden />
         </button>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
@@ -98,6 +101,15 @@ function PreviewMediaOverlay({
 }) {
   const { session } = useAuth();
   const closeRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  // A modal: Tab goes round its own controls, never on to the canvas under it.
+  useEffect(() => {
+    if (!preview) return;
+    const onKeyDown = (event: KeyboardEvent) => keepTabInside(event, dialogRef.current);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [preview]);
   useEffect(() => {
     if (!preview) return;
     // Node preview buttons stop keyboard propagation. Move focus into the
@@ -122,12 +134,17 @@ function PreviewMediaOverlay({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-6xl rounded-3xl border border-white/10 bg-[#050505] p-4 shadow-[0_32px_120px_rgba(0,0,0,0.65)]"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="w-full max-w-6xl rounded-3xl border border-white/10 bg-[#050505] p-4 shadow-[0_32px_120px_rgba(0,0,0,0.65)] outline-none"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between gap-4">
           <div>
-            <div className="text-sm font-semibold text-white">{preview.title}</div>
+            <h2 id={titleId} className="text-sm font-semibold text-white">{preview.title}</h2>
             <div className="text-xs uppercase tracking-[0.18em] text-zinc-500">Press Escape to close</div>
           </div>
           <button
