@@ -40,8 +40,9 @@ const mockNotFound = vi.fn(() => {
 const mockRedirect = vi.fn((target: string) => {
   throw new Error(`NEXT_REDIRECT:${target}`);
 });
-// A legacy id's post never changes, so its redirect is permanent (308): a crawler moves the old
-// address's standing to the post's own (audit 2026-11-27).
+// A legacy generation id names whichever post of that generation is visible now, so its redirect
+// stays temporary (307): a cached 308 could keep pointing at a post later removed (review of the
+// 2026-11-27 change, which made it permanent).
 const mockPermanentRedirect = vi.fn((target: string) => {
   throw new Error(`NEXT_REDIRECT:${target}`);
 });
@@ -954,7 +955,8 @@ describe('Showcase detail page', () => {
       openedAt(openedFromCard);
 
       await expect(ShowcaseDetailPage({ params: Promise.resolve({ id: GENERATION_ID }) })).rejects.toThrow('NEXT_REDIRECT');
-      expect(mockPermanentRedirect).toHaveBeenCalledWith(`/showcase/${POST_ID}`);
+      expect(mockRedirect).toHaveBeenCalledWith(`/showcase/${POST_ID}`);
+      expect(mockPermanentRedirect).not.toHaveBeenCalled();
     });
   });
 

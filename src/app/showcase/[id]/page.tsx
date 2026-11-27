@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { notFound, permanentRedirect } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { cache } from 'react';
 
 import { JsonLd } from '@/components/JsonLd';
@@ -258,9 +258,10 @@ export default async function ShowcaseDetailPage({ params }: ShowcaseDetailPageP
   if (page.kind === 'redirect') {
     // To the post's own address. The cached redirect cannot carry the query
     // of the link that reached it (the page never reads one), so a legacy id
-    // opened from a ranked card lands without its way back or delivery. A legacy
-    // id always names the same post, so the move is permanent (308).
-    permanentRedirect(buildShowcaseDetailPath(page.postId));
+    // opened from a ranked card lands without its way back or delivery. Temporary
+    // (307) on purpose: a generation id names whichever of its posts is visible
+    // now, and a cached 308 could keep pointing at one removed later.
+    redirect(buildShowcaseDetailPath(page.postId));
   }
 
   if (page.kind === 'missing') {
