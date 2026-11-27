@@ -43,9 +43,22 @@ class Builder {
 
 function createClient(results: Result[], rpcResults: Result[] = []) {
   const builders: Builder[] = [];
+  // The generations the sweep reads by id: answered from the fixture jobs it read.
+  const knownGenerations = new Map<string, unknown>();
+  const generationReads: Builder[] = [];
   const from = vi.fn((table: string) => {
+    if (table === 'generations') {
+      const builder = new Builder({ data: [...knownGenerations.values()], error: null });
+      generationReads.push(builder);
+      return builder;
+    }
     expect(table).toBe('generation_output_import_jobs');
     const result = results.shift();
+    if (result && Array.isArray(result.data)) {
+      for (const row of result.data as Array<{ generations?: { id: string } }>) {
+        if (row.generations) knownGenerations.set(row.generations.id, row.generations);
+      }
+    }
     if (!result) throw new Error('Unexpected query');
     const builder = new Builder(result);
     builders.push(builder);
@@ -57,7 +70,7 @@ function createClient(results: Result[], rpcResults: Result[] = []) {
     if (!result) throw new Error('Unexpected RPC');
     return result;
   });
-  return { client: { from, rpc }, builders, rpc };
+  return { client: { from, rpc }, builders, rpc, generationReads };
 }
 
 const NOW_MS = Date.UTC(2026, 10, 27, 12, 0, 0);
@@ -102,11 +115,12 @@ describe('exhausted generation output imports', () => {
     await retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS });
 
     const calls = builders[0].calls;
-    expect(calls).toContainEqual(['select', [expect.stringContaining('generations!inner(')]]);
+    // Plain reads: no embedded resource or filter on one.
+    expect(calls).toContainEqual(['select', [expect.not.stringContaining('generations')]]);
+    expect(calls.some(([name, args]) => name === 'in' && args[0] === 'generations.status')).toBe(false);
     // Every import that has not succeeded: an exhausted one due its retry, and
     // any (failed, pending, or processing under a dead worker) past its window.
     expect(calls).toContainEqual(['in', ['status', ['failed', 'pending', 'processing']]]);
-    expect(calls).toContainEqual(['in', ['generations.status', ['waiting', 'processing']]]);
     expect(calls).toContainEqual(['or', [[
       'and(status.eq.failed,completed_at.lte.2026-11-27T11:00:00.000Z)',
       'created_at.lte.2026-11-26T12:00:00.000Z',
@@ -267,7 +281,12 @@ describe('exhausted generation output imports', () => {
     }));
     const settled: string[] = [];
     const client = {
-      from: () => {
+      from: (table: string) => {
+        if (table === 'generations') {
+          const generations = jobs.map((job) => job.generations);
+          const read = { select: () => read, in: () => read, limit: async () => ({ data: generations, error: null }) };
+          return read;
+        }
         let patch: Record<string, unknown> | null = null;
         let id: string | null = null;
         let limitCount = Infinity;
@@ -305,6 +324,21 @@ describe('exhausted generation output imports', () => {
     const second = await retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS + 10 * 60_000 });
     expect(second).toMatchObject({ abandoned: 1 });
     expect(settled).toEqual(['ok']);
+  });
+
+  it('closes the job of a generation that already ended, without settling anything', async () => {
+    const job = exhaustedJob({ generations: { ...exhaustedJob().generations, status: 'failed' } });
+    const { client, builders, rpc, generationReads } = createClient([
+      { data: [job], error: null },
+      { data: null, error: null },
+    ]);
+
+    await expect(retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS }))
+      .resolves.toMatchObject({ eligible: 1, skipped: 1, reopened: 0, abandoned: 0 });
+
+    expect(generationReads[0].calls).toContainEqual(['in', ['id', ['generation-1']]]);
+    expect(rpc).not.toHaveBeenCalled();
+    expect(builders[1].calls[0]).toEqual(['update', [expect.objectContaining({ status: 'cancelled' })]]);
   });
 
   it('defers what it cannot start before the run deadline', async () => {

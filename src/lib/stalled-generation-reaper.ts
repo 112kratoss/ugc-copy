@@ -195,26 +195,55 @@ export async function hasStalledGenerationWork(
   return hasRows(stalledPending.data);
 }
 
+/** Candidates read per tick, as a multiple of the batch: room to set aside rows the import pipeline owns. */
+export const STALLED_GENERATION_SYNC_CANDIDATE_FACTOR = 3;
+
+/**
+ * The provider-sync batch: active rows least recently tried first, without
+ * the ones whose provider already finished. Those have an output import job
+ * and belong to the import pipeline (its retries, its window, its refund).
+ *
+ * Two plain bounded reads rather than an embedded anti-join, so the query is
+ * the same on PostgREST and on the database-backed test harness: up to three
+ * batches of candidates, then their import jobs by id. A candidate set aside
+ * is returned too, so the caller stamps it and it rotates behind the rest
+ * instead of filling the head of every read.
+ */
 async function loadStalledProviderSyncRows(
   client: GenerationsProbeClient,
   params: { nowMs: number; limit: number },
-): Promise<StalledGenerationRow[]> {
-  // `generation_output_import_jobs(id)` with `is null` is an anti-join: a row
-  // whose provider finished has an import job and belongs to the import
-  // pipeline. The embed is one-to-one (generation_id is unique there).
+): Promise<{ rows: StalledGenerationRow[]; importOwned: StalledGenerationRow[] }> {
   const { data, error } = await client
     .from('generations')
-    .select('id, prediction_id, status, created_at, user_id, category, model, template_run_id, provider_sync_attempted_at, generation_output_import_jobs(id)')
+    .select('id, prediction_id, status, created_at, user_id, category, model, template_run_id, provider_sync_attempted_at')
     .in('status', [...STALLED_SYNCABLE_STATUSES])
     .not('prediction_id', 'is', null)
     .lt('created_at', syncCutoffIso(params.nowMs))
-    .is('generation_output_import_jobs', null)
     .order('provider_sync_attempted_at', { ascending: true, nullsFirst: true })
     .order('created_at', { ascending: true })
-    .limit(params.limit);
+    .limit(params.limit * STALLED_GENERATION_SYNC_CANDIDATE_FACTOR);
 
   if (error) throw error;
-  return (Array.isArray(data) ? data : []) as StalledGenerationRow[];
+  const candidates = (Array.isArray(data) ? data : []) as StalledGenerationRow[];
+  if (candidates.length === 0) return { rows: [], importOwned: [] };
+
+  const ids = candidates.map((row) => row.id);
+  const imports = await client
+    .from('generation_output_import_jobs')
+    .select('generation_id')
+    .in('generation_id', ids)
+    .limit(ids.length);
+  if (imports.error) throw imports.error;
+  const owned = new Set(
+    (Array.isArray(imports.data) ? imports.data : [])
+      .map((row) => (row as { generation_id?: unknown }).generation_id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+
+  return {
+    rows: candidates.filter((row) => !owned.has(row.id)).slice(0, params.limit),
+    importOwned: candidates.filter((row) => owned.has(row.id)),
+  };
 }
 
 async function loadStalledStartFailureRows(
@@ -330,7 +359,8 @@ export async function reapStalledGenerations(params: {
     startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0, submissionUnknown: 0 },
   };
 
-  const syncRows = await loadStalledProviderSyncRows(params.supabase, { nowMs, limit: syncLimit });
+  const { rows: syncRows, importOwned } = await loadStalledProviderSyncRows(params.supabase, { nowMs, limit: syncLimit });
+  for (const row of importOwned) await recordProviderSyncAttempt(params.supabase, row, nowMs);
   summary.providerSync.eligible = syncRows.length;
 
   for (const row of syncRows) {

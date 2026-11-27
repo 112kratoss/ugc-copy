@@ -5,35 +5,44 @@ import {
   generationOutputImportAlertFromStatus,
 } from '@/lib/generation-output-import-alert';
 
-function createClient(result: { data: unknown; error: unknown }) {
+function createClient(result: { data: unknown; error: unknown }, generations: Array<{ id: string; status: string }> = []) {
   const builder: Record<string, unknown> = {};
-  for (const name of ['select', 'gte', 'neq', 'in', 'order']) builder[name] = vi.fn(() => builder);
+  for (const name of ['select', 'gte', 'in', 'order']) builder[name] = vi.fn(() => builder);
   builder.limit = vi.fn(async () => result);
-  return { client: { from: vi.fn(() => builder) }, builder };
+  const generationRead: Record<string, unknown> = {};
+  for (const name of ['select', 'in']) generationRead[name] = vi.fn(() => generationRead);
+  generationRead.limit = vi.fn(async () => ({ data: generations, error: null }));
+  return {
+    client: { from: vi.fn((table: string) => (table === 'generations' ? generationRead : builder)) },
+    builder,
+    generationRead,
+  };
 }
 
 describe('generation output import alert', () => {
   const now = new Date('2026-11-27T12:00:00.000Z');
 
   it('reads jobs that exhausted their tries in the last day and have not succeeded since', async () => {
-    const { client, builder } = createClient({
+    const { client, builder, generationRead } = createClient({
       data: [
-        { status: 'failed', last_error: 'Remote media host is not allowlisted.' },
-        { status: 'pending', last_error: 'Remote media host is not allowlisted.' },
-        { status: 'failed', last_error: 'Bucket not found' },
+        { status: 'failed', last_error: 'Remote media host is not allowlisted.', generation_id: 'g-1' },
+        { status: 'pending', last_error: 'Remote media host is not allowlisted.', generation_id: 'g-2' },
+        { status: 'failed', last_error: 'Bucket not found', generation_id: 'g-3' },
+        // Enqueued for a generation already failed (a poll racing the give-up): not counted.
+        { status: 'failed', last_error: 'Bucket not found', generation_id: 'g-4' },
       ],
       error: null,
-    });
+    }, [{ id: 'g-1', status: 'processing' }, { id: 'g-2', status: 'waiting' }, { id: 'g-3', status: 'processing' }]);
 
     const status = await collectGenerationOutputImportFailures(client as never, now);
 
     expect(client.from).toHaveBeenCalledWith('generation_output_import_jobs');
     expect(builder.gte).toHaveBeenCalledWith('attempt_count', 10);
-    expect(builder.neq).toHaveBeenCalledWith('status', 'succeeded');
-    // Only renders still waiting on it: a job enqueued for a generation already
-    // failed (a poll racing the give-up) is not an import anyone is owed.
-    expect(builder.select).toHaveBeenCalledWith(expect.stringContaining('generations!inner(status)'));
-    expect(builder.in).toHaveBeenCalledWith('generations.status', ['waiting', 'processing']);
+    expect(builder.in).toHaveBeenCalledWith('status', ['pending', 'processing', 'failed']);
+    // Plain reads: the jobs, then which of their generations are still waiting.
+    expect(builder.select).toHaveBeenCalledWith(expect.not.stringContaining('generations'));
+    expect(generationRead.in).toHaveBeenCalledWith('id', ['g-1', 'g-2', 'g-3', 'g-4']);
+    expect(generationRead.in).toHaveBeenCalledWith('status', ['waiting', 'processing']);
     expect(builder.gte).toHaveBeenCalledWith('updated_at', '2026-11-26T12:00:00.000Z');
     expect(status).toEqual({
       available: true,

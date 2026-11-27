@@ -81,7 +81,8 @@ type ExhaustedImportRow = {
   created_at: string | null;
   completed_at: string | null;
   last_error: string | null;
-  generations: GenerationNotificationSubject | GenerationNotificationSubject[] | null;
+  /** Read separately, by id; null when the generation is gone. */
+  generation?: (GenerationNotificationSubject & { status?: string | null }) | null;
 };
 
 export type GenerationOutputImportRetrySummary = {
@@ -115,7 +116,6 @@ function exhaustedImportsQuery(client: Pick<SupabaseClient, 'from'>, columns: st
     .from('generation_output_import_jobs')
     .select(columns)
     .in('status', UNFINISHED_IMPORT_STATUSES)
-    .in('generations.status', ACTIVE_GENERATION_STATUSES)
     .or(dueFilter(nowMs));
 }
 
@@ -123,7 +123,9 @@ export async function hasDueGenerationOutputImportRetries(
   client: Pick<SupabaseClient, 'from'>,
   options: { nowMs?: number } = {},
 ): Promise<boolean> {
-  const { data, error } = await exhaustedImportsQuery(client, 'id, generations!inner(status)', options.nowMs ?? Date.now())
+  // A job of a generation that is no longer active also answers yes: the
+  // sweep closes it, so it answers once.
+  const { data, error } = await exhaustedImportsQuery(client, 'id', options.nowMs ?? Date.now())
     .limit(1);
   if (error) throw error;
   return Array.isArray(data) && data.length > 0;
@@ -149,7 +151,7 @@ async function abandon(
     importJobId: row.id,
     errorClass: classifyGenerationOutputImportError(row.last_error),
   });
-  const generation = Array.isArray(row.generations) ? row.generations[0] : row.generations;
+  const generation = row.generation;
   // The notifier never throws, so it cannot undo the refund above it, and its
   // dedupe key absorbs a second send if this row is settled again.
   if (generation?.user_id) await notifyGenerationStatus(client, generation, 'failed');
@@ -226,10 +228,12 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
     eligible: 0, reopened: 0, abandoned: 0, skipped: 0, failed: 0, deferred: 0,
   };
 
+  // Two plain bounded reads rather than an embedded filter, so the query is
+  // the same on PostgREST and on the database-backed harness: the jobs, then
+  // their generations by id.
   const { data, error } = await exhaustedImportsQuery(
     params.client,
-    'id, status, locked_at, generation_id, prediction_id, provider_completed_at, created_at, completed_at, last_error, '
-      + 'generations!inner(id, user_id, status, category, model, template_run_id)',
+    'id, status, locked_at, generation_id, prediction_id, provider_completed_at, created_at, completed_at, last_error',
     nowMs,
   )
     // Least recently touched first: a row this pass could not settle is
@@ -240,6 +244,20 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
 
   const rows = (Array.isArray(data) ? data : []) as unknown as ExhaustedImportRow[];
   summary.eligible = rows.length;
+  if (rows.length > 0) {
+    const generationIds = [...new Set(rows.map((row) => row.generation_id))];
+    const generations = await params.client
+      .from('generations')
+      .select('id, user_id, status, category, model, template_run_id')
+      .in('id', generationIds)
+      .limit(generationIds.length);
+    if (generations.error) throw generations.error;
+    const byId = new Map(
+      ((Array.isArray(generations.data) ? generations.data : []) as Array<NonNullable<ExhaustedImportRow['generation']>>)
+        .map((generation) => [generation.id, generation]),
+    );
+    for (const row of rows) row.generation = byId.get(row.generation_id) ?? null;
+  }
   const retryBeforeMs = nowMs - GENERATION_OUTPUT_IMPORT_RETRY_EVERY_MINUTES * 60 * 1000;
 
   for (const row of rows) {
@@ -248,6 +266,13 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
       continue;
     }
     try {
+      // A job whose generation already ended (or is gone) is owed nothing:
+      // closed, so it leaves the head of the queue. A live worker is left be.
+      if (!ACTIVE_GENERATION_STATUSES.includes(row.generation?.status ?? '')) {
+        if (!holdsLiveLease(row, nowMs)) await close(params.client, row, nowMs);
+        summary.skipped += 1;
+        continue;
+      }
       if (generationOutputImportWindowEnded(row, nowMs)) {
         // A worker still inside its lease may be saving the file right now.
         if (holdsLiveLease(row, nowMs)) {

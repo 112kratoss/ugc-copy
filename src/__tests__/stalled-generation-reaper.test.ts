@@ -149,6 +149,7 @@ describe('stalled generation reaper', () => {
         error: null,
       },
       { data: [], error: null },
+      { data: [], error: null },
     ]);
     vi.mocked(syncGenerationStatusByPredictionId)
       .mockResolvedValueOnce(syncedGeneration('task-1', 'succeeded'))
@@ -166,7 +167,7 @@ describe('stalled generation reaper', () => {
 
     expect(client.lt).toHaveBeenNthCalledWith(1, 'created_at', '2026-06-21T09:30:00.000Z');
     expect(client.order).toHaveBeenCalledWith('created_at', { ascending: true });
-    expect(client.limit).toHaveBeenNthCalledWith(1, STALLED_GENERATION_SYNC_BATCH_LIMIT);
+    expect(client.limit).toHaveBeenNthCalledWith(1, STALLED_GENERATION_SYNC_BATCH_LIMIT * 3);
     expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(3);
     expect(syncGenerationStatusByPredictionId).toHaveBeenNthCalledWith(1, {
       supabase: client,
@@ -212,7 +213,7 @@ describe('stalled generation reaper', () => {
     });
 
     expect(client.lt).toHaveBeenNthCalledWith(2, 'created_at', '2026-06-21T09:15:00.000Z');
-    expect(client.limit).toHaveBeenNthCalledWith(2, STALLED_GENERATION_START_FAILURE_BATCH_LIMIT);
+    expect(client.limit).toHaveBeenLastCalledWith(STALLED_GENERATION_START_FAILURE_BATCH_LIMIT);
     expect(getPublicGenerationStartFailure).toHaveBeenCalledWith(expect.objectContaining({ status: 504 }));
     expect(client.rpc).toHaveBeenCalledTimes(8);
     expect(client.rpc).toHaveBeenNthCalledWith(2, 'settle_generation_start_failed', {
@@ -231,6 +232,7 @@ describe('stalled generation reaper', () => {
         ],
         error: null,
       },
+      { data: [], error: null },
       {
         data: [
           { id: 'gen-a', prediction_id: null, status: 'pending', created_at: '2026-06-21T08:00:00.000Z' },
@@ -474,19 +476,32 @@ describe('stalled generation reaper', () => {
     }
 
     it('takes the least recently tried rows first and leaves generations whose provider finished to the import pipeline', async () => {
-      const client = createGenerationsClient([{ data: [], error: null }, { data: [], error: null }]);
+      const client = createGenerationsClient([
+        { data: [activeRow('gen-owned', 3), activeRow('gen-free', 2)], error: null },
+        { data: [{ generation_id: 'gen-owned' }], error: null },
+        { data: [], error: null },
+      ]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValueOnce(syncedGeneration('task-gen-free', 'processing'));
 
-      await reapStalledGenerations({ supabase: client as never, creditSupabase: client as never, nowMs: NOW_MS });
+      await expect(reapStalledGenerations({ supabase: client as never, creditSupabase: client as never, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ providerSync: { eligible: 1, stillActive: 1 } });
 
-      expect(client.select).toHaveBeenNthCalledWith(1, expect.stringContaining('generation_output_import_jobs(id)'));
-      expect(client.is).toHaveBeenCalledWith('generation_output_import_jobs', null);
+      // Plain reads, no embedded filter: up to three batches of candidates, then their import jobs by id.
+      expect(client.select).toHaveBeenNthCalledWith(1, expect.not.stringContaining('generation_output_import_jobs'));
+      expect(client.from).toHaveBeenNthCalledWith(2, 'generation_output_import_jobs');
+      expect(client.in).toHaveBeenCalledWith('generation_id', ['gen-owned', 'gen-free']);
       expect(client.order).toHaveBeenNthCalledWith(1, 'provider_sync_attempted_at', { ascending: true, nullsFirst: true });
       expect(client.order).toHaveBeenNthCalledWith(2, 'created_at', { ascending: true });
+      expect(syncGenerationStatusByPredictionId).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ predictionId: 'task-gen-free' }));
+      // The owned row is stamped too, so it rotates behind the rest instead of filling every read.
+      expect(client.eq).toHaveBeenCalledWith('id', 'gen-owned');
+      expect(client.update).toHaveBeenCalledTimes(2);
     });
 
     it('records each attempt before asking the provider, so a row that never resolves moves to the back', async () => {
       const client = createGenerationsClient([
         { data: [activeRow('gen-1', 2)], error: null },
+        { data: [], error: null },
         { data: [], error: null },
       ]);
       vi.mocked(syncGenerationStatusByPredictionId).mockRejectedValueOnce(new Error('provider exploded'));
@@ -501,6 +516,7 @@ describe('stalled generation reaper', () => {
       const client = createGenerationsClient(
         [
           { data: [activeRow('gen-old', 25), activeRow('gen-young', 23)], error: null },
+          { data: [], error: null },
           { data: [], error: null },
         ],
         [{ data: { status: 'failed', refunded: true }, error: null }],
@@ -531,7 +547,7 @@ describe('stalled generation reaper', () => {
 
     it('gives up on a row past the maximum age whose task the provider no longer knows', async () => {
       const client = createGenerationsClient(
-        [{ data: [activeRow('gen-old', 30)], error: null }, { data: [], error: null }],
+        [{ data: [activeRow('gen-old', 30)], error: null }, { data: [], error: null }, { data: [], error: null }],
         [{ data: { status: 'failed', refunded: true }, error: null }],
       );
       vi.mocked(syncGenerationStatusByPredictionId).mockRejectedValueOnce(new Error('recordInfo is null'));
@@ -546,7 +562,7 @@ describe('stalled generation reaper', () => {
 
     it('sends nothing when the give-up finds the render succeeded after all', async () => {
       const client = createGenerationsClient(
-        [{ data: [activeRow('gen-old', 30)], error: null }, { data: [], error: null }],
+        [{ data: [activeRow('gen-old', 30)], error: null }, { data: [], error: null }, { data: [], error: null }],
         [{ data: { status: 'already_succeeded' }, error: null }],
       );
       vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValueOnce(syncedGeneration('task-gen-old', 'waiting'));
@@ -561,6 +577,7 @@ describe('stalled generation reaper', () => {
     it('stops starting rows at the run deadline it is given, whatever its own budget', async () => {
       const client = createGenerationsClient([
         { data: [activeRow('gen-1', 2)], error: null },
+        { data: [], error: null },
         { data: [activeRow('gen-a', 2, { status: 'pending', prediction_id: null })], error: null },
       ]);
 

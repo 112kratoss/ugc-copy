@@ -52,23 +52,38 @@ export async function collectGenerationOutputImportFailures(
   };
   try {
     const since = new Date(now.getTime() - GENERATION_OUTPUT_IMPORT_ALERT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
+    // Two plain bounded reads rather than an embedded filter: the jobs, then
+    // which of their generations are still waiting on them.
     const { data, error } = await client
       .from('generation_output_import_jobs')
-      .select('status,last_error,generations!inner(status)')
+      .select('status,last_error,generation_id')
       .gte('attempt_count', GENERATION_OUTPUT_IMPORT_MAX_ATTEMPTS)
-      .neq('status', 'succeeded')
-      .in('generations.status', ['waiting', 'processing'])
+      .in('status', ['pending', 'processing', 'failed'])
       .gte('updated_at', since)
       .order('updated_at', { ascending: false })
       .limit(SAMPLE_LIMIT);
     if (error) throw error;
-    const rows = (Array.isArray(data) ? data : []) as Array<{ last_error: string | null }>;
+    const jobs = (Array.isArray(data) ? data : []) as Array<{ last_error: string | null; generation_id: string }>;
+    const truncated = jobs.length >= SAMPLE_LIMIT;
+    let rows: typeof jobs = [];
+    if (jobs.length > 0) {
+      const generationIds = [...new Set(jobs.map((job) => job.generation_id))];
+      const active = await client
+        .from('generations')
+        .select('id')
+        .in('id', generationIds)
+        .in('status', ['waiting', 'processing'])
+        .limit(generationIds.length);
+      if (active.error) throw active.error;
+      const activeIds = new Set(((active.data ?? []) as Array<{ id: string }>).map((row) => row.id));
+      rows = jobs.filter((job) => activeIds.has(job.generation_id));
+    }
     const byClass: GenerationOutputImportFailureStatus['byClass'] = {};
     for (const row of rows) {
       const errorClass = classifyGenerationOutputImportError(row.last_error);
       byClass[errorClass] = (byClass[errorClass] ?? 0) + 1;
     }
-    return { ...empty, count: rows.length, truncated: rows.length >= SAMPLE_LIMIT, byClass };
+    return { ...empty, count: rows.length, truncated, byClass };
   } catch (error) {
     // Unreadable is reported in the log, not as an alert, as the Kie balance
     // collector does; backend health still counts a generation past its window.
