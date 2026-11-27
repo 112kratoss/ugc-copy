@@ -216,7 +216,8 @@ describe('createOwnerPostForRoute', () => {
       };
     }
 
-    function run(read: Awaited<ReturnType<NonNullable<Parameters<typeof createOwnerPostForRoute>[0]['dependencies']>['readExistingPostForCreate']>>) {
+    type ExistingRead = { ok: true; post: ExistingPostForCreate | null } | { ok: false };
+    function run(read: ExistingRead) {
       const admin = createRateLimitClient();
       const readFormData = vi.fn(async () => new FormData());
       const publishPreparedPost = vi.fn(async () => ({ ok: true as const, body: idempotency.replay.response as never }));

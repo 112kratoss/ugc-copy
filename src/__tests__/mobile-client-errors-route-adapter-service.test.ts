@@ -36,13 +36,13 @@ function post(body: unknown, headers: Record<string, string> = {}) {
   });
 }
 
-function dependencies(overrides: Record<string, unknown> = {}) {
+function dependencies(overrides: Partial<NonNullable<Parameters<typeof postMobileClientErrorsRouteResponse>[0]['dependencies']>> = {}) {
   const admin = insertingClient();
   return {
     admin,
     deps: {
       createServiceClient: () => admin.client,
-      enforceBackendRateLimit: vi.fn(async () => undefined),
+      enforceBackendRateLimit: vi.fn(async () => ({ allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-11-27T10:10:00.000Z' })),
       getRateLimitKey: () => 'network-1',
       getOptionalUserId: vi.fn(async () => null),
       logError: vi.fn(),
