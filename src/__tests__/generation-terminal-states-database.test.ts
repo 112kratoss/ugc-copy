@@ -152,7 +152,7 @@ describe.skipIf(!connectionString)('generation terminal states with real Postgre
     await db.query("set local statement_timeout='10s'");
     // The transaction's own clock: now() is fixed at its start, and the claim
     // compares the reopened next_attempt_at against it.
-    now = Number((await db.query('select (extract(epoch from now()) * 1000)::bigint as ms')).rows[0].ms);
+    now = Number((await db.query('select floor(extract(epoch from now()) * 1000)::bigint as ms')).rows[0].ms);
     userId = randomUUID();
     await db.query(
       "insert into auth.users(id,email,aud,role,created_at) values($1,$2,'authenticated','authenticated',now())",
