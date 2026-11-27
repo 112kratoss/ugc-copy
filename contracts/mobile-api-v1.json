@@ -3582,7 +3582,7 @@
       "method": "POST",
       "path": "/api/mobile/client-errors",
       "auth": "optional",
-      "rule": "A JS error the app caught (its error boundary, its global handler, an unhandled rejection), sent by lib/client-error-report.ts: never in development, never for a plain network failure, each distinct error once per app session, five per session at most; a fatal one is kept on the device and sent at the next launch. No form field, prompt or request body is sent, but an error's own text can quote what it was handed (a server's message, text a parser could not read). A session token, when sent, ties the report to the account; one that cannot be verified is stored without it. Limited per account (per network for a guest) and by a global daily cap past which a report is dropped with a 204. The server truncates again (message 500, stack 4000, componentStack 2000), keeps a route's path alone, and keeps rows 30 days.",
+      "rule": "A JS error the app caught (its error boundary, its global handler, an unhandled rejection), sent by lib/client-error-report.ts: never in development, never for a plain network failure, each distinct error once per app session, five per session at most; a fatal one is kept on the device and sent at the next launch. No form field, prompt or request body is sent, but an error's own text can quote what it was handed (a server's message, text a parser could not read). A session token, when sent, ties the report to the account; one that cannot be verified is stored without it. Limited per network first (before the body is read or a token looked up), per registered account as well (a guest's report and one with no token by the network alone), and by a global daily cap past which a report is dropped with a 204. A fatal report kept on the device leaves it only once it was sent. The server truncates again (message 500, stack 4000, componentStack 2000), keeps a route's path alone, and keeps rows 30 days.",
       "limits": { "message": 500, "stack": 4000, "componentStack": 2000, "perSession": 5 },
       "request": {
         "message": "TypeError: Cannot read property 'id' of undefined",
@@ -3622,7 +3622,7 @@
       "idempotency": {
         "header": "Idempotency-Key",
         "format": "uuid",
-        "rule": "A UUID the client makes once per composed post and sends on every retry of it. The server derives the post's id from the account and the key (never the key itself) and claims the key before it writes anything. A repeat by the same account answers that post in the shape of a fresh create and creates nothing, without spending a rate-limit count; a request for public whose post was left a private draft gets the same 500 the first attempt got. 409 POST_CREATE_IN_PROGRESS while an earlier attempt with the key is running; 409 IDEMPOTENCY_KEY_CONFLICT when the key can no longer be used. A client clears its key on IDEMPOTENCY_KEY_CONFLICT and on any other 4xx except POST_CREATE_IN_PROGRESS and 429, and keeps it on POST_CREATE_IN_PROGRESS, 5xx and network errors. A header that is missing or not a UUID creates as before.",
+        "rule": "A UUID the client makes once per composed post and sends on every retry of it. The server derives the post's id from the account and the key (never the key itself) and claims the key before it writes anything. A repeat by the same account answers that post in the shape of a fresh create and creates nothing, without spending a rate-limit count; a request for public whose post an earlier attempt left a private draft is published now, or answered 409 POST_SAVED_AS_DRAFT with the post. 409 POST_CREATE_IN_PROGRESS while an earlier attempt with the key is running; 409 IDEMPOTENCY_KEY_CONFLICT when the key can no longer be used. A client clears its key on IDEMPOTENCY_KEY_CONFLICT and on any other 4xx except POST_CREATE_IN_PROGRESS and 429, and keeps it on POST_CREATE_IN_PROGRESS, 5xx and network errors. A header that is missing or not a UUID creates as before.",
         "key": "3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
         "replay": {
           "status": 200,
@@ -3649,6 +3649,20 @@
             "response": {
               "error": "This post could not be saved. Try again.",
               "code": "IDEMPOTENCY_KEY_CONFLICT"
+            }
+          },
+          "savedAsDraft": {
+            "status": 409,
+            "rule": "A request for public whose post an earlier attempt left as a private draft, when the server could not publish it now either. The body carries the post in the fields of a fresh create (postId, visibility, showcasePath, ownerPath, resourceBundlePath, resourceBundleStatus) beside error and code. The post exists: a client finishes the publish as a draft (no further create for this composition, the server's words shown) and clears its key.",
+            "response": {
+              "error": "Your post was saved as a private draft, but publishing failed. Open it from your posts to publish it.",
+              "code": "POST_SAVED_AS_DRAFT",
+              "postId": "post-1",
+              "visibility": "private",
+              "showcasePath": null,
+              "ownerPath": "/post/post-1/edit",
+              "resourceBundlePath": "/post/post-1/edit#recipe",
+              "resourceBundleStatus": null
             }
           }
         }

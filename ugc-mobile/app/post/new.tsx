@@ -87,7 +87,7 @@ import {
   withSavedPostMedia,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
-import { createPostCreateKey, postCreateKeyAfterFailure } from '@/lib/post-create-key';
+import { createPostCreateKey, postCreateKeyAfterFailure, readSavedAsDraft } from '@/lib/post-create-key';
 import {
   buildCreatePostFormData,
   buildOptimisticOwnerPostListItem,
@@ -210,7 +210,7 @@ import { appTheme, fieldTypeStyle, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import { isUploadCancelledError, runWeightedUploadQueue } from '@/lib/upload-file';
 import { useHardwareBack } from '@/lib/use-hardware-back';
-import type { GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
+import type { CreatePostResponse, GenerationListItem, OwnerPostsResponse, PostResourceAttachment, PostResourceItemType, SourceToolOption } from '@/lib/types';
 import { buildShareUrl } from '@/lib/viewer-actions';
 import { shareLinkContent } from '@/lib/share-sheet-content';
 import { haptic } from '@/lib/haptics';
@@ -2433,6 +2433,9 @@ function NewPostComposer() {
   // create, kept across failed attempts so a retry answers the post the first may have made, and
   // gone with the screen, so a new post starts with a new one.
   const createKeyRef = useRef<string | null>(null);
+  // A publish the server ended as a private draft (409 POST_SAVED_AS_DRAFT): the post exists, so
+  // this composition never creates again; a later press answers with the same draft.
+  const savedAsDraftRef = useRef<CreatePostResponse | null>(null);
   const draftStorageId = user ? getPostComposerDraftStorageId({
     userId: user.id,
     postId,
@@ -2959,11 +2962,20 @@ function NewPostComposer() {
           return await api.publishGeneration(buildPublishGenerationPostPayload(selectedGeneration, submittedDraft));
         }
 
+        if (savedAsDraftRef.current) return savedAsDraftRef.current;
         createKeyRef.current ??= createPostCreateKey();
         sentCreateKey = createKeyRef.current;
         return await api.createPost(buildCreatePostFormData(submittedDraft), sentCreateKey);
       } catch (error) {
-        if (sentCreateKey) createKeyRef.current = postCreateKeyAfterFailure(sentCreateKey, error);
+        if (sentCreateKey) {
+          const draftPost = readSavedAsDraft(error);
+          if (draftPost) {
+            savedAsDraftRef.current = draftPost;
+            createKeyRef.current = null;
+            return draftPost;
+          }
+          createKeyRef.current = postCreateKeyAfterFailure(sentCreateKey, error);
+        }
         // Sending the same staged paths after the server may have moved them
         // was refused on every retry; the next publish uploads those files again.
         if (saveMayHaveConsumedUploads(error)) {
@@ -2995,7 +3007,16 @@ function NewPostComposer() {
           message: describeUncopiedCreationInputs(referencesNotCopied),
         });
       }
-      setMessage({
+      // A publish the server ended as a private draft: its words, saved as a private draft and
+      // published from the posts (`readSavedAsDraft`).
+      const savedAsDraft = 'savedAsDraft' in response && response.savedAsDraft === true;
+      const draftNotice = savedAsDraft ? ((response as CreatePostResponse).message ?? '') : '';
+      if (savedAsDraft) showMessageDialog({ title: 'Saved as a draft', message: draftNotice });
+      setMessage(savedAsDraft ? {
+        tone: 'neutral',
+        title: 'Saved as a draft',
+        body: draftNotice,
+      } : {
         tone: 'success',
         title: isEditMode ? 'Saved' : 'Posted',
         body: isEditMode
@@ -3050,8 +3071,9 @@ function NewPostComposer() {
               tab: 'posts',
               postId: targetPostId,
               // Profile offers notifications once, right after a publish:
-              // every social push is about the person's own posts.
-              published: '1',
+              // every social push is about the person's own posts. A publish
+              // that ended as a draft published nothing.
+              ...(savedAsDraft ? {} : { published: '1' }),
             },
           } as never);
         };

@@ -13,6 +13,9 @@ import {
   preparePostCreationSubmission,
   type PostCreationSubmissionResult,
 } from '@/lib/post-creation-submission-service';
+import { syncPostMediaPublicCopies } from '@/lib/post-media-public-copies';
+import { updatePostWithResourceBundleAtomically } from '@/lib/post-resource-bundles-server';
+import { invalidateShowcaseFeedAndRefreshPostPages } from '@/lib/showcase-feed-cache';
 import {
   publishPreparedPost,
   type PostPublishResult,
@@ -45,6 +48,7 @@ type CreateOwnerPostDependencies = {
   preparePostCreationSubmission?: typeof preparePostCreationSubmission;
   publishPreparedPost?: typeof publishPreparedPost;
   readExistingPostForCreate?: (adminSupabase: SupabaseClient, postId: string) => Promise<ExistingPostRead>;
+  promoteDraftPost?: typeof promoteDraftPost;
 };
 
 const IDEMPOTENCY_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -91,12 +95,57 @@ const IDEMPOTENT_CREATE_CONFLICT = {
   status: 409 as const,
   body: { error: 'This post could not be saved. Try again.', code: 'IDEMPOTENCY_KEY_CONFLICT' as const },
 };
-/** What `publishPreparedPost` answers when the post was made but its promotion failed. */
-const PROMOTION_FAILED = {
-  ok: false as const,
-  status: 500 as const,
-  body: { error: 'Your post was saved as a private draft, but publishing failed. Open it from your posts to publish again.' },
-};
+const SAVED_AS_DRAFT_MESSAGE = 'Your post was saved as a private draft, but publishing failed. Open it from your posts to publish it.';
+
+function savedAsDraft(postId: string, bundleStatus: PostResourceBundleStatus | null) {
+  return {
+    ok: false as const,
+    status: 409 as const,
+    body: {
+      error: SAVED_AS_DRAFT_MESSAGE,
+      code: 'POST_SAVED_AS_DRAFT' as const,
+      postId,
+      visibility: 'private' as const,
+      showcasePath: null,
+      ownerPath: `/post/${postId}/edit`,
+      resourceBundlePath: `/post/${postId}/edit#recipe`,
+      resourceBundleStatus: bundleStatus,
+    },
+  };
+}
+
+/**
+ * Finishes the promotion an earlier attempt left undone (it made the post private and failed to
+ * make it public), as `publishPreparedPost`'s promotion step does: the update RPC with the
+ * visibility patch, then the media's public copies and the pages. Without the submission there is
+ * no bundle payload to send, so a post that carries a recipe is not promoted here (its recipe would
+ * stay a draft on a public post); the caller answers it as saved as a draft.
+ */
+export async function promoteDraftPost(
+  adminSupabase: SupabaseClient,
+  { postId, ownerUserId }: { postId: string; ownerUserId: string },
+): Promise<{ visibility: ShowcaseVisibility; bundleStatus: PostResourceBundleStatus | null }> {
+  const promoted = await updatePostWithResourceBundleAtomically({
+    supabase: adminSupabase,
+    postId,
+    ownerUserId,
+    patch: { visibility: 'public' },
+    hasBundlePayload: false,
+    bundle: null,
+  });
+  if (promoted.visibility === 'public') {
+    await syncPostMediaPublicCopies(adminSupabase, postId).catch((copyError) => {
+      logBackendError('failed_to_copy_public_post_media', { error: copyError });
+    });
+    await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
+      postId,
+      creatorId: ownerUserId,
+      arrived: true,
+      isNew: true,
+    });
+  }
+  return { visibility: promoted.visibility, bundleStatus: promoted.bundleStatus };
+}
 
 export async function readExistingPostForCreate(
   adminSupabase: SupabaseClient,
@@ -164,25 +213,23 @@ async function claimPostCreate(
 }
 
 /**
- * Gives the key back after an attempt that made nothing, so the client's retry of it can run. Only
- * the request that took the claim calls this, and only once no post row has the id: a draft a
- * failed promotion left is answered by the replay instead.
+ * Gives the key back once the request that took it has finished. Only that request calls this. A
+ * post it made is answered from the post by every later request (the replay comes before the
+ * claim); an attempt that made nothing can then run again under the key.
  */
-async function releaseClaimIfNothingMade(
+async function releasePostCreateClaim(
   adminSupabase: SupabaseClient,
-  read: (adminSupabase: SupabaseClient, postId: string) => Promise<ExistingPostRead>,
-  claim: { userId: string; key: string; postId: string },
+  claim: { userId: string; key: string },
 ) {
   try {
-    const existing = await read(adminSupabase, claim.postId);
-    if (!existing.ok || existing.post) return;
-    await adminSupabase
+    const released = await adminSupabase
       .from('post_create_claims')
       .delete()
       .eq('user_id', claim.userId)
       .eq('idempotency_key', claim.key);
+    if ((released as { error?: unknown }).error) throw (released as { error?: unknown }).error;
   } catch (error) {
-    // The claim stays; the key reads as in progress, then as used, and the client makes a new one.
+    // The claim stays: the key reads as in progress, then as used, and the client makes a new one.
     logBackendError('failed_to_release_post_create_claim', { error });
   }
 }
@@ -193,23 +240,54 @@ function readRequestedVisibility(formData: FormData): ShowcaseVisibility {
   return value === 'private' || value === 'unlisted' ? 'private' : 'public';
 }
 
+function createdPostBody(
+  postId: string,
+  visibility: ShowcaseVisibility,
+  bundleStatus: PostResourceBundleStatus | null,
+) {
+  const isPrivate = visibility === 'private';
+  return {
+    ok: true as const,
+    body: {
+      success: true as const,
+      postId,
+      visibility,
+      showcasePath: isPrivate ? null : `/showcase/${postId}`,
+      ownerPath: `/post/${postId}/edit`,
+      resourceBundlePath: bundleStatus === 'draft' || isPrivate
+        ? `/post/${postId}/edit#recipe`
+        : `/showcase/${postId}#recipe`,
+      resourceBundleStatus: bundleStatus,
+    },
+  };
+}
+
+function isClaimLive(claimedAt: string | null, now: number) {
+  const at = claimedAt ? Date.parse(claimedAt) : Number.NaN;
+  return !Number.isFinite(at) || now - at < POST_CREATE_CLAIM_WINDOW_MS;
+}
+
 /**
  * What a create under a key whose post already exists answers. The account's own post is answered
  * as the create that made it answered (`publishPreparedPost`'s body). A post deleted since is
  * refused. A media post holding none of its files is still being saved by the request that made it
  * (the post's row comes before its media) or was left so by a create that failed midway. A private
- * post asked for as public is the draft a failed promotion left, and is answered with that failure
- * again: a request for public is never answered ok and private.
+ * post asked for as public is either still being promoted by the request holding the key (answered
+ * in progress), or the draft a failed promotion left: its promotion is finished here, and when that
+ * fails too the answer is 409 `POST_SAVED_AS_DRAFT` with the post. A request for public is never
+ * answered ok and private.
  */
-function answerExistingPostForCreate(
+async function answerExistingPostForCreate(
+  adminSupabase: SupabaseClient,
   existing: ExistingPostForCreate,
-  { postId, ownerUserId, now, requestedVisibility }: {
-    postId: string;
-    ownerUserId: string;
+  { claim, now, readRequestedVisibility, dependencies }: {
+    claim: { userId: string; key: string; postId: string };
     now: number;
-    requestedVisibility: ShowcaseVisibility;
+    readRequestedVisibility: () => Promise<ShowcaseVisibility | null>;
+    dependencies: ReturnType<typeof resolveDependencies>;
   },
-): CreateOwnerPostRouteResult {
+): Promise<CreateOwnerPostRouteResult> {
+  const { postId, userId: ownerUserId } = claim;
   if (existing.userId !== ownerUserId || existing.tombstoned) return IDEMPOTENT_CREATE_CONFLICT;
   if (existing.mediaCount === 0 && existing.postFormat !== 'text') {
     const createdAt = existing.createdAt ? Date.parse(existing.createdAt) : Number.NaN;
@@ -217,22 +295,33 @@ function answerExistingPostForCreate(
       ? IDEMPOTENT_CREATE_IN_PROGRESS
       : IDEMPOTENT_CREATE_CONFLICT;
   }
-  const isPrivate = existing.visibility === 'private';
-  if (isPrivate && requestedVisibility !== 'private') return PROMOTION_FAILED;
-  return {
-    ok: true,
-    body: {
-      success: true,
-      postId,
-      visibility: existing.visibility,
-      showcasePath: isPrivate ? null : `/showcase/${postId}`,
-      ownerPath: `/post/${postId}/edit`,
-      resourceBundlePath: existing.bundleStatus === 'draft' || isPrivate
-        ? `/post/${postId}/edit#recipe`
-        : `/showcase/${postId}#recipe`,
-      resourceBundleStatus: existing.bundleStatus,
-    },
-  };
+  if (existing.visibility !== 'private') return createdPostBody(postId, existing.visibility, existing.bundleStatus);
+
+  const requested = await readRequestedVisibility();
+  if (requested === null) return { ok: false, status: 400, body: { error: 'Invalid post form data.' } };
+  if (requested === 'private') return createdPostBody(postId, 'private', existing.bundleStatus);
+
+  // The request holding the key may be between its media and its promotion.
+  const held = await adminSupabase
+    .from('post_create_claims')
+    .select('claimed_at')
+    .eq('user_id', ownerUserId)
+    .eq('idempotency_key', claim.key)
+    .maybeSingle();
+  if (held.error) return IDEMPOTENT_CREATE_IN_PROGRESS;
+  if (held.data && isClaimLive((held.data as { claimed_at?: string }).claimed_at ?? null, now)) {
+    return IDEMPOTENT_CREATE_IN_PROGRESS;
+  }
+
+  if (existing.bundleStatus !== null) return savedAsDraft(postId, existing.bundleStatus);
+  try {
+    const promoted = await dependencies.promoteDraftPost(adminSupabase, { postId, ownerUserId });
+    if (promoted.visibility === 'private') return savedAsDraft(postId, promoted.bundleStatus);
+    return createdPostBody(postId, promoted.visibility, promoted.bundleStatus);
+  } catch (error) {
+    logBackendError('failed_to_promote_draft_post_on_replay', { error });
+    return savedAsDraft(postId, existing.bundleStatus);
+  }
 }
 
 type PostCreationSubmissionFailure = Extract<PostCreationSubmissionResult, { ok: false }>;
@@ -241,7 +330,7 @@ type CreateOwnerPostRouteResult =
   | PostPublishResult
   | typeof IDEMPOTENT_CREATE_IN_PROGRESS
   | typeof IDEMPOTENT_CREATE_CONFLICT
-  | typeof PROMOTION_FAILED
+  | ReturnType<typeof savedAsDraft>
   | PostCreationSubmissionFailure
   | {
       ok: false;
@@ -262,6 +351,7 @@ function resolveDependencies(dependencies: CreateOwnerPostDependencies | undefin
     preparePostCreationSubmission: dependencies?.preparePostCreationSubmission ?? preparePostCreationSubmission,
     publishPreparedPost: dependencies?.publishPreparedPost ?? publishPreparedPost,
     readExistingPostForCreate: dependencies?.readExistingPostForCreate ?? readExistingPostForCreate,
+    promoteDraftPost: dependencies?.promoteDraftPost ?? promoteDraftPost,
   };
 }
 
@@ -320,19 +410,17 @@ export async function createOwnerPostForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to create post.' } };
   }
   if (existing.post) {
-    let requestedVisibility: ShowcaseVisibility = 'public';
-    if (existing.post.visibility === 'private') {
-      try {
-        requestedVisibility = readRequestedVisibility(await readFormOnce());
-      } catch {
-        return { ok: false, status: 400, body: { error: 'Invalid post form data.' } };
-      }
-    }
-    return answerExistingPostForCreate(existing.post, {
-      postId: claim.postId,
-      ownerUserId,
+    return answerExistingPostForCreate(adminSupabase, existing.post, {
+      claim,
       now: now(),
-      requestedVisibility,
+      readRequestedVisibility: async () => {
+        try {
+          return readRequestedVisibility(await readFormOnce());
+        } catch {
+          return null;
+        }
+      },
+      dependencies: resolvedDependencies,
     });
   }
 
@@ -346,24 +434,17 @@ export async function createOwnerPostForRoute({
     return { ok: false, status: 500, body: { error: 'Failed to create post.' } };
   }
   if (claimed.kind === 'held') {
-    const claimedAt = claimed.claimedAt ? Date.parse(claimed.claimedAt) : Number.NaN;
-    return Number.isFinite(claimedAt) && now() - claimedAt >= POST_CREATE_CLAIM_WINDOW_MS
-      ? IDEMPOTENT_CREATE_CONFLICT
-      : IDEMPOTENT_CREATE_IN_PROGRESS;
+    return isClaimLive(claimed.claimedAt, now()) ? IDEMPOTENT_CREATE_IN_PROGRESS : IDEMPOTENT_CREATE_CONFLICT;
   }
 
-  // 3. This request holds the key, and only it writes under this post id.
-  let result: CreateOwnerPostRouteResult;
+  // 3. This request holds the key, and only it writes under this post id. Once it has finished,
+  // whatever happened, it gives the key back: a post it made is answered from the post itself, and
+  // an attempt that made nothing can be tried again under the same key.
   try {
-    result = await prepareAndPublish(adminSupabase, ownerUserId, claim.postId, readFormOnce, resolvedDependencies);
-  } catch (error) {
-    await releaseClaimIfNothingMade(adminSupabase, resolvedDependencies.readExistingPostForCreate, claim);
-    throw error;
+    return await prepareAndPublish(adminSupabase, ownerUserId, claim.postId, readFormOnce, resolvedDependencies);
+  } finally {
+    await releasePostCreateClaim(adminSupabase, claim);
   }
-  if (!result.ok) {
-    await releaseClaimIfNothingMade(adminSupabase, resolvedDependencies.readExistingPostForCreate, claim);
-  }
-  return result;
 }
 
 async function enforceCreateRateLimit(

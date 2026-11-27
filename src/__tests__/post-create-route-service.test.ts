@@ -288,7 +288,7 @@ describe('createOwnerPostForRoute', () => {
       return { publishPreparedPost, release };
     }
 
-    function create(database: ReturnType<typeof memoryDatabase>, publishPreparedPost: unknown, options: { userId?: string; now?: number; visibility?: 'public' | 'private' } = {}) {
+    function create(database: ReturnType<typeof memoryDatabase>, publishPreparedPost: unknown, options: { userId?: string; now?: number; visibility?: 'public' | 'private'; promoteDraftPost?: unknown } = {}) {
       return createOwnerPostForRoute({
         adminSupabase: database.client,
         ownerUserId: options.userId ?? 'user-1',
@@ -299,7 +299,17 @@ describe('createOwnerPostForRoute', () => {
           listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
           preparePostCreationSubmission: vi.fn(async () => ({ ok: true as const, submission: {} as PostCreationSubmission })),
           publishPreparedPost: publishPreparedPost as never,
+          promoteDraftPost: (options.promoteDraftPost ?? promoteInMemory(database)) as never,
         },
+      });
+    }
+
+    /** The promotion a replay finishes, over the in-memory posts. */
+    function promoteInMemory(database: ReturnType<typeof memoryDatabase>) {
+      return vi.fn(async (_admin: unknown, { postId }: { postId: string }) => {
+        const row = database.db.posts.find((post) => post.id === postId);
+        if (row) row.visibility = 'public';
+        return { visibility: 'public' as const, bundleStatus: null };
       });
     }
 
@@ -392,16 +402,51 @@ describe('createOwnerPostForRoute', () => {
       expect((await create(database, retry.publishPreparedPost)).ok).toBe(true);
     });
 
-    it('never answers a request for public with a private post: a draft left by a failed promotion fails again', async () => {
+    // Review of the fix: answering the draft's 500 again trapped the composer (it keeps its key and
+    // uploads again on every 5xx). A replay finishes the promotion; failing that, a 409 of its own.
+    it('finishes the promotion a failed first attempt left, and answers the public post', async () => {
       const database = memoryDatabase();
       const first = heldPublish(database, 'draft');
       first.release();
-      const firstAnswer = await create(database, first.publishPreparedPost);
-      expect(firstAnswer).toMatchObject({ ok: false, status: 500 });
+      expect(await create(database, first.publishPreparedPost)).toMatchObject({ ok: false, status: 500 });
+      expect(database.db.post_create_claims).toEqual([]);
 
-      expect(await create(database, vi.fn())).toEqual(firstAnswer);
+      const promote = promoteInMemory(database);
+      const retry = await create(database, vi.fn(), { promoteDraftPost: promote });
+      expect(retry).toMatchObject({ ok: true, body: { visibility: 'public', showcasePath: `/showcase/${postIdForCreateKey('user-1', key)}` } });
+      expect(promote).toHaveBeenCalledWith(database.client, { postId: postIdForCreateKey('user-1', key), ownerUserId: 'user-1' });
+
       const privateRequest = await create(database, vi.fn(), { visibility: 'private' });
-      expect(privateRequest).toMatchObject({ ok: true, body: { visibility: 'private' } });
+      expect(privateRequest).toMatchObject({ ok: true, body: { visibility: 'public' } });
+    });
+
+    it('answers POST_SAVED_AS_DRAFT, with the post, when the promotion fails again', async () => {
+      const database = memoryDatabase();
+      const first = heldPublish(database, 'draft');
+      first.release();
+      await create(database, first.publishPreparedPost);
+
+      const postId = postIdForCreateKey('user-1', key);
+      const failing = vi.fn(async () => { throw new Error('promotion failed'); });
+      expect(await create(database, vi.fn(), { promoteDraftPost: failing })).toEqual({
+        ok: false,
+        status: idempotency.errors.savedAsDraft.status,
+        body: { ...idempotency.errors.savedAsDraft.response, postId, ownerPath: `/post/${postId}/edit`, resourceBundlePath: `/post/${postId}/edit#recipe` },
+      });
+      // A private request for the same post is answered with it as it is.
+      expect(await create(database, vi.fn(), { visibility: 'private', promoteDraftPost: failing })).toMatchObject({ ok: true, body: { visibility: 'private' } });
+    });
+
+    it('answers "in progress" while the request holding the key is still between its media and its promotion', async () => {
+      const database = memoryDatabase();
+      const postId = postIdForCreateKey('user-1', key);
+      database.db.posts.push({ id: postId, user_id: 'user-1', visibility: 'private', post_format: 'media', created_at: new Date(NOW).toISOString(), tombstoned_at: null });
+      database.db.post_media.push({ post_id: postId });
+      database.db.post_create_claims.push({ user_id: 'user-1', idempotency_key: key, post_id: postId, claimed_at: new Date(NOW - 10_000).toISOString() });
+      const promote = promoteInMemory(database);
+
+      expect(await create(database, vi.fn(), { promoteDraftPost: promote })).toEqual(inProgress);
+      expect(promote).not.toHaveBeenCalled();
     });
 
     it('refuses a post deleted since', async () => {

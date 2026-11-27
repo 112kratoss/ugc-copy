@@ -1,4 +1,5 @@
 import { ApiError } from './api-client';
+import type { CreatePostResponse } from './types';
 
 /**
  * The key a composed post is created under (`Idempotency-Key` on `POST /api/posts`,
@@ -12,6 +13,29 @@ import { ApiError } from './api-client';
  */
 export const POST_CREATE_KEY_CONFLICT_CODE = 'IDEMPOTENCY_KEY_CONFLICT';
 export const POST_CREATE_IN_PROGRESS_CODE = 'POST_CREATE_IN_PROGRESS';
+export const POST_SAVED_AS_DRAFT_CODE = 'POST_SAVED_AS_DRAFT';
+
+/**
+ * The post a 409 `POST_SAVED_AS_DRAFT` carries, as a create's answer: the post exists as a private
+ * draft, so the composer finishes the publish as a draft rather than create again under a new key.
+ * Null for any other failure, or a body without the post.
+ */
+export function readSavedAsDraft(error: unknown): CreatePostResponse | null {
+  if (!(error instanceof ApiError) || error.status !== 409 || error.code !== POST_SAVED_AS_DRAFT_CODE) return null;
+  const details = (typeof error.details === 'object' && error.details !== null ? error.details : {}) as Record<string, unknown>;
+  if (typeof details.postId !== 'string' || details.postId.length === 0) return null;
+  const text = (value: unknown) => (typeof value === 'string' ? value : null);
+  return {
+    success: true,
+    postId: details.postId,
+    visibility: 'private',
+    showcasePath: null,
+    ownerPath: text(details.ownerPath),
+    resourceBundlePath: text(details.resourceBundlePath),
+    message: error.message,
+    savedAsDraft: true,
+  };
+}
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
