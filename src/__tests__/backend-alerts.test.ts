@@ -247,8 +247,8 @@ describe('backend alerts', () => {
       expect.objectContaining({ source: 'generation-imports', severity: 'degraded', code: 'GENERATION_OUTPUT_IMPORT_FAILING' }),
       expect.objectContaining({ source: 'payments', severity: 'degraded', code: 'PAYMENT_CAPTURE_UNMATCHED' }),
     ]);
-    // Neither is a health issue, so neither can hold a release.
-    expect(await collectHealth.mock.results[0].value).toMatchObject({ status: 'ok', issues: [] });
+    // That backend health itself never reads or reports either is proven in
+    // backend-health.test.ts ("never reads or reports the operator alerts").
     expect(summary.signals.healthStatus).toBe('ok');
   });
 

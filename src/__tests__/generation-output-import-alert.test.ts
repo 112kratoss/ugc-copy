@@ -7,7 +7,7 @@ import {
 
 function createClient(result: { data: unknown; error: unknown }) {
   const builder: Record<string, unknown> = {};
-  for (const name of ['select', 'gte', 'neq', 'order']) builder[name] = vi.fn(() => builder);
+  for (const name of ['select', 'gte', 'neq', 'in', 'order']) builder[name] = vi.fn(() => builder);
   builder.limit = vi.fn(async () => result);
   return { client: { from: vi.fn(() => builder) }, builder };
 }
@@ -30,6 +30,10 @@ describe('generation output import alert', () => {
     expect(client.from).toHaveBeenCalledWith('generation_output_import_jobs');
     expect(builder.gte).toHaveBeenCalledWith('attempt_count', 10);
     expect(builder.neq).toHaveBeenCalledWith('status', 'succeeded');
+    // Only renders still waiting on it: a job enqueued for a generation already
+    // failed (a poll racing the give-up) is not an import anyone is owed.
+    expect(builder.select).toHaveBeenCalledWith(expect.stringContaining('generations!inner(status)'));
+    expect(builder.in).toHaveBeenCalledWith('generations.status', ['waiting', 'processing']);
     expect(builder.gte).toHaveBeenCalledWith('updated_at', '2026-11-26T12:00:00.000Z');
     expect(status).toEqual({
       available: true,

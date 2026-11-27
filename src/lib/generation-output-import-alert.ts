@@ -11,9 +11,11 @@ import {
 /**
  * The operator alert for finished renders whose file could not be stored.
  *
- * An import job that has used its ten tries (`attempt_count` at the maximum)
- * and has not succeeded since, touched in the last 24 hours: retrying hourly
- * inside its window, or given up on and refunded within the last day. Shown on
+ * An import job that has used its ten tries (`attempt_count` at the maximum),
+ * has not succeeded since and was touched in the last 24 hours, whose
+ * generation is still waiting on it: retrying hourly inside its window. Once
+ * the generation is failed and refunded (or was already, when a status poll
+ * raced the give-up and enqueued a job for it) it is no longer counted. Shown on
  * /api/ops/backend-alerts as GENERATION_OUTPUT_IMPORT_FAILING (degraded, so the
  * hourly watchdog mails the owner), with the count and the error classes the
  * owner can act on. Like the Kie balance alert, deliberately not a backend
@@ -52,9 +54,10 @@ export async function collectGenerationOutputImportFailures(
     const since = new Date(now.getTime() - GENERATION_OUTPUT_IMPORT_ALERT_LOOKBACK_HOURS * 60 * 60 * 1000).toISOString();
     const { data, error } = await client
       .from('generation_output_import_jobs')
-      .select('status,last_error')
+      .select('status,last_error,generations!inner(status)')
       .gte('attempt_count', GENERATION_OUTPUT_IMPORT_MAX_ATTEMPTS)
       .neq('status', 'succeeded')
+      .in('generations.status', ['waiting', 'processing'])
       .gte('updated_at', since)
       .order('updated_at', { ascending: false })
       .limit(SAMPLE_LIMIT);

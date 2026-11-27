@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { collectBackendHealth, isPendingGenerationWaitingInQueue } from '@/lib/backend-health';
@@ -1732,6 +1734,30 @@ describe('collectBackendHealth', () => {
       const health = await stalledHealth(rows);
       expect(health.generations.stalledActiveCount).toBe(200);
     });
+  });
+
+  it('never reads or reports the operator alerts, so a failing import or an unmatched payment cannot hold a release', async () => {
+    // The release gate needs health to be strictly ok. The import and payment
+    // alerts are reported on /api/ops/backend-alerts only; health reading their
+    // sources would surface here as a table this fixture does not answer, or
+    // as an issue code.
+    const healthSource = fs.readFileSync(path.resolve(process.cwd(), 'src/lib/backend-health.ts'), 'utf8');
+    expect(healthSource).not.toMatch(/generation-output-import-alert|payment-capture-anomalies/);
+
+    const db = createClient({
+      backend_job_runs: recentSuccessfulRunOfEveryJob(),
+      generations: [{ error: null, data: [] }, { error: null, data: [] }, { error: null, data: [] }],
+      payment_capture_anomalies: { error: null, data: [{ payment_id: 'pay_1', reason: 'amount_mismatch' }] },
+    });
+    const health = await collectBackendHealth(db.client as never, new Date('2026-06-21T10:00:00.000Z'));
+
+    expect(db.from).not.toHaveBeenCalledWith('payment_capture_anomalies');
+    // Its one read of the import queue is the queue-age probe.
+    expect(db.builders.generation_output_import_jobs).toHaveLength(1);
+    expect(db.builders.generation_output_import_jobs[0].select).toHaveBeenCalledWith('next_attempt_at');
+    expect(health.issues.map((issue) => issue.code)).not.toEqual(expect.arrayContaining([
+      expect.stringMatching(/^(GENERATION_OUTPUT_IMPORT_FAILING|PAYMENT_CAPTURE_UNMATCHED)$/),
+    ]));
   });
 
   it('degrades when the generation completion queue has failed or stale due jobs', async () => {
