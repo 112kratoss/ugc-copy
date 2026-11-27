@@ -156,7 +156,7 @@ export async function processRazorpayWebhookForRoute({
    */
   async function recordUnmatchedCapture(
     payment: RazorpayPaymentResponse,
-    purchaseKind: 'credits' | 'marketplace' | 'post_resource',
+    purchaseKind: 'credits' | 'marketplace' | 'post_resource' | 'unknown',
     reason: string,
   ) {
     await recordPaymentCaptureAnomaly(getSupabaseAdmin(), {
@@ -166,6 +166,23 @@ export async function processRazorpayWebhookForRoute({
       purchaseKind,
       reason,
     });
+  }
+
+  /**
+   * Razorpay accepts further payment attempts on an order we marked failed, so
+   * a late capture there takes money and credits nothing. Not for an order
+   * marked refunded, nor for the payment the order was failed over (a reversal
+   * of this very payment), nor for a payment already refunded.
+   */
+  async function recordCaptureOnFailedOrder(
+    payment: RazorpayPaymentResponse,
+    purchaseKind: 'credits' | 'marketplace' | 'post_resource',
+    row: { status?: unknown; razorpay_payment_id?: string | null },
+  ) {
+    if (row.status !== 'failed') return;
+    if (row.razorpay_payment_id === payment.id) return;
+    if (payment.amountRefunded > 0 || payment.status === 'refunded') return;
+    await recordUnmatchedCapture(payment, purchaseKind, 'order_marked_failed');
   }
 
   async function isCapturedPaymentValid({
@@ -237,6 +254,7 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         status: typedTxn.status,
       });
+      await recordCaptureOnFailedOrder(payment, 'credits', typedTxn);
       return { handled: true, shouldRetry: false };
     }
 
@@ -600,6 +618,7 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         status: typedMarketplaceOrder.status,
       });
+      await recordCaptureOnFailedOrder(payment, 'marketplace', typedMarketplaceOrder);
       return { handled: true, shouldRetry: false };
     }
 
@@ -702,6 +721,7 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         status: typedBundleOrder.status,
       });
+      await recordCaptureOnFailedOrder(payment, 'post_resource', typedBundleOrder);
       return { handled: true, shouldRetry: false };
     }
 
@@ -852,5 +872,14 @@ export async function processRazorpayWebhookForRoute({
   }
 
   logBackendInfo('razorpay_webhook_no_matching_order', { orderId: payment.orderId });
+  // Captured money no order here accounts for. Recorded once per payment;
+  // the answer stays 200, as before.
+  await recordPaymentCaptureAnomaly(getSupabaseAdmin(), {
+    provider: 'razorpay',
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    purchaseKind: 'unknown',
+    reason: 'no_matching_order',
+  });
   return { status: 200, body: 'OK' };
 }

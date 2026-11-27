@@ -491,7 +491,7 @@ describe('processRazorpayWebhookForRoute', () => {
     ]);
   });
 
-  it('still acknowledges payments with no matching order without recording a failure', async () => {
+  it('still acknowledges payments with no matching order without recording a processing failure', async () => {
     const admin = createAdminSupabaseMock({});
 
     const result = await processRazorpayWebhookForRoute({
@@ -506,6 +506,46 @@ describe('processRazorpayWebhookForRoute', () => {
       'post_resource_bundle_orders',
     ]);
     expect(admin.providerDependencyInserts).toEqual([]);
+    // Money was taken for an order nothing here knows: on record for the owner, still answered 200.
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([{
+      provider: 'razorpay',
+      payment_id: 'pay_123',
+      order_id: 'order_123',
+      purchase_kind: 'unknown',
+      reason: 'no_matching_order',
+    }]);
+  });
+
+  it.each([
+    ['credits', { creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, status: 'failed' as const } }],
+    ['marketplace', { marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-1', status: 'failed' as const } }],
+    ['post_resource', { bundleOrder: { id: 'bundle-order-1', buyer_user_id: 'user-1', status: 'failed' as const } }],
+  ])('records a late capture on a %s order marked failed, answered 200 as before', async (purchaseKind, state) => {
+    const admin = createAdminSupabaseMock(state);
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([
+      expect.objectContaining({ purchase_kind: purchaseKind, reason: 'order_marked_failed' }),
+    ]);
+    expect(admin.rpcCalls).toEqual([]);
+  });
+
+  it('records nothing for an order marked refunded, or failed after this very payment was reversed', async () => {
+    for (const state of [
+      { creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, status: 'refunded' as const } },
+      { marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-1', razorpay_payment_id: 'pay_123', status: 'failed' as const } },
+    ]) {
+      const admin = createAdminSupabaseMock(state);
+      await expect(processRazorpayWebhookForRoute({
+        createAdminSupabase: () => admin.client,
+        rawBody: paymentCapturedBody(),
+      })).resolves.toEqual({ status: 200, body: 'OK' });
+      expect(admin.paymentCaptureAnomalyInserts).toEqual([]);
+    }
   });
 
   it('records a durable payment failure when add_credits errors', async () => {

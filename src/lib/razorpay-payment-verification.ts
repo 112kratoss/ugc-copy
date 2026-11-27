@@ -40,6 +40,12 @@ export function verifyRazorpayPaymentAgainstOrder({
   if (payment.orderId !== expectedOrderId) {
     return { state: 'rejected', reason: 'order_id_mismatch' };
   }
+  // Ahead of the amount, currency and buyer checks: a payment already refunded
+  // (in part or in full) is the refund webhook's to reconcile, and the webhook
+  // records no capture anomaly for it, whatever else differs.
+  if (payment.amountRefunded > 0 || payment.status === 'refunded') {
+    return { state: 'rejected', reason: 'payment_already_reversed' };
+  }
   if (payment.amount !== expectedAmount) {
     return { state: 'rejected', reason: 'amount_mismatch' };
   }
@@ -56,9 +62,6 @@ export function verifyRazorpayPaymentAgainstOrder({
     && providerBuyerUserId !== expectedBuyerUserId
   ) {
     return { state: 'rejected', reason: 'buyer_mismatch' };
-  }
-  if (payment.amountRefunded > 0 || payment.status === 'refunded') {
-    return { state: 'rejected', reason: 'payment_already_reversed' };
   }
   if (
     (payment.status === 'created' || payment.status === 'authorized')

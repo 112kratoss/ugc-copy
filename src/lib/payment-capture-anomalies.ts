@@ -29,7 +29,8 @@ export type PaymentCaptureAnomaly = {
   provider: 'razorpay';
   paymentId: string;
   orderId: string | null;
-  purchaseKind: 'credits' | 'marketplace' | 'post_resource';
+  /** `unknown` for a capture that matched no order at all. */
+  purchaseKind: 'credits' | 'marketplace' | 'post_resource' | 'unknown';
   reason: string;
 };
 
