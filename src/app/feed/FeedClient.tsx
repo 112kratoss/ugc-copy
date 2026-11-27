@@ -1298,7 +1298,7 @@ export default function FeedClient({
                         // unsent draft. Keep an open conversation alive even after
                         // its card scrolls beyond the ordinary 24-card window.
                         pinnedKeys={commentsOpenIds}
-                        renderItem={(card, cardIndex) => (
+                        renderItem={(card, cardIndex, drawnBefore) => (
                             <>
                                 {cardIndex === removalRowAt ? <div className="mb-3">{removalRow}</div> : null}
                                 <QualifiedImpressionBoundary
@@ -1328,6 +1328,7 @@ export default function FeedClient({
                                     remixing={remixingId === card.id}
                                     autoPlayMedia={touchAutoplay}
                                     cardIndex={cardIndex}
+                                    laidOutInFull={drawnBefore}
                                     onToggleExpanded={toggleExpanded}
                                     onToggleComments={toggleComments}
                                     onToggleSave={handleToggleSave}

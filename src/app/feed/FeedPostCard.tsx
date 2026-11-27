@@ -80,6 +80,11 @@ interface FeedPostCardProps {
     detailContext?: FeedDetailContext;
     /** The card's position in the lane, reported with a share. */
     cardIndex: number;
+    /**
+     * The feed has drawn and measured this card before this mount of it
+     * (`WindowedFeedList`): it is laid out in full, never as a placeholder.
+     */
+    laidOutInFull?: boolean;
     /*
      * Every handler takes the post id, so the lane can hand one stable
      * function to every card. Inline closures per card re-rendered all 24
@@ -122,6 +127,14 @@ interface FeedPostCardProps {
     onBlockUser: (postId: string) => void;
 }
 
+const FEED_CARD_FRAME_CLASS = 'cursor-pointer overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)]';
+// A card off screen skips its layout and paint, and until it has been drawn
+// once it stands at the placeholder's height, not its own. A card the feed has
+// drawn and measured before (`laidOutInFull`) is placed by that measure, and
+// so is every card after it: it is laid out in full from its first frame, or
+// it would be measured again as a placeholder and move them all.
+const FEED_CARD_PLACEHOLDER_CLASS = '[content-visibility:auto] [contain-intrinsic-size:auto_640px]';
+
 /**
  * A post as Reddit frames one: a thin attribution line, then the title as the
  * loudest thing on the card, then the body, then media as an attachment. A text
@@ -139,6 +152,7 @@ function FeedPostCardView({
     remixing = false,
     autoPlayMedia = false,
     cardIndex,
+    laidOutInFull = false,
     priorityMedia = false,
     priorityPoster = null,
     detailContext = DEFAULT_DETAIL_CONTEXT,
@@ -202,7 +216,7 @@ function FeedPostCardView({
 
     return (
         <article
-            className="cursor-pointer overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition hover:border-[var(--ui-border-default)] [content-visibility:auto] [contain-intrinsic-size:auto_640px]"
+            className={laidOutInFull ? FEED_CARD_FRAME_CLASS : `${FEED_CARD_FRAME_CLASS} ${FEED_CARD_PLACEHOLDER_CLASS}`}
             // Pointing at a card is the earliest honest signal that it is about
             // to be opened. Warming here is why the click feels instant; the
             // post links stay `prefetch={false}` so nothing is fetched for

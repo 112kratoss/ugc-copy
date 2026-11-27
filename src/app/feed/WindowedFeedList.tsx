@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 
 export const FEED_WINDOW_MAX_MOUNTED_CARDS = 24;
 const FEED_WINDOW_INITIAL_CARD_COUNT = 12;
@@ -66,6 +67,48 @@ export function getWindowedFeedRange({
   return { startIndex, endIndex, offsets, totalHeight };
 }
 
+/**
+ * One mounted card, at its place in the list. `drawnBefore` is decided as the
+ * card mounts and holds for as long as it stays mounted: whether this document
+ * has measured the card already (it scrolled out of the window and is back, or
+ * the reader left the page and came Back to it). Such a card is placed, and
+ * every card after it, by the height it was measured at, so it must be laid
+ * out at that height again from its first frame. A card that skips its layout
+ * off screen (`content-visibility: auto`) stands at its placeholder's height
+ * until it is drawn, was measured again at that height, and the cards after it
+ * took other places than the ones the reader left them in (owner's report,
+ * 2026-11-27: Back to Home came back 153 to 918px away from the card that was
+ * left). The feed's cards take `drawnBefore` to lay themselves out in full.
+ */
+function WindowedFeedItem<T>({
+  item,
+  index,
+  itemKey,
+  top,
+  renderItem,
+}: {
+  item: T;
+  index: number;
+  itemKey: string;
+  top: number;
+  renderItem: (item: T, index: number, drawnBefore: boolean) => ReactNode;
+}) {
+  const [drawnBefore] = useState(() => feedCardHeightCache.has(itemKey));
+  return (
+    <div
+      data-feed-window-key={itemKey}
+      style={{
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        top,
+      }}
+    >
+      {renderItem(item, index, drawnBefore)}
+    </div>
+  );
+}
+
 export default function WindowedFeedList<T>({
   items,
   getKey,
@@ -75,7 +118,8 @@ export default function WindowedFeedList<T>({
 }: {
   items: T[];
   getKey: (item: T) => string;
-  renderItem: (item: T, index: number) => ReactNode;
+  /** `drawnBefore`: this document has measured the card before this mount of it (`WindowedFeedItem`). */
+  renderItem: (item: T, index: number, drawnBefore: boolean) => ReactNode;
   /**
    * Cards with live interaction state, such as an open comment composer. They
    * may sit outside the ordinary bounded viewport range but remain mounted so
@@ -86,6 +130,12 @@ export default function WindowedFeedList<T>({
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const frameRef = useRef<number | null>(null);
+  // Until the list's first frame is painted, a scroll is the browser putting
+  // the reader back where they were (Back), and the cards at that place are
+  // mounted before the paint. A frame later, as every other scroll is taken,
+  // the first frame after Back drew the feed's first cards far above the
+  // window and nothing in it.
+  const firstFramePendingRef = useRef(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
   // What the last committed viewport mounts. A scroll frame that would mount
   // the same cards is dropped before it reaches React: with 24 cards and an
@@ -173,6 +223,10 @@ export default function WindowedFeedList<T>({
       setViewport(next);
     };
     const scheduleUpdate = () => {
+      if (firstFramePendingRef.current) {
+        flushSync(updateViewport);
+        return;
+      }
       if (frameRef.current !== null) return;
       frameRef.current = window.requestAnimationFrame(updateViewport);
     };
@@ -186,6 +240,13 @@ export default function WindowedFeedList<T>({
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
     };
   }, [gap, items.length, keys, measurementVersion]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      firstFramePendingRef.current = false;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   useEffect(() => {
     committedRangeRef.current = viewport.ready
@@ -242,18 +303,14 @@ export default function WindowedFeedList<T>({
         const item = items[itemIndex];
         const key = keys[itemIndex];
         return (
-          <div
+          <WindowedFeedItem
             key={key}
-            data-feed-window-key={key}
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              top: range.offsets[itemIndex],
-            }}
-          >
-            {renderItem(item, itemIndex)}
-          </div>
+            item={item}
+            index={itemIndex}
+            itemKey={key}
+            top={range.offsets[itemIndex]}
+            renderItem={renderItem}
+          />
         );
       })}
     </div>
