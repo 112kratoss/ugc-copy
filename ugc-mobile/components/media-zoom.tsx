@@ -1610,8 +1610,15 @@ export function useMediaZoomStage({
   // its whole draw deadline, flew ~200 ms and waited ~3 frames for the release
   // (~600–650 ms at 60 Hz) before it had landed on a busy thread, and popped
   // the reel mid-flight or before the picture let go (review of #947).
+  // Never armed for a reel that has left, or has gone some other way: a
+  // take-off asked for a frame before a stack reset could re-arm it after the
+  // unmount below had cleared it, and 670 ms later its `leave` showed every
+  // tile a reel opened since was holding hidden (`clearHiddenZoomSources` is
+  // the whole app's) and told a dead screen to close (review of #949).
   const closeBackstopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
   const armCloseBackstop = useCallback(() => {
+    if (unmountedRef.current || leftRef.current) return;
     if (closeBackstopRef.current) clearTimeout(closeBackstopRef.current);
     closeBackstopRef.current = setTimeout(() => {
       closeBackstopRef.current = null;
@@ -1619,6 +1626,7 @@ export function useMediaZoomStage({
     }, DISMISS_SAFETY_MS + RETURN_DRAWN_DEADLINE_MS);
   }, [leave]);
   useEffect(() => () => {
+    unmountedRef.current = true;
     if (closeBackstopRef.current) clearTimeout(closeBackstopRef.current);
   }, []);
 

@@ -135,17 +135,31 @@ type ReelOptions = {
   tilePicture?: ZoomPreview | null;
   /** Left still being uncovered, for a close begun before the hand-off. */
   uncovered?: boolean;
+  /**
+   * How many of the close's first measures of the tile find nothing, as a
+   * screen beneath that has just come back into layout answers (it is asked
+   * again each frame, `TILE_REMEASURE_FRAMES`).
+   */
+  tileMissedMeasures?: number;
 };
 
-function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, uncovered = true }: ReelOptions = {}) {
+function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, uncovered = true, tileMissedMeasures = 0 }: ReelOptions = {}) {
   vi.useFakeTimers();
   vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
+  let missesLeft = tileMissedMeasures;
   registerZoomSource('profile', 'post-1', {
     radius: 12,
     aspectRatio: 3 / 4,
     preview: null,
     setHidden: () => {},
-    measure: (report) => report(TILE),
+    measure: (report) => {
+      if (missesLeft > 0) {
+        missesLeft -= 1;
+        report(null);
+        return;
+      }
+      report(TILE);
+    },
   });
   // The open's flight is over (another id than any flight now), so the reel
   // has landed and is uncovered as soon as it has drawn.
@@ -372,5 +386,49 @@ describe('a close of the old order, on Android', () => {
     flyHome();
     expect(exit).toHaveBeenCalledTimes(1);
     renderer.act(() => tree.unmount());
+  });
+
+  // Review of #949: the clip's close above measures its tile at once, and
+  // passes whether or not its net is timed from the take-off.
+  it("times a clip's net from its take-off, after its tile has measured as nothing for a few frames", () => {
+    const { tree, exit, dismiss } = openReel({ picture: null, videoUrl: 'https://example.test/post.mp4', tileMissedMeasures: 3 });
+
+    renderer.act(() => dismiss());
+    expect(getZoomFlight()).toBeNull();
+    // Asked again a frame apart: the third frame's answer is the tile.
+    advance(48);
+    expect(getZoomFlight()?.still).toBe(false);
+    expect(timeline).toEqual(['flight frames on', 'close set off']);
+
+    // No frame reaches the flight. Not from the press…
+    advance(SAFETY_MS - 48);
+    expect(exit).not.toHaveBeenCalled();
+    // …but from the take-off.
+    advance(47);
+    expect(exit).not.toHaveBeenCalled();
+    advance(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+});
+
+// Review of #949: a reel removed some other way while its close was on its
+// way (a stack reset, a deep link) must leave nothing behind. A net re-armed
+// after the unmount had cleared it popped a dead screen 670 ms later, and
+// showed every tile a reel opened since was holding hidden.
+describe('a closing reel that goes some other way', () => {
+  it('sets off no net once it has gone, even at the take-off it had already asked for', () => {
+    const { tree, exit, closeStarts, dismiss } = openReel({ picture: unseenPicture('gone-before-take-off') });
+    renderer.act(() => dismiss());
+    copyDrawn(tree, unseenPicture('gone-before-take-off'));
+    expect(closeStarts).toHaveBeenCalledTimes(1);
+
+    // Gone before the frame its take-off was asked for.
+    renderer.act(() => tree.unmount());
+    advance(16);
+    advance(SAFETY_MS * 3);
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(closeStarts).toHaveBeenCalledTimes(1);
   });
 });
