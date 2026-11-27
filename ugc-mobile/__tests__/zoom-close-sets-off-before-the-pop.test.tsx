@@ -78,6 +78,7 @@ vi.mock('react-native-reanimated', async () => {
 });
 
 import { MediaZoomFlightLayer, useMediaZoomStage } from '../components/media-zoom';
+import { lendVideoPlayer } from '../lib/video-player-loans';
 import {
   beginZoomFlight,
   clearPendingZoomOrigin,
@@ -135,6 +136,8 @@ type ReelOptions = {
   tilePicture?: ZoomPreview | null;
   /** Left still being uncovered, for a close begun before the hand-off. */
   uncovered?: boolean;
+  /** The playing clip the tile lent the open, which the reel has not yet taken. */
+  tileVideo?: { player: never; url: string } | null;
   /**
    * How many of the close's first measures of the tile find nothing, as a
    * screen beneath that has just come back into layout answers (it is asked
@@ -143,7 +146,7 @@ type ReelOptions = {
   tileMissedMeasures?: number;
 };
 
-function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, uncovered = true, tileMissedMeasures = 0 }: ReelOptions = {}) {
+function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, uncovered = true, tileMissedMeasures = 0, tileVideo = null }: ReelOptions = {}) {
   vi.useFakeTimers();
   vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));
   let missesLeft = tileMissedMeasures;
@@ -170,6 +173,7 @@ function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, unco
     radius: 12,
     aspectRatio: 3 / 4,
     preview: tilePicture,
+    video: tileVideo,
     flightId: -1,
     recordedAt: Date.now(),
   });
@@ -215,7 +219,7 @@ function openReel({ picture = PICTURE, videoUrl = null, tilePicture = null, unco
     if (held && !getHeldZoomPicture()) timeline.push('picture let go');
     held = getHeldZoomPicture();
   });
-  return { tree, exit, closeStarts, dismiss: () => stage.dismiss() };
+  return { tree, exit, closeStarts, dismiss: () => stage.dismiss(), stage: () => stage };
 }
 
 /** The layer's copy of `picture` has drawn, as expo-image says. */
@@ -358,23 +362,107 @@ describe('a picture closing alone, on Android', () => {
   });
 });
 
-describe('a close of the old order, on Android', () => {
-  // The reel may still be mounting, which would hold the flight's frames.
-  it('pops a reel closed before it was uncovered first, and sets off in the frame after', () => {
+// The owner, 2026-11-27: "fix the back mid-opening wait too". Back pressed
+// while the reel was still being built under the landed picture popped the
+// reel first and set the picture off only once the route's removal had been
+// rendered: on the S24 the first movement came ~160 ms after Back, the landed
+// picture and its post standing as if Back had not been heard. Such a close
+// now sets off first and pops the reel at its landing, as a picture's close
+// out of a reel at rest has since #947.
+describe('a close begun before the reel was uncovered, on Android', () => {
+  it('sets off from the frame after its picture is up, with the reel there, out of sight', () => {
     const { tree, exit, dismiss } = openReel({ tilePicture: TILE_PICTURE, uncovered: false });
 
     renderer.act(() => dismiss());
+    // The tile's own picture turns round, its post with it.
     expect(getZoomFlight()?.geometry.pictureOnly).toBe(false);
+    expect(getZoomFlight()?.preview).toEqual(TILE_PICTURE);
     copyDrawn(tree, TILE_PICTURE);
+    expect(timeline).toEqual(['close set off']);
     advance(16);
-    expect(exit).toHaveBeenCalledTimes(1);
-    expect(timeline).toEqual(['close set off', 'reel popped']);
 
-    advance(16);
-    expect(timeline).toEqual(['close set off', 'reel popped', 'flight frames on']);
+    expect(timeline).toEqual(['close set off', 'flight frames on']);
+    expect(exit).not.toHaveBeenCalled();
     renderer.act(() => tree.unmount());
   });
 
+  it('pops the reel once the picture has landed in its tile and let go', () => {
+    const { tree, exit, dismiss } = openReel({ tilePicture: TILE_PICTURE, uncovered: false });
+    renderer.act(() => dismiss());
+    copyDrawn(tree, TILE_PICTURE);
+    advance(16);
+
+    flyHome();
+    expect(exit).not.toHaveBeenCalled();
+    advance(16);
+
+    expect(timeline).toEqual(['close set off', 'flight frames on', 'flight frames off', 'picture let go', 'reel popped']);
+    advance(2000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  it('still pops the reel when that close never lands, timed from its take-off', () => {
+    const { tree, exit, dismiss } = openReel({ tilePicture: unseenPicture('turned-round-never-lands'), uncovered: false });
+    renderer.act(() => dismiss());
+    copyDrawn(tree, unseenPicture('turned-round-never-lands'));
+    advance(16);
+
+    advance(SAFETY_MS - 1);
+    expect(exit).not.toHaveBeenCalled();
+    advance(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    advance(2000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  // The reel left standing under the flight is the one being built: its rail
+  // and caption mount once it has drawn, its neighbours once those are laid
+  // out, each holding the UI thread the flight's frames are made on.
+  it('builds no more of the reel once its close has begun', () => {
+    const { tree, dismiss, stage } = openReel({ tilePicture: TILE_PICTURE, uncovered: false });
+    expect(stage().drawn).toBe(false);
+    expect(stage().chromeDrawn).toBe(false);
+
+    renderer.act(() => dismiss());
+    copyDrawn(tree, TILE_PICTURE);
+    // Its picture painting, its rail reporting itself laid out, and every
+    // deadline that would have uncovered it anyway.
+    renderer.act(() => stage().reportPainted());
+    renderer.act(() => stage().reportChromeDrawn());
+    advance(1000);
+
+    expect(stage().drawn).toBe(false);
+    expect(stage().chromeDrawn).toBe(false);
+    renderer.act(() => tree.unmount());
+  });
+
+  it("gives the tile back the clip it lent before the reel goes", () => {
+    const player = { id: 'lent-before-hand-off' } as never;
+    lendVideoPlayer(player, () => timeline.push('tile took its clip back'));
+    const { tree, exit, dismiss } = openReel({
+      tilePicture: TILE_PICTURE,
+      tileVideo: { player, url: 'https://example.test/post.feed.mp4' },
+      uncovered: false,
+    });
+
+    renderer.act(() => dismiss());
+    // The layer's view of the clip has drawn.
+    const view = tree.root.findAll((node) => node.type === ('video-view' as never) && node.props.player === player);
+    expect(view).toHaveLength(1);
+    renderer.act(() => { view[0]!.props.onFirstFrameRender(); });
+    advance(16);
+    expect(exit).not.toHaveBeenCalled();
+
+    flyHome();
+    advance(16);
+    expect(timeline).toEqual(['close set off', 'flight frames on', 'flight frames off', 'picture let go', 'tile took its clip back', 'reel popped']);
+    renderer.act(() => tree.unmount());
+  });
+});
+
+describe('a clip\'s close, on Android', () => {
   it('sets a clip\'s close off at once, its window shrinking, and pops the reel at its landing', () => {
     const { tree, exit, closeStarts, dismiss } = openReel({ picture: null, videoUrl: 'https://example.test/post.mp4' });
 

@@ -19,6 +19,7 @@ import {
   getZoomSource,
   holdZoomPicture,
   isReturnableRect,
+  isTileOpenCloseRequested,
   landZoomFlight,
   markZoomFlightDisplayed,
   mediaItemAspectRatio,
@@ -26,6 +27,7 @@ import {
   peekPendingZoomOrigin,
   registerZoomSource,
   releaseZoomPicture,
+  requestTileOpenClose,
   resetMediaZoomTransitions,
   reverseZoomFlightTime,
   setPendingZoomOrigin,
@@ -35,6 +37,7 @@ import {
   showcaseMediaZoomPreview,
   showcaseViewerMediaPicture,
   subscribeToZoomFlights,
+  TILE_OPEN_CLOSE_GRACE_MS,
   UNCOVERED,
   type ZoomFlightEvent,
   type ZoomGeometry,
@@ -562,6 +565,55 @@ describe('one open at a time', () => {
     endTileOpen(open! + 1);
 
     expect(canOpenFromTile(NOW)).toBe(false);
+  });
+
+  // Android's back key, taken by the zoom layer between the reel's push and
+  // its coming up (`holdBackForOpen` in components/media-zoom.tsx).
+  it('keeps a Back taken before its reel came up, for that reel to close on', () => {
+    const open = beginTileOpen(NOW, 600);
+
+    expect(requestTileOpenClose(open, NOW + 100)).toBe(true);
+    expect(claimTileOpen(NOW + 150)).toBe(open);
+    expect(isTileOpenCloseRequested(open)).toBe(true);
+    // Not some other open's.
+    expect(isTileOpenCloseRequested(open! + 1)).toBe(false);
+  });
+
+  it('takes no Back once its hold has run out, or once a reel has taken it over', () => {
+    const late = beginTileOpen(NOW, 600);
+    expect(requestTileOpenClose(late, NOW + 600)).toBe(false);
+
+    resetMediaZoomTransitions();
+    const claimed = beginTileOpen(NOW, 600);
+    claimTileOpen(NOW + 100);
+    expect(requestTileOpenClose(claimed, NOW + 200)).toBe(false);
+    expect(isTileOpenCloseRequested(claimed)).toBe(false);
+  });
+
+  // Review of #954: a reel slow to come up, past the hold, found the open
+  // gone, request and all, and opened over the Back the layer had taken.
+  it('is still taken over past its hold by a reel slow to come up when Back was taken for it, but not long after', () => {
+    const open = beginTileOpen(NOW, 600);
+    requestTileOpenClose(open, NOW + 100);
+
+    expect(claimTileOpen(NOW + 700)).toBe(open);
+    expect(isTileOpenCloseRequested(open)).toBe(true);
+
+    resetMediaZoomTransitions();
+    const stale = beginTileOpen(NOW, 600);
+    requestTileOpenClose(stale, NOW + 100);
+    expect(claimTileOpen(NOW + 600 + TILE_OPEN_CLOSE_GRACE_MS)).toBeNull();
+  });
+
+  it('holds no other tile off past its hold for a Back it took, and a new tap drops that Back', () => {
+    const open = beginTileOpen(NOW, 600);
+    requestTileOpenClose(open, NOW + 100);
+
+    expect(canOpenFromTile(NOW + 600)).toBe(true);
+    const next = beginTileOpen(NOW + 600);
+    expect(isTileOpenCloseRequested(open)).toBe(false);
+    expect(claimTileOpen(NOW + 700)).toBe(next);
+    expect(isTileOpenCloseRequested(next)).toBe(false);
   });
 
   it('is forgotten on reset, which never reuses a serial a settle timer still holds', () => {

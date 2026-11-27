@@ -50,10 +50,12 @@ import {
   holdZoomPicture,
   IOS_BACK_FLIES_PICTURE,
   isReturnableRect,
+  isTileOpenCloseRequested,
   landZoomFlight,
   markZoomFlightDisplayed,
   peekPendingZoomOrigin,
   registerZoomSource,
+  requestTileOpenClose,
   reverseZoomFlightTime,
   setPendingZoomOrigin,
   hideZoomSourceUntilLanding,
@@ -97,6 +99,7 @@ import {
 import { FEED_VIDEO_VIEW_PROPS } from '@/lib/feed-video-view-props';
 import type { ImmersivePreviewItem } from '@/lib/immersive-preview-view-model';
 import { setZoomUnderlayHidden } from '@/lib/zoom-underlay';
+import { listenToHardwareBack } from '@/lib/use-hardware-back';
 import { listenToTransition } from '@/lib/use-screen-leaving';
 import { signedMediaIdentity } from '@/lib/use-stable-signed-url';
 import { useReducedMotion } from '@/lib/motion';
@@ -702,6 +705,109 @@ function handleFlightProgressed(id: number) {
   handler.run();
 }
 
+// ---------------------------------------------------------------------------
+// Android's back key while a tapped tile's post is opening
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the layer may hold Android's back key for one open: past the time
+ * a reel may still take that open over (`ORIGIN_TTL_MS`, the hold
+ * `beginTileOpen` gives it), with room for a picture turned round to land.
+ */
+const OPEN_BACK_HOLD_MS = 2500;
+
+/**
+ * The open whose Back the layer holds, from the tap until the reel the open
+ * pushes has taken it over (`claimTileOpen`), or until its picture, turned
+ * round, has landed in its tile again.
+ */
+let openBack: { serial: number; open: ZoomFlight; turnedRound: boolean; stop: () => void } | null = null;
+
+/**
+ * Android's back key while a tapped tile's post is opening. The reel is pushed
+ * only as the picture lands (`OPEN_PUSH_AT`, or after `OPEN_PUSH_DEADLINE_MS`)
+ * and answers the key only once it has mounted, so until then the focused
+ * screen was the one beneath, and Back went to it: on the Pixel 9a emulator,
+ * Back 0.51 s after a tap on a creator page popped that page, the reel landed
+ * over Home, and the next Back closed it with a plain fade, its tile's screen
+ * gone (2026-11-27). So the layer takes the key for this open from the tap:
+ * before the push, the picture turns round into its tile and no reel is
+ * pushed (it is already moving, and the reel would only be built to be taken
+ * away); after the push and before that reel is up, the reel closes as soon as
+ * it has taken the open over (`isTileOpenCloseRequested`, read by
+ * `useMediaZoomStage`), setting off before it is popped, as any close before
+ * the hand-off does; and a press while the picture goes home is swallowed
+ * until it lands. Not on iOS, where the reel is pushed at the tap under
+ * UIKit's zoom and there is no back key.
+ */
+function holdBackForOpen(serial: number, open: ZoomFlight) {
+  openBack?.stop();
+  const stopListening = listenToHardwareBack(() => answerBackForOpen(serial));
+  const deadline = setTimeout(() => stopHoldingBackForOpen(serial), OPEN_BACK_HOLD_MS);
+  openBack = {
+    serial,
+    open,
+    turnedRound: false,
+    stop: () => {
+      stopListening();
+      clearTimeout(deadline);
+    },
+  };
+}
+
+/** The layer lets the open's Back go: its reel answers the key from here, or the open is over. */
+function stopHoldingBackForOpen(serial: number | null) {
+  if (!openBack || openBack.serial !== serial) return;
+  openBack.stop();
+  openBack = null;
+}
+
+function answerBackForOpen(serial: number): boolean {
+  const held = openBack;
+  if (!held || held.serial !== serial) return false;
+  if (held.turnedRound) return true;
+  if (onFlightProgressed?.id === held.open.id) {
+    turnOpenRound(held);
+    return true;
+  }
+  if (requestTileOpenClose(serial, Date.now())) return true;
+  // Taken over meanwhile, and the reel answers; or no reel can take it over
+  // any more (a push refused, or one that brought up some other screen), and
+  // the press is the navigator's again.
+  stopHoldingBackForOpen(serial);
+  return false;
+}
+
+/** Back before the push: no reel is pushed, and the picture goes back into its tile from where it is. */
+function turnOpenRound(held: NonNullable<typeof openBack>) {
+  held.turnedRound = true;
+  onFlightProgressed = null;
+  clearPendingZoomOrigin();
+  // Listening before the close begins, which tells its id as it begins: with
+  // no layer to step it, a close lands inside `startZoomFlight`, before its id
+  // could be read back, and the key and the tiles would stay held until the
+  // hold ran out.
+  let closeId: number | null = null;
+  const stopWaiting = subscribeToZoomFlights((event) => {
+    if (event.type === 'begin' && closeId === null) closeId = event.flight.id;
+    if (event.type !== 'landed' || event.flight.id !== closeId) return;
+    stopWaiting();
+    // Home: tiles open posts again, and Back is the screen's.
+    endTileOpen(held.serial);
+    stopHoldingBackForOpen(held.serial);
+  });
+  const { geometry, preview, video, post } = held.open;
+  startZoomFlight({ direction: 'close', geometry, preview, video: video ?? null, post: post ?? null, still: true }, {
+    // A clip's window is kept out of sight until the layer's view of it has
+    // drawn (`startZoomFlight`), so it is shown again as the close takes off,
+    // as `dismiss` does: left hidden, the close flew an empty window.
+    whenDisplayed: () => {
+      if (video) stillOpacity.set(1);
+      takeOffZoomFlight();
+    },
+  });
+}
+
 function finishZoomFlight(id: number) {
   const landed = landZoomFlight(id);
   // Superseded: the newer flight owns the ticker now.
@@ -1132,6 +1238,8 @@ export function useMediaZoomSource({
         flightId: flight.id,
         recordedAt: Date.now(),
       });
+      // Android's back key is this open's until its reel can answer it.
+      holdBackForOpen(openSerial, flight);
     };
     measure(start);
     // Fabric answers `measureInWindow` before it returns. A host that does not
@@ -1486,8 +1594,9 @@ export function useMediaZoomStage({
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
   /**
-   * The close under way. `popsAtLanding`: a picture flying home alone on
-   * Android, whose reel is popped once it has landed (`whenDisplayed`).
+   * The close under way. `popsAtLanding`: a picture's close on Android, flying
+   * home alone or turned round before the hand-off, whose reel is popped once
+   * the picture has landed and let go (`leaveOnceReleased`).
    */
   const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean; popsAtLanding: boolean } | null>(null);
   /** Gives the tile back to UIKit's zoom after a picture-only close (`withholdAppleZoomSource`). */
@@ -1524,10 +1633,16 @@ export function useMediaZoomStage({
    * effect here runs, so a hand-off finished on mount still ends it.
    */
   const tileOpenRef = useRef<number | null>(null);
+  /** Back was pressed after this reel was pushed and before it could answer it: it closes as soon as it is up. */
+  const closeOnArrivalRef = useRef(false);
   useEffect(() => {
     const claimed = claimTileOpen(Date.now());
     if (claimed === null) return;
     tileOpenRef.current = claimed;
+    // The layer held Android's back key for this open until now
+    // (`holdBackForOpen`); the reel's own takes it from here.
+    closeOnArrivalRef.current = isTileOpenCloseRequested(claimed);
+    stopHoldingBackForOpen(claimed);
     if (openedRef.current) endTileOpenWhenSettled(claimed);
     return () => endTileOpen(claimed);
   }, []);
@@ -1854,8 +1969,13 @@ export function useMediaZoomStage({
     if (ready) handoff();
   }, [handoff, ready]);
 
+  // Nothing more of the reel is built once a close has begun (`dismiss`): a
+  // close before the hand-off flies with the reel still standing under it,
+  // out of sight, and its rail and caption (mounted once it has drawn) and its
+  // neighbours (once those are laid out) would each hold the UI thread the
+  // flight's frames are made on, for a reel that is about to go.
   const markDrawn = useCallback(() => {
-    if (drawnRef.current) return;
+    if (drawnRef.current || dismissingRef.current) return;
     drawnRef.current = true;
     setDrawn(true);
     handoff();
@@ -1876,7 +1996,7 @@ export function useMediaZoomStage({
   }, [handoff]);
 
   const reportChromeDrawn = useCallback(() => {
-    if (chromeDrawnRef.current) return;
+    if (chromeDrawnRef.current || dismissingRef.current) return;
     chromeDrawnRef.current = true;
     setChromeDrawn(true);
     handoff();
@@ -1886,6 +2006,7 @@ export function useMediaZoomStage({
   useEffect(() => {
     if (!zooming || !landed) return;
     const deadline = setTimeout(() => {
+      if (dismissingRef.current) return;
       chromeDrawnRef.current = true;
       setChromeDrawn(true);
       reportNeighbourDrawn();
@@ -1920,9 +2041,9 @@ export function useMediaZoomStage({
             leaveIntoTile();
           }
         }
-        // A picture that flew home alone has landed: the reel, out of sight
-        // since it set off (`whenDisplayed` below), goes once the picture has
-        // let go of the tile.
+        // A picture's close has landed, flown home alone or turned round
+        // before the hand-off: the reel, out of sight since it set off
+        // (`whenDisplayed` below), goes once the picture has let go of the tile.
         if (event.type === 'landed' && close.popsAtLanding) leaveOnceReleased();
         return;
       }
@@ -1973,6 +2094,7 @@ export function useMediaZoomStage({
 
   // The reel has drawn its own picture: the tile's copy gives way to it.
   const reportPainted = useCallback(() => {
+    if (dismissingRef.current) return;
     markDrawn();
     if (!carryingRef.current) return;
     carryingRef.current = false;
@@ -2157,23 +2279,33 @@ export function useMediaZoomStage({
       const video = beforeHandoff ? lentVideo : null;
       // The post shrinks whole: the layer draws its rail and caption over the
       // picture and fades them out as the window comes down. A live close has
-      // the reel's own chrome to fade instead (`chromeStyle`).
-      const post = live || alone ? null : postRef.current;
+      // the reel's own chrome to fade instead (`chromeStyle`). Before the
+      // hand-off it is the post the layer's own picture carries, the one on
+      // screen: a reel that has only just mounted (one closing as it comes up,
+      // `closeOnArrivalRef`) may not hold its post yet, and the picture would
+      // lose its rail and caption at the close's first frame.
+      const post = live || alone ? null : getHeldZoomPicture()?.post ?? postRef.current;
       // A video the tile will not take back is not what the tile goes on to
       // show, so the reel dissolves into the tile as it lands rather than
       // standing over it until it lets go.
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
-      // Android: a picture flying home alone out of a reel at rest leaves the
-      // reel standing, out of sight, until it has landed, as a live close does.
-      // Popped first, the flight waited for the route's removal to be rendered
-      // (the reel's unmount, the screen beneath taking the focus) before its
-      // first frame: 100–133 ms on an iPhone 16e when iOS had the same order
-      // (#718), and the S24 measured ~160 ms from Back to the first movement
-      // (audit, 2026-11-27). A close begun before the reel was uncovered keeps
-      // the old order: that reel may still be mounting, which would hold the
-      // frames of the flight.
-      const popsAtLanding = alone && !nativeZoom;
+      // Android: every close leaves the reel standing, out of sight, until it
+      // has landed: a live close until its hand-back (`leaveIntoTile`), a
+      // picture flying home alone and a close begun before the hand-off until
+      // the picture has let go of its tile (`leaveOnceReleased`). Popped
+      // first, the flight waited for the route's removal to be rendered (the
+      // reel's unmount, the screen beneath taking the focus) before its first
+      // frame: 100–133 ms on an iPhone 16e when iOS had the same order (#718),
+      // and ~160 ms from Back to the first movement on the S24, both out of a
+      // reel at rest (feel audit, 2026-11-27) and for Back pressed while the
+      // reel was still being built under the landed picture, which stood as
+      // if Back had not been heard (the owner: "fix the back mid-opening wait
+      // too"). A reel still being built builds no more once its close has
+      // begun (`markDrawn`), so its flight's frames have only what it had
+      // already started to share the UI thread with. iOS pops at once
+      // (`whenDisplayed`), under UIKit's zoom or the flight's cover.
+      const popsAtLanding = !live && !nativeZoom;
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         // A picture closing alone has the reel hidden (and on iOS the screen
         // covered) once it is up, so going on the usual deadline before it had
@@ -2209,16 +2341,9 @@ export function useMediaZoomStage({
           // covers the picture's place for a frame first, as it did. The pop
           // comes once it has landed (the flight's `landed`, above), and the
           // net is timed from the take-off, not the press.
-          if (popsAtLanding) {
-            requestAnimationFrame(() => {
-              takeOffZoomFlight();
-              armCloseBackstop();
-            });
-            return;
-          }
           requestAnimationFrame(() => {
-            leave();
-            requestAnimationFrame(takeOffZoomFlight);
+            takeOffZoomFlight();
+            armCloseBackstop();
           });
         },
       });
@@ -2245,6 +2370,14 @@ export function useMediaZoomStage({
     });
     measureTile(TILE_REMEASURE_FRAMES);
   }, [armCloseBackstop, closeDissolves, closeSetsOff, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
+
+  // Back was pressed after this reel was pushed and before it could answer it
+  // (`holdBackForOpen`): it closes now, before anything more of it is built.
+  useEffect(() => {
+    if (!closeOnArrivalRef.current) return;
+    closeOnArrivalRef.current = false;
+    dismiss();
+  }, [dismiss]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),

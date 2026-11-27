@@ -17,6 +17,18 @@ function optionalNativeExport<T>(read: () => T) {
 const backHandlerApi = optionalNativeExport(() => ReactNative.BackHandler);
 
 /**
+ * Listens to Android's back key outside a component, for as long as the
+ * caller holds it: `handler` answers whether it took the press (true stops it
+ * there, as a `hardwareBackPress` listener does). Returns the stop. A no-op on
+ * iOS and where tests have no BackHandler.
+ */
+export function listenToHardwareBack(handler: () => boolean): () => void {
+  if (typeof backHandlerApi?.addEventListener !== 'function') return () => {};
+  const subscription = backHandlerApi.addEventListener('hardwareBackPress', handler);
+  return () => subscription.remove();
+}
+
+/**
  * Claim Android's back key while `enabled`, running `handler` instead of the
  * navigator's pop.
  *
