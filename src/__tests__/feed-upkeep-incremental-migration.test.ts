@@ -45,3 +45,34 @@ describe('refresh_post_feed_stats refreshes only posts whose rows can change', (
     expect(body).not.toContain('v_affected_rows / 3');
   });
 });
+
+describe('refresh_post_feed_engagement_stats reads the facts once and refreshes only posts whose rows can change', () => {
+  // supabase/tests/database/post_feed_engagement_stats_refresh_incremental.test.sql
+  const { file, body } = readMigration('_post_feed_engagement_stats_refresh_incremental.sql');
+
+  it('replaces the function with the same signature, rights and search path', () => {
+    expect(file).toBeTruthy();
+    expect(body).toContain("CREATE OR REPLACE FUNCTION public.refresh_post_feed_engagement_stats(p_as_of timestamp with time zone DEFAULT timezone('utc'::text, now()), p_limit integer DEFAULT 1000)");
+    expect(body).toContain(' RETURNS integer');
+    expect(body).not.toContain('SECURITY DEFINER');
+    expect(body).toContain("SET search_path TO 'public', 'pg_temp'");
+    expect(body).toContain("SET LOCAL lock_timeout = '5s';");
+    expect(body).not.toMatch(/\bGRANT\b/);
+  });
+
+  it('joins one window row for the marker and reads the 30-day facts once', () => {
+    expect(body).toContain("AND marker.window_key = '24h'");
+    expect(body).not.toContain('min(existing.updated_at)');
+    expect(body).toContain('WITH window_facts AS MATERIALIZED (');
+    expect(body).toContain("facts.ranked_at >= p_as_of - interval '30 days'");
+    expect(body).toContain('LEFT JOIN window_facts AS facts');
+    expect(body.match(/FROM public\.feed_delivery_facts/g)).toHaveLength(2);
+  });
+
+  it('zeroes posts that still hold counts, and guards unchanged rows', () => {
+    expect(body).toContain('counted.served_delivery_count > 0');
+    expect(body).toContain("WHERE stats.window_key = '24h'");
+    expect(body).toContain('IS DISTINCT FROM (');
+    expect(body).toContain('RETURN cardinality(v_post_ids);');
+  });
+});
