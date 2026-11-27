@@ -38,6 +38,8 @@ function createClient(result: {
   profileShareEvents?: { data?: unknown; error?: unknown };
   freeUnlockOrders?: { data?: unknown; error?: unknown };
   referralRiskSignals?: { data?: unknown; error?: unknown };
+  mobileClientErrors?: { data?: unknown; error?: unknown };
+  postCreateClaims?: { data?: unknown; error?: unknown };
 }) {
   const calls: RpcCall[] = [];
   return {
@@ -68,6 +70,18 @@ function createClient(result: {
         }
         if (fn === 'prune_account_merge_tickets') {
           return { data: 0, error: null };
+        }
+        if (fn === 'prune_post_create_claims') {
+          return {
+            data: result.postCreateClaims?.data ?? 0,
+            error: result.postCreateClaims?.error ?? null,
+          };
+        }
+        if (fn === 'prune_mobile_client_errors') {
+          return {
+            data: result.mobileClientErrors?.data ?? 0,
+            error: result.mobileClientErrors?.error ?? null,
+          };
         }
         if (fn === 'prune_referral_risk_signals') {
           return {
@@ -105,6 +119,8 @@ describe('operational data retention', () => {
       profileShareEvents: { data: 6 },
       freeUnlockOrders: { data: 2 },
       referralRiskSignals: { data: 5 },
+      mobileClientErrors: { data: 9 },
+      postCreateClaims: { data: 4 },
     });
 
     const summary = await pruneOperationalBackendData(client);
@@ -136,6 +152,10 @@ describe('operational data retention', () => {
       accountMergeTicketsDeleted: 0,
       // The Privacy Policy's 90 days for referral visit signals (20261110070035).
       referralRiskSignalsCleared: 5,
+      // The app's error reports, kept 30 days (20261127060127).
+      mobileClientErrorsDeleted: 9,
+      // The composer's create claims, kept a day (20261127060127).
+      postCreateClaimsDeleted: 4,
       uploadByteReservationsDeleted: 0,
       supplementaryBatchLimitReached: false,
       expiredUploadReservationsScanned: 0,
@@ -179,6 +199,8 @@ describe('operational data retention', () => {
       'prune_abandoned_free_unlock_orders',
       'prune_account_merge_tickets',
       'prune_referral_risk_signals',
+      'prune_mobile_client_errors',
+      'prune_post_create_claims',
       'prune_upload_byte_reservations',
       'list_idle_guest_identities',
       'list_idle_guest_identities_with_content',

@@ -256,6 +256,7 @@ const expectedEndpointKeys = [
   'recordShareVisit',
   'shareCreatorProfile',
   'publishGeneration',
+  'reportClientError',
   'createPost',
   'listSourceTools',
   'listGenerationModels',

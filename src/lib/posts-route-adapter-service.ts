@@ -7,7 +7,7 @@ import { NextResponse } from 'next/server';
 
 import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { createBackendRateLimitResponse } from '@/lib/backend-rate-limit';
-import { createOwnerPostForRoute } from '@/lib/post-create-route-service';
+import { createOwnerPostForRoute, readPostCreateIdempotencyKey } from '@/lib/post-create-route-service';
 import { listOwnerPostsForRoute } from '@/lib/owner-post-list-route-service';
 import { createServiceClient, createUserClient } from '@/lib/server-helpers';
 
@@ -65,6 +65,8 @@ async function handlePostsPOST(
       adminSupabase,
       ownerUserId,
       readFormData: () => request.formData(),
+      // The composer's key for this post: its id, and what a retry of it is answered by.
+      idempotencyKey: readPostCreateIdempotencyKey(request.headers.get('Idempotency-Key')),
     });
 
     if (!result.ok) {

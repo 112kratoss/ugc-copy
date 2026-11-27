@@ -28,6 +28,20 @@ describe('mobile startup performance contracts', () => {
     expect(pricingSource).toContain('configureIapForUser');
   });
 
+  // Audit 2026-11-27, finding 3: RevenueCat is also set up once after launch, so a purchase the
+  // store approved later is posted without the Credits tab. Still out of sign-in: the root layout
+  // asks for it only once the shell is ready, after a delay and the launch's interactions.
+  it('sets RevenueCat up after launch only once the shell is ready, never from sign-in', () => {
+    const layoutSource = readProjectFile('app/_layout.tsx');
+    const hookSource = readProjectFile('lib/use-iap-launch-configuration.ts');
+
+    expect(layoutSource).toContain('<IapLaunchCoordinator shellReady={shellReady} />');
+    expect(layoutSource).toContain('useIapLaunchConfiguration(identityUserId, shellReady)');
+    expect(hookSource).toContain('if (!shellReady || due) return;');
+    expect(hookSource).toContain('IAP_LAUNCH_CONFIGURE_DELAY_MS');
+    expect(hookSource).toContain('InteractionManager.runAfterInteractions');
+  });
+
   it('unblocks navigation from the persisted session before profile credits finish refreshing', () => {
     const authSource = readProjectFile('lib/auth.tsx');
     const applySessionStart = authSource.indexOf('const applySessionState');

@@ -480,3 +480,49 @@ describe('a device whose session is still starting (02-6)', () => {
     renderer.act(() => screen.tree.unmount());
   });
 });
+
+// Audit 2026-11-27, finding 3: the store setup had no error handling, and an identity change kept
+// "ready" from the identity before it while the new one was still being set up.
+describe('setting up the store', () => {
+  it('says the store could not be reached when setup fails, and tries again on Try again', async () => {
+    harness.iap.configureIapForUser.mockReset()
+      .mockRejectedValueOnce(new Error('Purchases configuration failed'))
+      .mockResolvedValue(true);
+    const screen = await renderScreen();
+
+    expect(notices(screen.tree)).toContainEqual({
+      tone: 'danger',
+      title: 'The Play Store could not be reached',
+      body: 'Credit packs need the Play Store. Check your connection and try again.',
+    });
+    expect(buyButton(screen.tree).props.disabled).toBe(true);
+    expect(screen.tree.root.find((node) => String(node.type) === 'pill' && String(node.props.label).startsWith('Play Store')).props.label)
+      .toBe('Play Store · Unavailable');
+
+    await press(secondaryButton(screen.tree, 'Try again'));
+
+    expect(harness.iap.configureIapForUser).toHaveBeenCalledTimes(2);
+    expect(notices(screen.tree).some((notice) => notice.title === 'The Play Store could not be reached')).toBe(false);
+    expect(buyButton(screen.tree).props.disabled).toBe(false);
+    renderer.act(() => screen.tree.unmount());
+  });
+
+  it('never keeps "ready" from the identity before while the new one is set up', async () => {
+    const screen = await renderScreen();
+    expect(buyButton(screen.tree).props.disabled).toBe(false);
+
+    let finish!: (ready: boolean) => void;
+    harness.iap.configureIapForUser.mockImplementationOnce(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+    harness.auth.identityUserId = 'account-2';
+    await renderer.act(async () => { screen.update(<PricingScreen />); });
+    await flush();
+
+    expect(harness.iap.configureIapForUser).toHaveBeenLastCalledWith('account-2', 'android');
+    expect(buyButton(screen.tree).props.disabled).toBe(true);
+
+    await renderer.act(async () => { finish(true); });
+    await flush();
+    expect(buyButton(screen.tree).props.disabled).toBe(false);
+    renderer.act(() => screen.tree.unmount());
+  });
+});

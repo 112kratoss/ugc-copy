@@ -160,6 +160,10 @@ export type OperationalRetentionSummary = IdleGuestRetentionSummary & ContentGue
    * rows stay.
    */
   referralRiskSignalsCleared: number;
+  /** The mobile app's error reports older than 30 days (`prune_mobile_client_errors`). */
+  mobileClientErrorsDeleted: number;
+  /** The composer's create claims older than a day (`prune_post_create_claims`). */
+  postCreateClaimsDeleted: number;
   uploadByteReservationsDeleted: number;
   /** A supplementary prune's last batch was still full. */
   supplementaryBatchLimitReached: boolean;
@@ -593,6 +597,12 @@ export async function pruneOperationalBackendData(
   const referralRiskSignalsCleared = await pruneSupplementary(
     'prune_referral_risk_signals', { p_limit: ticketBatch }, ticketBatch, OPERATIONAL_RETENTION_SUPPLEMENTARY_PHASE_END_MS,
   );
+  const mobileClientErrorsDeleted = await pruneSupplementary(
+    'prune_mobile_client_errors', { p_limit: ticketBatch }, ticketBatch, OPERATIONAL_RETENTION_SUPPLEMENTARY_PHASE_END_MS,
+  );
+  const postCreateClaimsDeleted = await pruneSupplementary(
+    'prune_post_create_claims', { p_limit: ticketBatch }, ticketBatch, OPERATIONAL_RETENTION_SUPPLEMENTARY_PHASE_END_MS,
+  );
 
   // Expiry is not proof of absence. Delete/prove each unfinalized object first;
   // only rows this worker releases are eligible for the bookkeeping prune. The
@@ -648,6 +658,8 @@ export async function pruneOperationalBackendData(
     abandonedFreeUnlockOrdersDeleted,
     accountMergeTicketsDeleted,
     referralRiskSignalsCleared,
+    mobileClientErrorsDeleted,
+    postCreateClaimsDeleted,
     uploadByteReservationsDeleted,
     supplementaryBatchLimitReached,
     expiredUploadReservationsScanned: uploadReclaim.scanned,

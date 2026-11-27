@@ -119,7 +119,7 @@ import {
   type SupportHubTab,
 } from '@/lib/support-hub-policy/support-hub-policy';
 import { supportFeatureIdeaDraft, supportHubMountedTabs, supportHubTabOptions } from '@/lib/support-hub-view-model';
-import { supportMailUrl } from '@/lib/support-mail';
+import { openSupportMail, SUPPORT_MAIL_FALLBACK_WORDS, supportMailUrl } from '@/lib/support-mail';
 import { useSupportUpdatesUnseen } from '@/lib/support-updates-seen';
 import {
   keepSupportPhoto,
@@ -141,16 +141,43 @@ function supportMailWithDetails() {
 }
 
 /**
+ * Opens the support mail; where no mail app takes it, `onFailed` is told, and the
+ * screen shows the address with a Copy (`SupportMailFallback`).
+ */
+function openSupportMailOr(onFailed: () => void) {
+  void openSupportMail(supportMailWithDetails(), Linking.openURL).then((opened) => {
+    if (!opened) onFailed();
+  });
+}
+
+/** The address, written out with a Copy, for a phone that has no mail app. */
+function SupportMailFallback() {
+  return (
+    <View style={{ gap: appTheme.spacing.unit, paddingHorizontal: 12 }}>
+      <AppText variant="bodySm" color="muted" selectable style={{ textAlign: 'center' }}>
+        {SUPPORT_MAIL_FALLBACK_WORDS.noMailApp}
+      </AppText>
+      <SecondaryButton
+        label={SUPPORT_MAIL_FALLBACK_WORDS.copy}
+        onPress={() => void copyToClipboard(SUPPORT_EMAIL, SUPPORT_MAIL_FALLBACK_WORDS.copied)}
+      />
+    </View>
+  );
+}
+
+/**
  * The mail under the privacy note, as the web's footnote under its thread: Help & Support opens
  * this screen itself (owner, 2026-11-26), and it is the only place the app gives the address.
  */
 function SupportMailLine() {
+  const [mailFailed, setMailFailed] = useState(false);
   return (
+    <>
     <Pressable
       accessibilityRole="link"
       accessibilityLabel={`Prefer email? Write to ${SUPPORT_EMAIL}`}
       accessibilityHint="Opens your email app."
-      onPress={() => void Linking.openURL(supportMailWithDetails())}
+      onPress={() => openSupportMailOr(() => setMailFailed(true))}
       style={({ pressed }) => ({
         minHeight: MIN_HIT_TARGET_PT,
         justifyContent: 'center',
@@ -162,6 +189,8 @@ function SupportMailLine() {
         Prefer email? Write to <AppText variant="caption" color="primary">{SUPPORT_EMAIL}</AppText>
       </AppText>
     </Pressable>
+    {mailFailed ? <SupportMailFallback /> : null}
+    </>
   );
 }
 
@@ -344,6 +373,8 @@ function SupportChat({ active, prefill }: { active: boolean; prefill: SupportCha
   const [unreadMark, setUnreadMark] = useState<{ fromId: string; count: number } | null | undefined>(undefined);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [showJump, setShowJump] = useState(false);
+  // Set once a press on "Email us instead" found no mail app to take it.
+  const [mailFailed, setMailFailed] = useState(false);
   const [newCount, setNewCount] = useState(0);
   const [photoDraft, setPhotoDraft] = useState<PickedSupportPhoto | null>(null);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
@@ -814,7 +845,8 @@ function SupportChat({ active, prefill }: { active: boolean; prefill: SupportCha
           accent="primary"
           onPress={() => router.push({ pathname: '/auth', params: { returnTo: SUPPORT_CONVERSATION_PATH } } as never)}
         />
-        <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(supportMailWithDetails())} />
+        <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => openSupportMailOr(() => setMailFailed(true))} />
+        {mailFailed ? <SupportMailFallback /> : null}
       </Screen>
     );
   }
@@ -842,8 +874,9 @@ function SupportChat({ active, prefill }: { active: boolean; prefill: SupportCha
         ) : null}
         {/* A thread that will not load still leaves the mail: this screen is the only place the app gives the address. */}
         {failed ? (
-          <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => void Linking.openURL(supportMailWithDetails())} />
+          <SecondaryButton label={SUPPORT_WORDS.emailInstead} onPress={() => openSupportMailOr(() => setMailFailed(true))} />
         ) : null}
+        {failed && mailFailed ? <SupportMailFallback /> : null}
       </Screen>
     );
   }

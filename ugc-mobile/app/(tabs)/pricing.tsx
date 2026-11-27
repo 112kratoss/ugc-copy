@@ -135,6 +135,9 @@ export default function PricingScreen() {
   const queryClient = useQueryClient();
   const [isConfigured, setIsConfigured] = useState(false);
   const [paymentsAllowed, setPaymentsAllowed] = useState(true);
+  // Store setup failed for this identity (audit 2026-11-27, finding 3); Try again bumps the attempt.
+  const [storeSetupFailed, setStoreSetupFailed] = useState(false);
+  const [storeSetupAttempt, setStoreSetupAttempt] = useState(0);
   const [busyProductId, setBusyProductId] = useState<string | null>(null);
 
   // A reload mid-purchase drops the flow between the store taking payment and
@@ -158,26 +161,23 @@ export default function PricingScreen() {
 
   useEffect(() => {
     let cancelled = false;
+    // Nothing from the identity before stands while this one is set up: "ready" belongs to the
+    // identity it was set up for (audit 2026-11-27, finding 3).
+    setIsConfigured(false);
+    setStoreSetupFailed(false);
 
     async function syncIap() {
-      if (os !== 'ios' && os !== 'android') {
-        if (!cancelled) {
-          setIsConfigured(false);
-        }
+      if ((os !== 'ios' && os !== 'android') || !identityUserId) return;
+
+      let ready: boolean;
+      try {
+        ready = await configureIapForUser(identityUserId, os);
+      } catch {
+        if (!cancelled) setStoreSetupFailed(true);
         return;
       }
-
-      if (!identityUserId) {
-        if (!cancelled) {
-          setIsConfigured(false);
-        }
-        return;
-      }
-
-      const ready = await configureIapForUser(identityUserId, os);
-      if (!cancelled) {
-        setIsConfigured(ready);
-      }
+      if (cancelled) return;
+      setIsConfigured(ready);
       if (ready) {
         const allowed = await canDeviceMakePayments();
         if (!cancelled) {
@@ -191,7 +191,7 @@ export default function PricingScreen() {
     return () => {
       cancelled = true;
     };
-  }, [os, identityUserId]);
+  }, [os, identityUserId, storeSetupAttempt]);
 
   const packageQuery = useQuery({
     queryKey: ['iap-packages', os, identityUserId],
@@ -501,6 +501,16 @@ export default function PricingScreen() {
             body={`The ${storeLabel} could not return this build's credit packs. Retry once; if this continues, the purchase setup needs an app update.`}
           />
           <SecondaryButton label="Retry credit packs" onPress={() => void packageQuery.refetch()} />
+        </View>
+      ) : null}
+      {storeSetupFailed ? (
+        <View style={{ gap: appTheme.spacing.gap }}>
+          <StatusBlock
+            tone="danger"
+            title={`The ${storeLabel} could not be reached`}
+            body={`Credit packs need the ${storeLabel}. Check your connection and try again.`}
+          />
+          <SecondaryButton label="Try again" onPress={() => setStoreSetupAttempt((attempt) => attempt + 1)} />
         </View>
       ) : null}
       {notice ? <StatusBlock tone={notice.tone} title={notice.title} body={notice.body} /> : null}

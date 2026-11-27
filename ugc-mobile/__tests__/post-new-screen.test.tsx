@@ -328,6 +328,8 @@ vi.mock('expo-file-system', () => ({
 
 import NewPostScreen from '../app/post/new';
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import { postCreateKeyAfterFailure } from '@/lib/post-create-key';
+import { saveMayHaveConsumedUploads } from '@/lib/post-composer-media-recovery';
 import { ApiError } from '../lib/api-client';
 import { pickMediaList, pickResourceDocument, pickResourcePhotos, uploadPickedMedia, uploadResourceDocument } from '@/lib/media';
 import {
@@ -2346,6 +2348,21 @@ describe('mobile external post composer', () => {
       });
     }
 
+    // Audit 2026-11-27, finding 4: the retry goes under the first attempt's key, so the server
+    // answers the post that attempt made instead of making a second; a new post gets a new key.
+    it('sends the retry under the same Idempotency-Key, and a new post under a new one', async () => {
+      const tree = await failFirstPublish(new ApiError('Network request failed.', 0, { cause: 'Network request failed' }));
+      await publishAgain();
+      const keys = authState.api.createPost.mock.calls.map((call) => (call as unknown[])[1]);
+      expect(keys).toHaveLength(2);
+      expect(keys[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(keys[1]).toBe(keys[0]);
+      renderer.act(() => tree.unmount());
+
+      await failFirstPublish(new ApiError('Failed to publish post.', 500, { error: 'Failed to publish post.' }));
+      expect((authState.api.createPost.mock.calls.at(-1) as unknown[])[1]).not.toBe(keys[0]);
+    });
+
     it.each([
       ['no answer came back', new ApiError('Network request failed. Please check your connection and try again.', 0, {
         url: 'https://magicbooklet.com/api/posts',
@@ -2386,6 +2403,30 @@ describe('mobile external post composer', () => {
       expect(sentStoragePaths()).toEqual(['uploads/cover-again.png']);
       // A new post has no rows to read back.
       expect(authState.api.getOwnerPost).not.toHaveBeenCalled();
+    });
+
+    // Review of the Idempotency-Key fix: after 409 POST_SAVED_AS_DRAFT the post exists as a private
+    // draft. The publish is finished as a draft: no second create (a fresh key would make another
+    // post), no second upload, the server's words, and the composer leaves for the draft.
+    it('finishes a publish answered POST_SAVED_AS_DRAFT as a draft: no second create, the server\'s words', async () => {
+      const contract = (await import('../../contracts/mobile-api-v1.json')).default.endpoints.createPost.idempotency.errors.savedAsDraft;
+      const refusal = new ApiError(contract.response.error, contract.status, contract.response, undefined, contract.response.code);
+      await failFirstPublish(refusal);
+      expect(saveMayHaveConsumedUploads(refusal)).toBe(false);
+      expect(authState.api.createPost).toHaveBeenCalledTimes(1);
+
+      vi.mocked(uploadPickedMedia).mockClear();
+      let answer: unknown;
+      await renderer.act(async () => {
+        answer = await mutationState.options?.mutationFn?.('public');
+      });
+      expect(authState.api.createPost).toHaveBeenCalledTimes(1);
+      expect(uploadPickedMedia).not.toHaveBeenCalled();
+      expect(answer).toMatchObject({ postId: contract.response.postId, visibility: 'private', savedAsDraft: true, message: contract.response.error });
+
+      renderer.act(() => mutationState.options?.onSuccess?.(answer as { postId?: string | null }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(routerState.replace).toHaveBeenCalledWith(expect.objectContaining({ params: expect.objectContaining({ postId: contract.response.postId }) }));
     });
 
     it('sends the same uploads again after a refusal decided before they were used', async () => {

@@ -6,7 +6,11 @@
  * default never interrupts anyone, which is why it ships first and alone. This
  * module governs the one thing added on top of it — deciding whether to call
  * `Updates.reloadAsync()` early, so a fix does not have to wait for a user to
- * fully quit the app.
+ * fully quit the app. Since 2026-11-27 the app also asks the server again when
+ * it returns after `FOREGROUND_RELOAD_THRESHOLD_MS` away (`ota-update-check.ts`),
+ * so a fix published while it sat in the background is downloaded then. That
+ * check only downloads: what it fetched is applied at the next long return or
+ * cold start, never under someone already using the app.
  *
  * The policy the product settled on:
  *

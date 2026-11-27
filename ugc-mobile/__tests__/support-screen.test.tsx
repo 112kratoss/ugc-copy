@@ -667,6 +667,26 @@ describe('Message support', () => {
     expect(url.searchParams.get('body')).toBe('\n\nVersion 0.1.9 (64) · update a17f193a');
   });
 
+  // Audit 2026-11-27, finding 5: a phone with no mail app refuses the link, and the refusal was
+  // dropped, so "Email us" did nothing at all. Each of the three mail controls now shows the
+  // address with a Copy in its place.
+  it.each([
+    ['a guest', () => { authState.user = null; }, (tree: renderer.ReactTestRenderer) => secondaryButton(tree, 'Email us instead')],
+    ['a thread that will not load', () => { query.data = undefined; query.isError = true; }, (tree: renderer.ReactTestRenderer) => secondaryButton(tree, 'Email us instead')],
+    ['the line under the privacy note', () => undefined, (tree: renderer.ReactTestRenderer) => tree.root.find((node) => String(node.type) === 'pressable'
+      && node.props.accessibilityLabel === 'Prefer email? Write to info@magicbooklet.com')],
+  ])('shows the address with a Copy when no mail app opens, from %s', async (_name, arrange, control) => {
+    arrange();
+    openUrl.mockRejectedValueOnce(new Error('No activity found to handle Intent'));
+    const tree = render();
+
+    await act(async () => { (control(tree).props.onPress as () => void)(); });
+
+    expect(drawnText(tree).join(' ')).toContain('No mail app opened. Write to us at info@magicbooklet.com');
+    await act(async () => { (secondaryButton(tree, 'Copy address').props.onPress as () => void)(); });
+    expect(clipboard.copy).toHaveBeenCalledWith('info@magicbooklet.com', 'Address copied');
+  });
+
   it('gives a signed-in account the mail under the privacy note, with the build lines', () => {
     appVersion.label = 'Version 0.1.9 (64) · update a17f193a';
     for (const data of [conversation, { ...conversation, messages: [] }]) {

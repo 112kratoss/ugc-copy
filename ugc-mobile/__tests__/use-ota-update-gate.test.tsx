@@ -20,11 +20,15 @@ const updates = vi.hoisted(() => ({
     downloadedUpdate: undefined as unknown,
   },
   reloadAsync: vi.fn(async () => undefined),
+  checkForUpdateAsync: vi.fn(async () => ({ isAvailable: false })),
+  fetchUpdateAsync: vi.fn(async () => ({ isNew: false })),
 }));
 
 vi.mock('expo-updates', () => ({
   isEnabled: true,
   reloadAsync: updates.reloadAsync,
+  checkForUpdateAsync: updates.checkForUpdateAsync,
+  fetchUpdateAsync: updates.fetchUpdateAsync,
   useUpdates: () => updates.state,
 }));
 
@@ -40,6 +44,7 @@ vi.mock('react-native', () => ({
 }));
 
 import { __resetActivityLocksForTest, acquireActivityLock } from '../lib/app-activity';
+import { resetAppReloadClaim } from '../lib/app-reload-claim';
 import { useOtaUpdateGate, type OtaUpdateGate } from '../lib/use-ota-update-gate';
 import type { MobileCriticalUpdate } from '../lib/types';
 
@@ -242,3 +247,93 @@ describe('the OTA gate’s critical decision', () => {
     expect(probe.gate?.criticalPromptVisible).toBe(true);
   });
 });
+
+// Audit 2026-11-27, finding 2: a return after the reload threshold asks the update server and
+// fetches what it has, so the gate can apply it then rather than at the next cold start.
+describe('the OTA gate’s check on return', () => {
+  const THRESHOLD = 30 * 60 * 1000;
+
+  async function returnAfter(ms: number, clock: { now: number }) {
+    await act(async () => {
+      for (const handler of [...appState.handlers]) handler('background');
+    });
+    clock.now += ms;
+    await act(async () => {
+      for (const handler of [...appState.handlers]) handler('active');
+    });
+    await settle();
+  }
+
+  function fakeClock() {
+    const clock = { now: Date.parse('2026-11-27T10:00:00.000Z') };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    return clock;
+  }
+
+  // An earlier test's reload keeps the runtime's one reload claim (lib/app-reload-claim.ts).
+  beforeEach(() => { resetAppReloadClaim(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('checks and fetches after a long absence, and applies the fetch only at the next long return', async () => {
+    const clock = fakeClock();
+    api.getAppVersion.mockResolvedValue(appVersion(null));
+    updates.checkForUpdateAsync.mockResolvedValueOnce({ isAvailable: true });
+    updates.fetchUpdateAsync.mockImplementationOnce(async () => {
+      updates.state = { isUpdatePending: true, isRestarting: false, downloadedUpdate: downloaded() };
+      return { isNew: true };
+    });
+    const tree = await mountGate();
+
+    await returnAfter(THRESHOLD + 1, clock);
+    expect(updates.checkForUpdateAsync).toHaveBeenCalledTimes(1);
+    expect(updates.fetchUpdateAsync).toHaveBeenCalledTimes(1);
+
+    await act(async () => { tree.update(<GateProbe />); });
+    await settle();
+    // Someone may have started typing since the return: no reload in the foreground.
+    expect(updates.reloadAsync).not.toHaveBeenCalled();
+
+    await returnAfter(THRESHOLD + 1, clock);
+    expect(updates.reloadAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not check after a short absence, during a purchase, or twice within the interval', async () => {
+    const clock = fakeClock();
+    await mountGate();
+
+    await returnAfter(THRESHOLD - 1, clock);
+    expect(updates.checkForUpdateAsync).not.toHaveBeenCalled();
+
+    const release = acquireActivityLock('purchase');
+    await returnAfter(THRESHOLD + 1, clock);
+    expect(updates.checkForUpdateAsync).not.toHaveBeenCalled();
+    release();
+
+    await returnAfter(THRESHOLD + 1, clock);
+    expect(updates.checkForUpdateAsync).toHaveBeenCalledTimes(1);
+    await returnAfter(THRESHOLD + 1, clock);
+    expect(updates.checkForUpdateAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it('swallows a failed check', async () => {
+    const clock = fakeClock();
+    updates.checkForUpdateAsync.mockRejectedValueOnce(new Error('offline'));
+    await mountGate();
+
+    await returnAfter(THRESHOLD + 1, clock);
+    expect(updates.checkForUpdateAsync).toHaveBeenCalledTimes(1);
+    expect(updates.reloadAsync).not.toHaveBeenCalled();
+  });
+
+  it('leaves an update that lands well after the return for the next one', async () => {
+    const clock = fakeClock();
+    api.getAppVersion.mockResolvedValue(appVersion(null));
+    const tree = await mountGate();
+
+    await returnAfter(THRESHOLD + 1, clock);
+    clock.now += 60_000;
+    await downloadFinishes(downloaded(), tree);
+    expect(updates.reloadAsync).not.toHaveBeenCalled();
+  });
+});
+

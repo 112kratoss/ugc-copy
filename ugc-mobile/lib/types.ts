@@ -1930,6 +1930,11 @@ export interface CreatePostResponse {
   resourceBundlePath: string | null;
   message?: string;
   /**
+   * Set by the composer, never the server: the publish ended as a private draft (409
+   * `POST_SAVED_AS_DRAFT`), and `message` holds the server's words.
+   */
+  savedAsDraft?: boolean;
+  /**
    * A creation's publish or save: the items the server put into its recipe
    * beside those sent (the exact prompt, the saved inputs it was asked for),
    * which the composer adopts into its own (servers from 2026-11-03).

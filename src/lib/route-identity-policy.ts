@@ -299,6 +299,9 @@ const PUBLIC_ROUTES = [
   '/api/marketplace/resources',
   '/api/marketplace/resources/[resourceId]',
   '/api/security/csp-report',
+  // The app's error reports (audit 2026-11-27): a token, when sent, ties the report to its
+  // account (a guest's included); one that cannot be verified is stored without it.
+  '/api/mobile/client-errors',
   // Sampled media-failure reports: no identity is read or recorded.
   '/api/mobile/media-diagnostics',
   // Per-session playback start-up and stall aggregates: no identity is read or recorded.

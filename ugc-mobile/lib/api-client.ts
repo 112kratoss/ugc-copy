@@ -135,6 +135,7 @@ import {
   type SupportRoadmapResponse,
   type SupportUpdatesPage,
 } from './support-hub-policy/support-hub-policy';
+import type { ClientErrorReportBody } from './client-error-report';
 import type { MediaDiagnosticsReport } from './media-diagnostics';
 import type { SeedanceAssetKind } from './model-catalog/seedance-assets';
 import type { PlaybackMetricsReport } from './playback-metrics';
@@ -407,6 +408,11 @@ type RequestOptions = {
   cacheTtlMs?: number;
   /** This request's own deadline, in place of the client's `requestTimeoutMs`. */
   timeoutMs?: number;
+  /**
+   * False for a request whose answer must never speak for the session (an error report): its 401,
+   * 409 or 426 is thrown as a plain `ApiError` and no session handler hears of it.
+   */
+  sessionNotices?: boolean;
 };
 
 /** What `GET /api/posts?scope=owner` takes: offset pages by default, cursor pages on request. */
@@ -1173,6 +1179,14 @@ export function createApiClient({
       const responseRequestId = response.headers.get(REQUEST_ID_HEADER) ?? requestId;
 
       if (!response.ok) {
+        if (options.sessionNotices === false) {
+          throw new ApiError(
+            typeof body === 'object' && body && 'error' in body ? String((body as { error?: unknown }).error) : `Request failed with status ${response.status}`,
+            response.status,
+            body,
+            responseRequestId,
+          );
+        }
         throwHttpApiError(response.status, body, responseRequestId, sentSessionToken);
       }
 
@@ -1311,6 +1325,16 @@ export function createApiClient({
         body: JSON.stringify({ ...body, installationId }),
       });
     },
+    /**
+     * An error the app caught (`lib/client-error-report.ts`). Sent with the session when there is
+     * one, so the report names its account, but its answer never speaks for the session: an error
+     * report must not sign anybody out.
+     */
+    reportClientError: (report: ClientErrorReportBody) =>
+      request<unknown>('/api/mobile/client-errors', {
+        method: 'POST',
+        body: JSON.stringify(report),
+      }, { auth: true, sessionNotices: false }),
     /**
      * A sampled media-failure report from `lib/media-diagnostics`. Sent without
      * credentials: it carries no identity, and has to get through while the
@@ -1881,8 +1905,16 @@ export function createApiClient({
       }),
     publishGeneration: (body: Record<string, unknown>) =>
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),
-    createPost: (body: FormData) =>
-      request<CreatePostResponse>('/api/posts', { method: 'POST', body }, POST_CREATE_REQUEST_OPTIONS),
+    /**
+     * `idempotencyKey` is the composed post's key (`lib/post-create-key.ts`): the server makes the
+     * post under it and answers a retry with that post, so a lost answer pressed again makes one.
+     */
+    createPost: (body: FormData, idempotencyKey?: string) =>
+      request<CreatePostResponse>('/api/posts', {
+        method: 'POST',
+        body,
+        ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      }, POST_CREATE_REQUEST_OPTIONS),
     // The same public catalog for everyone, which the server marks cacheable
     // for five minutes: sent without the session token, so no identity check
     // runs for it and the edge may serve it.

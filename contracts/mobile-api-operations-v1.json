@@ -607,6 +607,11 @@
       "path": "/api/mobile/notifications/preferences",
       "auth": "required"
     },
+    "reportClientError": {
+      "method": "POST",
+      "path": "/api/mobile/client-errors",
+      "auth": "optional"
+    },
     "reportMediaDiagnostics": {
       "method": "POST",
       "path": "/api/mobile/media-diagnostics",

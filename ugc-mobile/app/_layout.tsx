@@ -7,7 +7,7 @@ import { QueryClient, QueryClientProvider, focusManager, useQueryClient } from '
 import Constants from 'expo-constants';
 import { useFonts } from 'expo-font';
 import { AppMetricsRoot } from 'expo-observe';
-import { Stack, router, usePathname } from 'expo-router';
+import { Stack, router, usePathname, type ErrorBoundaryProps } from 'expo-router';
 import { LucideProvider } from 'lucide-react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -32,7 +32,9 @@ import { SaverNoticeBar, SaverNoticeSync } from '@/components/saver-notice-bar';
 import { RecipeUnlockedNotice } from '@/components/recipe-unlocked-notice';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
+import { AppErrorBoundary, AppErrorFallback } from '@/components/app-error-boundary';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
+import { useIapLaunchConfiguration } from '@/lib/use-iap-launch-configuration';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
 import { useRootRemountReload } from '@/lib/root-remount-reload-native';
 import {
@@ -52,6 +54,13 @@ import { CREATOR_PAYOUTS_QUERY_KEY } from '@/lib/use-creator-payout-state';
 import { isAppVersionBelowMinimum } from '@/lib/app-compatibility';
 import { readAppVersionParts } from '@/lib/app-version-label';
 import { subscribeToAppForeground } from '@/lib/app-foreground';
+import {
+  configureClientErrorStore,
+  installGlobalErrorHandlers,
+  reportClientError,
+  setClientErrorReporter,
+} from '@/lib/client-error-report';
+import { createClientErrorStore } from '@/lib/client-error-store';
 import { setMediaDiagnosticsReporter } from '@/lib/media-diagnostics';
 import { readPlaybackDevice, readPlaybackNetwork } from '@/lib/playback-device';
 import { setPlaybackMetricsReporter } from '@/lib/playback-metrics';
@@ -85,10 +94,17 @@ import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import type { MobileNotificationType } from '@/lib/types';
 import { loadWelcomePromise } from '@/lib/welcome-promise';
 
-export {
-  // Catch any errors thrown by the Layout component.
-  ErrorBoundary,
-} from 'expo-router';
+/**
+ * The route boundary expo-router draws when the layout itself throws: the app's own (audit
+ * 2026-11-27), with expo-router's Try again and without its raw message. The navigator's errors
+ * meet `AppErrorBoundary` first, which reports them with their component stack.
+ */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  useEffect(() => {
+    reportClientError(error, { fatal: false });
+  }, [error]);
+  return <AppErrorFallback onRetry={() => void retry()} />;
+}
 
 export const unstable_settings = {
   initialRouteName: '(tabs)',
@@ -99,6 +115,26 @@ export const unstable_settings = {
 // FONT_SPLASH_FALLBACK_MS guarantees it never hangs on it. The native splash
 // stays up until components/launch-splash.tsx has drawn its own first frame.
 const FONT_SPLASH_FALLBACK_MS = 1200;
+// The app's error reporting (lib/client-error-report.ts), from launch: the global JS error handler
+// and Hermes's unhandled-rejection tracker, both handing errors to the one reporter. Here because
+// this module loads eagerly; inline requires would install them late anywhere else.
+// A fatal error's report is kept on the device and sent at the next launch: the route it happened
+// on is the one the ClientErrorCoordinator last saw.
+let clientErrorRoute: string | null = null;
+function readClientErrorContext() {
+  const { version, update } = readAppVersionParts();
+  return {
+    route: clientErrorRoute,
+    appVersion: version,
+    updateId: update,
+    platform: Platform.OS === 'ios' ? 'ios' as const : 'android' as const,
+  };
+}
+configureClientErrorStore(createClientErrorStore(), readClientErrorContext);
+installGlobalErrorHandlers({
+  errorUtils: (globalThis as { ErrorUtils?: Parameters<typeof installGlobalErrorHandlers>[0]['errorUtils'] }).ErrorUtils,
+  hermes: (globalThis as { HermesInternal?: Parameters<typeof installGlobalErrorHandlers>[0]['hermes'] }).HermesInternal,
+});
 void SplashScreen.preventAutoHideAsync().catch(() => undefined);
 // Android fades the native splash out over 400 ms by default, and iOS cuts.
 // The launch splash draws the same picture beneath it and then moves, so the
@@ -286,6 +322,8 @@ function RootLayoutNav() {
           <SessionRejectedCoordinator />
           <AccountDeletingCoordinator />
           <OtaUpdateCoordinator />
+          <IapLaunchCoordinator shellReady={shellReady} />
+          <ClientErrorCoordinator />
           <MediaDiagnosticsCoordinator />
           <SaverNoticeSync />
           <SafeAreaProvider>
@@ -312,6 +350,7 @@ function RootLayoutNav() {
                 <DialogHost />
                 <PublicIdentitySheetHost />
                 <SignOutOverlay />
+                <AppErrorBoundary>
                 <Stack
                 // A screen coming back as a reel's pop begins: the cue for a
                 // picture closing into it to uncover it (components/media-zoom.tsx).
@@ -473,6 +512,7 @@ function RootLayoutNav() {
                 <Stack.Screen name="ai-data-sharing" options={{ title: 'AI Data Sharing' }} />
                 <Stack.Screen name="blocked-users" options={{ title: 'Blocked Users' }} />
                 </Stack>
+                </AppErrorBoundary>
                 </OverlayHost>
                 {/* The one-line notice at an account's first save, above every
                     screen and in the app's own window (lib/saver-notice.ts). */}
@@ -607,6 +647,32 @@ function OtaUpdateCoordinator() {
       visible={criticalPromptVisible}
     />
   );
+}
+
+function IapLaunchCoordinator({ shellReady }: { shellReady: boolean }) {
+  // RevenueCat for the current identity, once after launch and again when the identity changes
+  // (lib/iap-launch-configuration.ts), so a purchase the store approved later reaches the account
+  // without the Credits tab being opened. Never part of sign-in or the first frames.
+  const { identityUserId } = useAuth();
+  useIapLaunchConfiguration(identityUserId, shellReady);
+  return null;
+}
+
+function ClientErrorCoordinator() {
+  // Where caught errors go (lib/client-error-report.ts): the server, with the route's path, the
+  // app's version and update, and the platform. Nothing a person typed.
+  const { api } = useAuth();
+  const pathname = usePathname();
+  useEffect(() => {
+    clientErrorRoute = pathname ?? null;
+  }, [pathname]);
+
+  useEffect(() => setClientErrorReporter({
+    send: (report) => api.reportClientError(report),
+    context: readClientErrorContext,
+  }), [api]);
+
+  return null;
 }
 
 function MediaDiagnosticsCoordinator() {
