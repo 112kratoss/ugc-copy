@@ -23,15 +23,12 @@ export type ViewerNativeBarMute = {
 
 export function viewerNativeBackOptions({
   hidden,
-  mute,
 }: {
   /**
    * Off while Details is open or being swiped to: that page draws its own
    * header, with its own way back to the media.
    */
   hidden: boolean;
-  /** Present only while the post on screen makes a sound. */
-  mute: ViewerNativeBarMute | null;
 }): NativeStackNavigationOptions {
   return {
     headerShown: !hidden,
@@ -50,6 +47,21 @@ export function viewerNativeBackOptions({
     // iOS 26 shades content scrolled under a bar; the reel's picture is not
     // scrolled content, and the shade drew a black band over its top.
     scrollEdgeEffects: { top: 'hidden', bottom: 'hidden', left: 'hidden', right: 'hidden' },
+  };
+}
+
+/**
+ * The bar's Mute, beside its Back: set apart from the rest of the bar's
+ * options, by the reel's sound control (app/viewer.tsx, `ReelBarSound`), which
+ * follows the page a swipe hands playback to rather than the post the reel has
+ * settled on (lib/reel-chrome-page.ts). React Navigation lays each screen's
+ * options over the last, so the two sets stand side by side.
+ */
+export function viewerNativeBarSoundOptions(
+  /** Present only while the post on the page that has the screen makes a sound. */
+  mute: ViewerNativeBarMute | null
+): Pick<NativeStackNavigationOptions, 'unstable_headerRightItems'> {
+  return {
     unstable_headerRightItems: mute
       ? () => [{
         type: 'button',

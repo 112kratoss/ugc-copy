@@ -30,10 +30,13 @@ describe('the reel loading shell', () => {
 
   it('draws the reel\'s own working Back and sound controls over it, not the inert copies', () => {
     const back = shell.indexOf('<ViewerTopControl label="Go back" onPress={leaveViewer}');
-    const sound = shell.indexOf('toggleViewerAudioMuted();');
+    const sound = shell.indexOf('{chromePost && hasImmersiveAudibleMedia(chromePost) ? <SoundTopControl topInset={topInset} /> : null}');
     expect(back).toBeGreaterThan(chromeAt);
     expect(sound).toBeGreaterThan(chromeAt);
-    expect(shell).toContain('{chromePost && hasImmersiveAudibleMedia(chromePost) ? (');
+    // The loaded reel's own sound control, whose press works.
+    const control = viewer.slice(viewer.indexOf('function SoundTopControl('), viewer.indexOf('function ReelSoundControl('));
+    expect(control).toContain('onPress={toggleReelSound}');
+    expect(viewer).toContain('function toggleReelSound() {\n  haptic.select();\n  toggleViewerAudioMuted();\n}');
   });
 });
 

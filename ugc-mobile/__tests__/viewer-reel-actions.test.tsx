@@ -34,6 +34,8 @@ const routerState = vi.hoisted(() => ({
 }));
 
 const platformState = vi.hoisted(() => ({ os: 'ios' as 'ios' | 'android' }));
+// Whether iOS 26's glass is there, which gives the reel the navigation bar's own Back and Mute.
+const glassState = vi.hoisted(() => ({ available: false }));
 
 // One object for every render, as the real context provides.
 const authState = vi.hoisted(() => ({
@@ -101,7 +103,8 @@ const nothing = vi.hoisted(() => () => null);
 
 vi.mock('expo-router', () => ({
   router: routerState,
-  Stack: { Screen: nothing },
+  // Its options are what the tests read of the navigation bar.
+  Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
   useLocalSearchParams: () => routerState.params,
   // The reel listens to its own transitions (its iOS ground) and to nothing else here.
   useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
@@ -109,7 +112,7 @@ vi.mock('expo-router', () => ({
 
 vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
 // The reel asks it whether iOS 26's glass is there (its navigation bar's Back).
-vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => false }));
+vi.mock('expo-glass-effect', () => ({ isLiquidGlassAvailable: () => glassState.available }));
 
 // The reel's own route, whose key its forced sign-in return is given under.
 const reelRoute = vi.hoisted(() => ({ key: 'viewer-route', name: 'viewer' }));
@@ -202,7 +205,10 @@ vi.mock('@/components/top-scrim', () => ({ TopScrim: nothing }));
 vi.mock('@/components/ui', () => ({ SecondaryButton: nothing, StatusBlock: nothing }));
 vi.mock('@/components/unlock-remix-prompt', () => ({ UnlockRemixPrompt: nothing }));
 vi.mock('@/components/viewer-action-sheet', () => ({ ViewerActionSheet: nothing }));
-vi.mock('@/components/viewer-top-control', () => ({ ViewerTopControl: nothing }));
+// Its props are what the tests read: which controls show, and what they say.
+vi.mock('@/components/viewer-top-control', () => ({
+  ViewerTopControl: ({ children: _children, ...props }: MockProps) => React.createElement('viewer-top-control', props),
+}));
 vi.mock('@/components/zoom-post-chrome', () => ({ ZoomPostChrome: nothing }));
 
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
@@ -1812,6 +1818,24 @@ describe('the return a forced sign-in comes back to', () => {
   });
 });
 
+/** A post whose media is a clip, so the reel draws a sound control for it. */
+function clipItem(id: string, creator: { id: string; username: string }, deliveryId: string): ShowcaseFeedItem {
+  return {
+    ...feedItem(id, creator, deliveryId),
+    mediaUrl: `https://cdn.example.com/${id}.mp4`,
+    mediaKind: 'video',
+    category: 'video',
+  } as ShowcaseFeedItem;
+}
+
+/** The list partway through a swipe: the scroll events it sends while the finger moves it, before it comes to rest. */
+function scrollTo(tree: renderer.ReactTestRenderer, pages: number) {
+  const list = tree.root.findByType('flat-list' as never).props;
+  act(() => {
+    list.onScroll({ nativeEvent: { contentOffset: { y: list.getItemLayout(null, 1).offset * pages } } });
+  });
+}
+
 // Owner, 2026-11-27: "having haptic on opening the media and swiping to other
 // is not needed". On the S24 each page settling played a 110 ms buzz, as strong
 // as a button press (Samsung plays `soft` as it plays `light`), 100–125 ms
@@ -1829,6 +1853,121 @@ describe("the reel's page turns", () => {
     expect(activeId()).toBe('post-b');
 
     for (const play of Object.values(haptic)) expect(play).not.toHaveBeenCalled();
+  });
+});
+
+// Audit 2026-11-27: after a swipe from a clip to a picture, the clip's sound
+// control stood ~200 ms (S24) and at least 300 ms (iPhone, iOS 26) after the
+// picture had landed; landing on a clip, its control came ~190 ms late (S24).
+// It followed the post the reel had settled on, which moves only once the list
+// has come to rest and the reel has drawn again, rather than the page the list
+// hands playback to as that page takes over the screen.
+describe("the reel's sound control", () => {
+  /** Maya's picture, Luna's clip, Luna's picture, Nova's picture. */
+  const mixedPosts = () => [
+    feedItem('post-a', maya, 'delivery-a'),
+    clipItem('post-b', luna, 'delivery-b'),
+    feedItem('post-c', luna, 'delivery-c'),
+    feedItem('post-d', nova, 'delivery-d'),
+  ];
+
+  /** What the sound control a reader can see and press says, or null when there is none. */
+  function soundControl(tree: renderer.ReactTestRenderer) {
+    const shown = tree.root.findAllByType('viewer-top-control' as never)
+      .filter((control) => control.props.side === 'right' && !control.props.hidden);
+    expect(shown.length).toBeLessThanOrEqual(1);
+    return (shown[0]?.props.label as string | undefined) ?? null;
+  }
+
+  beforeEach(() => {
+    // The reel's top controls are drawn once a zoom into it has landed.
+    screenState.zoom.landed = true;
+    screenState.zoom.drawn = true;
+  });
+
+  afterEach(() => {
+    screenState.zoom.landed = false;
+    screenState.zoom.drawn = false;
+  });
+
+  it('goes as a picture takes the screen over from a clip, before the swipe comes to rest', async () => {
+    seedLane('viewer-1', mixedPosts());
+    const tree = await renderReel('post-b');
+    // The viewer's sound is off here (`useViewerAudioMuted`).
+    expect(soundControl(tree)).toBe('Unmute video');
+
+    scrollTo(tree, 1.4);
+    expect(soundControl(tree)).toBe('Unmute video');
+    // Past half way, where playback is handed to the picture's page.
+    scrollTo(tree, 1.6);
+    expect(soundControl(tree)).toBeNull();
+
+    await swipeTo(tree, 2);
+    expect(activeId()).toBe('post-c');
+    expect(soundControl(tree)).toBeNull();
+  });
+
+  it('comes as a clip takes the screen over, and goes again when the swipe turns back', async () => {
+    seedLane('viewer-1', mixedPosts());
+    const tree = await renderReel('post-a');
+    expect(soundControl(tree)).toBeNull();
+
+    scrollTo(tree, 0.6);
+    expect(soundControl(tree)).toBe('Unmute video');
+    expect(activeId()).toBe('post-a');
+
+    scrollTo(tree, 0.3);
+    expect(soundControl(tree)).toBeNull();
+
+    scrollTo(tree, 0.9);
+    await swipeTo(tree, 1);
+    expect(activeId()).toBe('post-b');
+    expect(soundControl(tree)).toBe('Unmute video');
+  });
+
+  it('follows the post the reel moves the reader to without a swipe', async () => {
+    seedLane('viewer-1', mixedPosts());
+    const tree = await renderReel('post-b');
+    expect(soundControl(tree)).toBe('Unmute video');
+
+    // Not interested takes the clip out, and the reel moves on to Luna's picture.
+    await chooseNotInterested();
+
+    expect(activeId()).toBe('post-c');
+    expect(soundControl(tree)).toBeNull();
+  });
+
+  describe('in the navigation bar (iOS 26)', () => {
+    /** The bar's trailing items as the screen's options leave them: each Stack.Screen's laid over the one before. */
+    function barSound(tree: renderer.ReactTestRenderer) {
+      const options = tree.root.findAllByType('stack-screen' as never)
+        .reduce<Record<string, unknown>>((merged, screen) => ({ ...merged, ...(screen.props.options as Record<string, unknown>) }), {});
+      const items = (options.unstable_headerRightItems as ((props: unknown) => { accessibilityLabel?: string }[]) | undefined)
+        ?.({ tintColor: '#ffffff', canGoBack: true }) ?? [];
+      return items[0]?.accessibilityLabel ?? null;
+    }
+
+    beforeEach(() => {
+      glassState.available = true;
+    });
+
+    afterEach(() => {
+      glassState.available = false;
+    });
+
+    it('takes Mute out of the bar as a picture takes the screen over from a clip, and back as the clip does', async () => {
+      seedLane('viewer-1', mixedPosts());
+      const tree = await renderReel('post-b');
+      expect(barSound(tree)).toBe('Unmute video');
+      // The bar's own Mute, never a second one of the reel's.
+      expect(soundControl(tree)).toBeNull();
+
+      scrollTo(tree, 1.6);
+      expect(barSound(tree)).toBeNull();
+
+      scrollTo(tree, 1.2);
+      expect(barSound(tree)).toBe('Unmute video');
+    });
   });
 });
 
