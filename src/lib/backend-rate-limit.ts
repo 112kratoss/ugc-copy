@@ -316,6 +316,16 @@ export const MOBILE_MEDIA_DIAGNOSTICS_RATE_LIMIT = {
 } as const;
 
 /**
+ * The mobile app's error reports (`/api/mobile/client-errors`): an app sends five per session at
+ * most, so this only stops a crash loop or a hostile sender, per network.
+ */
+export const MOBILE_CLIENT_ERRORS_RATE_LIMIT = {
+  scope: 'mobile:client-errors',
+  limit: 20,
+  windowSeconds: 10 * 60,
+} as const;
+
+/**
  * Anonymous playback-metric reports: an app sends at most a dozen per session
  * and normally one or two, so this only caps a misbehaving client.
  */

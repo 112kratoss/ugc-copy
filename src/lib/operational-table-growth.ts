@@ -78,6 +78,8 @@ export const OPERATIONAL_TABLE_ROW_BUDGETS: Record<string, { warning: number; de
   post_view_marks: { warning: 200_000, degraded: 1_000_000 },
   // One row per post and day with views, kept 400 days.
   post_view_days: { warning: 1_000_000, degraded: 4_000_000 },
+  // The app's error reports: at most five per app session, kept 30 days.
+  mobile_client_errors: { warning: 100_000, degraded: 500_000 },
   // Up to four rows per app flush, kept 90 days.
   playback_metrics: { warning: 200_000, degraded: 1_000_000 },
   onboarding_events: { warning: 500_000, degraded: 2_000_000 },

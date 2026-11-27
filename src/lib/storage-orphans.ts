@@ -220,6 +220,7 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   generation_queued_submissions: QUEUED_PROVIDER_REQUEST,
   generation_share_events: TELEMETRY,
   media_upload_intents: UPLOAD_BOOKKEEPING,
+  mobile_client_errors: TELEMETRY,
   mobile_notification_preferences: NO_TEXT,
   nsfw_post_reveals: NO_TEXT,
   onboarding_events: TELEMETRY,
