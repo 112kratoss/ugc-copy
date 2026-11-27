@@ -13,9 +13,6 @@ import {
   preparePostCreationSubmission,
   type PostCreationSubmissionResult,
 } from '@/lib/post-creation-submission-service';
-import { syncPostMediaPublicCopies } from '@/lib/post-media-public-copies';
-import { updatePostWithResourceBundleAtomically } from '@/lib/post-resource-bundles-server';
-import { invalidateShowcaseFeedAndRefreshPostPages } from '@/lib/showcase-feed-cache';
 import {
   publishPreparedPost,
   type PostPublishResult,
@@ -48,7 +45,6 @@ type CreateOwnerPostDependencies = {
   preparePostCreationSubmission?: typeof preparePostCreationSubmission;
   publishPreparedPost?: typeof publishPreparedPost;
   readExistingPostForCreate?: (adminSupabase: SupabaseClient, postId: string) => Promise<ExistingPostRead>;
-  promoteDraftPost?: typeof promoteDraftPost;
 };
 
 const IDEMPOTENCY_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -112,39 +108,6 @@ function savedAsDraft(postId: string, bundleStatus: PostResourceBundleStatus | n
       resourceBundleStatus: bundleStatus,
     },
   };
-}
-
-/**
- * Finishes the promotion an earlier attempt left undone (it made the post private and failed to
- * make it public), as `publishPreparedPost`'s promotion step does: the update RPC with the
- * visibility patch, then the media's public copies and the pages. Without the submission there is
- * no bundle payload to send, so a post that carries a recipe is not promoted here (its recipe would
- * stay a draft on a public post); the caller answers it as saved as a draft.
- */
-export async function promoteDraftPost(
-  adminSupabase: SupabaseClient,
-  { postId, ownerUserId }: { postId: string; ownerUserId: string },
-): Promise<{ visibility: ShowcaseVisibility; bundleStatus: PostResourceBundleStatus | null }> {
-  const promoted = await updatePostWithResourceBundleAtomically({
-    supabase: adminSupabase,
-    postId,
-    ownerUserId,
-    patch: { visibility: 'public' },
-    hasBundlePayload: false,
-    bundle: null,
-  });
-  if (promoted.visibility === 'public') {
-    await syncPostMediaPublicCopies(adminSupabase, postId).catch((copyError) => {
-      logBackendError('failed_to_copy_public_post_media', { error: copyError });
-    });
-    await invalidateShowcaseFeedAndRefreshPostPages(adminSupabase, {
-      postId,
-      creatorId: ownerUserId,
-      arrived: true,
-      isNew: true,
-    });
-  }
-  return { visibility: promoted.visibility, bundleStatus: promoted.bundleStatus };
 }
 
 export async function readExistingPostForCreate(
@@ -268,23 +231,24 @@ function isClaimLive(claimedAt: string | null, now: number) {
 }
 
 /**
- * What a create under a key whose post already exists answers. The account's own post is answered
- * as the create that made it answered (`publishPreparedPost`'s body). A post deleted since is
- * refused. A media post holding none of its files is still being saved by the request that made it
- * (the post's row comes before its media) or was left so by a create that failed midway. A private
- * post asked for as public is either still being promoted by the request holding the key (answered
- * in progress), or the draft a failed promotion left: its promotion is finished here, and when that
- * fails too the answer is 409 `POST_SAVED_AS_DRAFT` with the post. A request for public is never
- * answered ok and private.
+ * What a create under a key whose post already exists answers. A replay never changes the stored
+ * post: going public runs the content and profile checks only on the ordinary publish and update
+ * paths. The account's own post is answered as the create that made it answered
+ * (`publishPreparedPost`'s body). A post deleted since is refused. A media post holding none of its
+ * files is still being saved by the request that made it (the post's row comes before its media)
+ * or was left so by a create that failed midway. A private post asked for as public is still being
+ * promoted by the request holding the key (answered in progress while its claim is live), or is a
+ * draft (a failed promotion's, or one its owner made private since): 409 `POST_SAVED_AS_DRAFT` with
+ * the post, which the person publishes from their posts. A request for public is never answered ok
+ * and private.
  */
 async function answerExistingPostForCreate(
   adminSupabase: SupabaseClient,
   existing: ExistingPostForCreate,
-  { claim, now, readRequestedVisibility, dependencies }: {
+  { claim, now, readRequestedVisibility }: {
     claim: { userId: string; key: string; postId: string };
     now: number;
     readRequestedVisibility: () => Promise<ShowcaseVisibility | null>;
-    dependencies: ReturnType<typeof resolveDependencies>;
   },
 ): Promise<CreateOwnerPostRouteResult> {
   const { postId, userId: ownerUserId } = claim;
@@ -312,16 +276,7 @@ async function answerExistingPostForCreate(
   if (held.data && isClaimLive((held.data as { claimed_at?: string }).claimed_at ?? null, now)) {
     return IDEMPOTENT_CREATE_IN_PROGRESS;
   }
-
-  if (existing.bundleStatus !== null) return savedAsDraft(postId, existing.bundleStatus);
-  try {
-    const promoted = await dependencies.promoteDraftPost(adminSupabase, { postId, ownerUserId });
-    if (promoted.visibility === 'private') return savedAsDraft(postId, promoted.bundleStatus);
-    return createdPostBody(postId, promoted.visibility, promoted.bundleStatus);
-  } catch (error) {
-    logBackendError('failed_to_promote_draft_post_on_replay', { error });
-    return savedAsDraft(postId, existing.bundleStatus);
-  }
+  return savedAsDraft(postId, existing.bundleStatus);
 }
 
 type PostCreationSubmissionFailure = Extract<PostCreationSubmissionResult, { ok: false }>;
@@ -351,7 +306,6 @@ function resolveDependencies(dependencies: CreateOwnerPostDependencies | undefin
     preparePostCreationSubmission: dependencies?.preparePostCreationSubmission ?? preparePostCreationSubmission,
     publishPreparedPost: dependencies?.publishPreparedPost ?? publishPreparedPost,
     readExistingPostForCreate: dependencies?.readExistingPostForCreate ?? readExistingPostForCreate,
-    promoteDraftPost: dependencies?.promoteDraftPost ?? promoteDraftPost,
   };
 }
 
@@ -420,7 +374,6 @@ export async function createOwnerPostForRoute({
           return null;
         }
       },
-      dependencies: resolvedDependencies,
     });
   }
 

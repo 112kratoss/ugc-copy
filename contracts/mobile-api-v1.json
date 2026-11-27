@@ -3622,7 +3622,7 @@
       "idempotency": {
         "header": "Idempotency-Key",
         "format": "uuid",
-        "rule": "A UUID the client makes once per composed post and sends on every retry of it. The server derives the post's id from the account and the key (never the key itself) and claims the key before it writes anything. A repeat by the same account answers that post in the shape of a fresh create and creates nothing, without spending a rate-limit count; a request for public whose post an earlier attempt left a private draft is published now, or answered 409 POST_SAVED_AS_DRAFT with the post. 409 POST_CREATE_IN_PROGRESS while an earlier attempt with the key is running; 409 IDEMPOTENCY_KEY_CONFLICT when the key can no longer be used. A client clears its key on IDEMPOTENCY_KEY_CONFLICT and on any other 4xx except POST_CREATE_IN_PROGRESS and 429, and keeps it on POST_CREATE_IN_PROGRESS, 5xx and network errors. A header that is missing or not a UUID creates as before.",
+        "rule": "A UUID the client makes once per composed post and sends on every retry of it. The server derives the post's id from the account and the key (never the key itself) and claims the key before it writes anything. A repeat by the same account answers that post in the shape of a fresh create and creates nothing, without spending a rate-limit count; a replay never changes the stored post: a request for public whose post is private (a draft a failed promotion left, or one made private since) is answered POST_CREATE_IN_PROGRESS while the key's claim is live and otherwise 409 POST_SAVED_AS_DRAFT with the post, which the person publishes from their posts through the ordinary update, which runs the public checks. 409 POST_CREATE_IN_PROGRESS while an earlier attempt with the key is running; 409 IDEMPOTENCY_KEY_CONFLICT when the key can no longer be used. A client clears its key on IDEMPOTENCY_KEY_CONFLICT and on any other 4xx except POST_CREATE_IN_PROGRESS and 429, and keeps it on POST_CREATE_IN_PROGRESS, 5xx and network errors. A header that is missing or not a UUID creates as before.",
         "key": "3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
         "replay": {
           "status": 200,
@@ -3653,7 +3653,7 @@
           },
           "savedAsDraft": {
             "status": 409,
-            "rule": "A request for public whose post an earlier attempt left as a private draft, when the server could not publish it now either. The body carries the post in the fields of a fresh create (postId, visibility, showcasePath, ownerPath, resourceBundlePath, resourceBundleStatus) beside error and code. The post exists: a client finishes the publish as a draft (no further create for this composition, the server's words shown) and clears its key.",
+            "rule": "A request for public whose post is a private draft (a failed promotion left it, or it was made private since); a replay never publishes it. The body carries the post in the fields of a fresh create (postId, visibility, showcasePath, ownerPath, resourceBundlePath, resourceBundleStatus) beside error and code. The post exists: a client finishes the publish as a draft (no further create for this composition, the server's words shown) and clears its key.",
             "response": {
               "error": "Your post was saved as a private draft, but publishing failed. Open it from your posts to publish it.",
               "code": "POST_SAVED_AS_DRAFT",
