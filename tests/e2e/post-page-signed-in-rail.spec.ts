@@ -1,3 +1,6 @@
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 
 import freeRecipePost from './fixtures/creation-post-free-recipe.json';
@@ -227,7 +230,10 @@ type Frame = {
   composerInitials: string | null;
   /** The thread's comments drawn. */
   comments: number;
-  /** The rail's pointer to the recipe as it reads ("Free recipe View"), null while none is shown. */
+  /**
+   * The rail's pointer to the recipe as it reads ("Free recipe View"), null while none is shown, or
+   * while the HTML parser is still inside it and it has its box and not yet all of its words.
+   */
   recipeLink: string | null;
   /** The recipe's bar along the bottom edge as it reads (below 1180px), null while none is shown. */
   recipeBar: string | null;
@@ -321,6 +327,10 @@ const RECORDER = `(() => {
       const composerField = rail.querySelector('textarea[aria-label="Write a comment"]');
       // The composer's row: its avatar, then the field.
       const composerRow = composerField ? composerField.closest('.flex.items-start') : null;
+      // The parser can stop inside the recipe link too: main's run of 2026-11-27 drew a frame 7.3 s
+      // in with the rail ending at the link, its box there and no word in it yet, which read as ""
+      // and failed the creator's own rail as a recipe that was not theirs. Such a link is not one yet.
+      const recipeJump = rail.querySelector('[data-testid="recipe-jump-link"]');
       const frame = {
         path: location.pathname,
         commentsOffset: comments
@@ -336,7 +346,7 @@ const RECORDER = `(() => {
           ? composerRow.firstElementChild.textContent.trim()
           : null,
         comments: rail.querySelectorAll('ol[aria-label="Comment thread"] > li').length,
-        recipeLink: reads(rail.querySelector('[data-testid="recipe-jump-link"]')),
+        recipeLink: unfinished(recipeJump) ? null : reads(recipeJump),
         recipeBar: reads(document.querySelector('[data-testid="recipe-bar"]')),
       };
       const key = JSON.stringify(frame);
@@ -1524,4 +1534,39 @@ test('a signed-in reader of a post with no recipe logs no failed recipe read, lo
   await expect(page.getByRole('heading', { level: 1, name: PLAIN_POST.title })).toBeVisible(COLD_PAGE);
   await readAnswered(2);
   expect(failedRecipeLoads, JSON.stringify(recipeReads)).toEqual([]);
+});
+
+// Main's Quality run for 0461f74b9 (2026-11-27) failed the creator's own rail on one frame: 7.3 s
+// in, the HTML parser had stopped inside the rail's recipe link, so the link had its box and no word
+// yet. It read as "", a recipe that was not theirs. `RECORDER` reads a link the parser is still
+// inside as none (.claude/rules/e2e.md, "Frames drawn from part of the HTML"). This draws that frame
+// on purpose, a document sent in two parts with the first ending inside the link, and asks it the
+// check that failed. It needs no page of the app's: the rail here is the recorder's own selectors.
+test('a frame drawn with the HTML parser inside the recipe link reads as no link yet', async ({ page }) => {
+  const firstPart = '<!doctype html><html><head><meta charset="utf-8"><title>A rail in two parts</title></head><body>'
+    // Past any buffer the browser fills before it starts on a document.
+    + `<!-- ${'part '.repeat(700)} -->`
+    + '<div data-testid="canonical-post-actions">'
+    + '<a data-testid="recipe-jump-link" href="#recipe" style="display:inline-flex;padding:8px 12px;border:1px solid">';
+  const secondPart = '<span>Your recipe</span> <span>View</span></a><span>Owner tools</span>'
+    + '<section data-testid="canonical-post-comments"><h2>Comments</h2></section></div></body></html>';
+  const server = createServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff' });
+    response.write(firstPart);
+    setTimeout(() => response.end(secondPart), 500);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const { port } = server.address() as AddressInfo;
+    await page.addInitScript(RECORDER);
+    await page.goto(`http://127.0.0.1:${port}/rail-in-two-parts`);
+    await expect(page.getByTestId('canonical-post-comments')).toBeVisible();
+    const frames = await recordedFrames(page, { path: '/rail-in-two-parts' });
+    const all = JSON.stringify(frames);
+    // The first part was on screen by itself: a frame of the rail with no Comments yet.
+    expect(frames.filter((frame) => frame.commentsOffset === null).length, all).toBeGreaterThan(0);
+    expectOwnRecipe(frames);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
