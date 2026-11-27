@@ -22,7 +22,6 @@ const HOUR = 60 * 60 * 1000;
 const TABLES = new Set(['generations', 'generation_output_import_jobs']);
 const RPCS = new Set([
   'enqueue_generation_output_import_job',
-  'claim_generation_output_import_jobs',
   'finish_generation_output_import_job',
   'settle_generation_failed',
 ]);
@@ -37,12 +36,19 @@ function column(name: string): string {
  * embedded resources. `or` takes PostgREST's flat filter list of `col.op.value`
  * and `and(...)` groups, which is all the import sweep sends.
  */
-function databaseClient(db: Client): SupabaseClient {
+function databaseClient(db: Client, ownerId: string): SupabaseClient {
   return {
     from(table: string) {
       if (!TABLES.has(table)) throw new Error(`Unexpected table ${table}`);
       const where: string[] = [];
       const values: unknown[] = [];
+      // Scoped to this test's own user: other database test files commit rows
+      // into the same database while this one runs, and the code under test
+      // must neither see nor lock them.
+      values.push(ownerId);
+      const scope = table === 'generations'
+        ? 'user_id = $1'
+        : 'generation_id in (select id from public.generations where user_id = $1)';
       const orderBy: string[] = [];
       let columns = '*';
       let limit: number | undefined;
@@ -80,6 +86,7 @@ function databaseClient(db: Client): SupabaseClient {
       };
       const run = async () => {
         if (!where.length) throw new Error('Unbounded fixture query');
+        where.unshift(scope);
         if (patch) {
           const sets = Object.entries(patch).map(([key, value]) => `${column(key)} = ${param(value)}`);
           const { rows } = await db.query(
@@ -126,12 +133,11 @@ function databaseClient(db: Client): SupabaseClient {
       const keys = Object.keys(args);
       if (!keys.every((key) => /^p_[a-z_]+$/.test(key))) throw new Error('Invalid RPC arguments');
       const call = `public.${name}(${keys.map((key, i) => `${key}=>$${i + 1}`).join(',')})`;
-      const setof = name === 'claim_generation_output_import_jobs';
       const { rows } = await db.query(
-        setof ? `select * from ${call}` : `select ${call} result`,
+        `select ${call} result`,
         Object.values(args).map((value) => (value !== null && typeof value === 'object' ? JSON.stringify(value) : value)),
       );
-      return { data: setof ? rows : rows[0].result, error: null };
+      return { data: rows[0].result, error: null };
     },
   } as unknown as SupabaseClient;
 }
@@ -160,7 +166,7 @@ describe.skipIf(!connectionString)('generation terminal states with real Postgre
     );
     await db.query('update public.profiles set credits=500 where id=$1', [userId]);
     await db.query('set local role service_role');
-    client = databaseClient(db);
+    client = databaseClient(db, userId);
   });
 
   afterEach(async () => {
@@ -197,6 +203,19 @@ describe.skipIf(!connectionString)('generation terminal states with real Postgre
     )).rows[0];
   }
 
+  /** What the claim does to one due job, done to this test's job only. */
+  async function claimOwn(generationId: string, lockedBy: string) {
+    const { rows } = await db.query(
+      `update public.generation_output_import_jobs
+       set status = 'processing', locked_at = now(), locked_by = $2, updated_at = now()
+       where generation_id = $1 and status = 'pending' and next_attempt_at <= now()
+       returning id`,
+      [generationId, lockedBy],
+    );
+    expect(rows).toHaveLength(1);
+    return rows[0] as { id: string };
+  }
+
   /** An import that used its tries: enqueued, claimed, failed with the last one. */
   async function exhaustImport(generationId: string, lastError = 'Remote media host is not allowlisted.') {
     await client.rpc('enqueue_generation_output_import_job', {
@@ -208,10 +227,9 @@ describe.skipIf(!connectionString)('generation terminal states with real Postgre
       'update public.generation_output_import_jobs set attempt_count = 9, next_attempt_at = now() - interval \'1 minute\' where generation_id = $1',
       [generationId],
     );
-    const { data } = await client.rpc('claim_generation_output_import_jobs', {
-      p_limit: 25, p_locked_by: 'terminal-states-worker', p_lock_ttl_seconds: 300,
-    });
-    const claimed = (data as Array<{ id: string; generation_id: string }>).find((row) => row.generation_id === generationId)!;
+    // Claimed by hand, for this job alone: the claim function takes any due job
+    // in the database, and other database test files commit theirs alongside.
+    const claimed = await claimOwn(generationId, 'terminal-states-worker');
     const { data: outcome } = await client.rpc('finish_generation_output_import_job', {
       p_id: claimed.id, p_locked_by: 'terminal-states-worker', p_succeeded: false, p_error: lastError,
       p_retry_delay_seconds: 60, p_max_attempts: 10,
@@ -247,10 +265,8 @@ describe.skipIf(!connectionString)('generation terminal states with real Postgre
       expect(await retryOrAbandonExhaustedGenerationOutputImports({ client, nowMs: now }))
         .toMatchObject({ eligible: 1, reopened: 1, abandoned: 0 });
       expect(await job(id)).toEqual({ status: 'pending', attempt_count: 10 });
-      const { data } = await client.rpc('claim_generation_output_import_jobs', {
-        p_limit: 25, p_locked_by: 'terminal-states-worker-2', p_lock_ttl_seconds: 300,
-      });
-      expect((data as Array<{ generation_id: string }>).map((row) => row.generation_id)).toContain(id);
+      // Due at once: a claim takes it now.
+      await claimOwn(id, 'terminal-states-worker-2');
       // The generation still holds its credits while the file may yet arrive.
       expect(await generation(id)).toMatchObject({ status: 'processing', refunded: false });
       expect(await credits()).toBe(500);
@@ -284,9 +300,7 @@ describe.skipIf(!connectionString)('generation terminal states with real Postgre
         p_output_urls: ['https://provider.invalid/output.mp4'],
         p_provider_completed_at: new Date(now).toISOString(),
       });
-      await client.rpc('claim_generation_output_import_jobs', {
-        p_limit: 25, p_locked_by: 'terminal-states-dead-worker', p_lock_ttl_seconds: 300,
-      });
+      await claimOwn(id, 'terminal-states-dead-worker');
       await ageImport(id, { queuedAgoMs: 25 * HOUR });
       await db.query(
         "update public.generation_output_import_jobs set locked_at = now() - interval '10 minutes' where generation_id = $1",
