@@ -175,7 +175,9 @@ Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a cre
    republish. Reconnect once from the Claude connectors-directory listing (posting server) and
    from ChatGPT to confirm their held client id (and the directory's secret) still sign in.
    ChatGPT could not reconnect: its plugin keeps the endpoints it discovered when it was made, so
-   on 2026-11-27 it was deleted and added again ("Registered clients").
+   on 2026-11-27 it was deleted and added again ("Registered clients"). The directory listing
+   had nothing to reconnect: it is not submitted yet (held by the owner since 2026-11-11), so
+   its client first signs in from a listing through the app's server.
 10. Follow-up PR: delete the `supabase` and `both` paths (the plan's last step). Done the same
     day: the flag, the code that read Supabase's tokens and the import are gone, and the
     `MCP_AUTHORIZATION_SERVER` variable left in Vercel is read by nothing.
@@ -259,9 +261,21 @@ account showed the same `R0qoU77QhExz`, also for `/api/mcp/posts`. It is not a p
 the server or issuer URL either, as Codex's is. OpenAI's Apps SDK guide says only to copy the URI
 the form shows. If it is per account, another person's plugin would be refused at sign-in, so
 `MCP_CLIENT_IDS.chatgpt` stays `CLIENT_ID_PENDING_CHATGPT` and the setup page shows ChatGPT as
-coming soon until one of two things happens. Either a second ChatGPT account shows the same id
-for `https://magicbooklet.com/api/mcp` (then the id goes into `MCP_CLIENT_IDS`), or the app is
-listed in ChatGPT's directory. Switching ChatGPT on then needs no new page text, because the setup
+coming soon until one of three things happens:
+
+1. A second ChatGPT account shows the same id for `https://magicbooklet.com/api/mcp`. This is the
+   one to try first: it takes minutes and needs no code.
+2. The app is listed in ChatGPT's directory ("ChatGPT directory submission").
+3. The authorization server supports RFC 9207. OpenAI's Apps SDK auth guide says ChatGPT then
+   sends every account to its stable `https://chatgpt.com/connector_platform_oauth_redirect`.
+   It takes both halves: `authorization_response_iss_parameter_supported: true` in the metadata
+   and `iss` in the authorization responses. `iss` alone changes nothing. The app's server does
+   neither, and this has not been tried here. Codex also picks its callback differently once
+   the flag is advertised ("Distribution" → "Setup facts per client" → Codex), so the URI
+   `codex mcp add` then prints is registered on Codex's client before the flag goes live: an
+   unregistered redirect is refused.
+
+Switching ChatGPT on then needs no new page text, because the setup
 page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, token method
 `none`). The id goes into `MCP_CLIENT_IDS` and the shared callback into
 `MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by an `update` of the client's `redirect_uris` on
@@ -276,11 +290,10 @@ with `list_models`. The new form discovered `https://magicbooklet.com/oauth/auth
 `/oauth/token`, offered only the scope `mcp`, and showed the same `R0qoU77QhExz`, already
 registered. Any later change of authorization server needs the same delete and re-add, and an
 `offline_access` untick is no longer part of it: only Supabase's server refused that scope.
-The id survived a change of authorization server as well as of server URL, so a per-account id
-is the likelier reading, and a second account's check the likelier to fail. The other way to
-offer ChatGPT to everyone is RFC 9207: an authorization server that returns `iss` moves every
-account to ChatGPT's stable `https://chatgpt.com/connector_platform_oauth_redirect`. The app's
-server does not return it yet, and adding it changes which redirect Codex sends (below).
+So the id depends on neither the connector, the server's path nor the authorization server.
+All of that was seen on one ChatGPT account and one host, so it does not say whether the id is
+per account or derived from the host and shared by every account. Only a second account's form
+does, the first of the three things above.
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
