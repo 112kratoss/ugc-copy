@@ -55,4 +55,14 @@ describe('verifyRazorpayPaymentAgainstOrder', () => {
   ] as const)('rejects a %s mismatch', (_label, overrides, reason) => {
     expect(verify(payment(overrides))).toEqual({ state: 'rejected', reason });
   });
+
+  it.each([
+    ['amount', { amount: 9_999 }],
+    ['currency', { currency: 'USD' }],
+    ['buyer', { notes: { buyer_user_id: 'other-buyer' } }],
+  ] as const)('names a refunded payment as reversed before its %s mismatch', (_label, overrides) => {
+    // Any refund, partial included, reads as reversed: refund.processed owns it.
+    expect(verify(payment({ ...overrides, amountRefunded: 1 }))).toEqual({ state: 'rejected', reason: 'payment_already_reversed' });
+    expect(verify(payment({ ...overrides, status: 'refunded' }))).toEqual({ state: 'rejected', reason: 'payment_already_reversed' });
+  });
 });

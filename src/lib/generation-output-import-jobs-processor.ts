@@ -106,15 +106,21 @@ export async function processGenerationOutputImportJobs(params: {
   client: SupabaseClient;
   lockedBy: string;
   limit?: number;
+  /** The caller's own admission deadline (absolute ms); the earlier of it and this sweep's budget wins. */
+  deadlineMs?: number;
 }) {
   const startedAt = Date.now();
+  const admitUntil = Math.min(
+    startedAt + GENERATION_OUTPUT_IMPORT_TIME_BUDGET_MS,
+    params.deadlineMs ?? Number.POSITIVE_INFINITY,
+  );
   const limit = Math.max(0, Math.min(params.limit ?? GENERATION_OUTPUT_IMPORT_BATCH_LIMIT, GENERATION_OUTPUT_IMPORT_BATCH_LIMIT));
   const summary = { claimed: 0, completed: 0, retried: 0, exhausted: 0 };
 
   // Strictly sequential: one job may stage a 250 MB video and invoke ffmpeg.
   // Bounded parallelism belongs in separate image/video worker pools, not one
   // serverless process whose temporary disk is shared by every promise.
-  while (summary.claimed < limit && Date.now() - startedAt < GENERATION_OUTPUT_IMPORT_TIME_BUDGET_MS) {
+  while (summary.claimed < limit && Date.now() < admitUntil) {
     // Do not hold leases on jobs this invocation may never start. Their next
     // worker can claim them immediately rather than waiting for a stale lease.
     const [job] = await claimGenerationOutputImportJobs({

@@ -84,6 +84,17 @@ describe('generation output import processor', () => {
     expect(mocks.claim).toHaveBeenCalledWith(expect.objectContaining({ limit: 1 }));
   });
 
+  it('claims nothing once the run deadline it is given has passed', async () => {
+    const { processGenerationOutputImportJobs } = await import('@/lib/generation-output-import-jobs-processor');
+    const summary = await processGenerationOutputImportJobs({
+      client: clientWithGeneration() as never,
+      lockedBy: 'worker',
+      deadlineMs: Date.now() - 1,
+    });
+    expect(summary).toEqual({ claimed: 0, completed: 0, retried: 0, exhausted: 0 });
+    expect(mocks.claim).not.toHaveBeenCalled();
+  });
+
   it('drains fast imports up to the batch ceiling without preclaiming the rest', async () => {
     const jobs = Array.from({ length: 6 }, (_, index) => ({ ...job, id: `import-${index}` }));
     mocks.claim.mockReset().mockImplementation(async ({ limit }: { limit: number }) => jobs.splice(0, limit));

@@ -10,6 +10,7 @@ import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync
 import {
   hasStalledGenerationWork,
   reapStalledGenerations,
+  STALLED_GENERATION_GIVE_UP_AFTER_HOURS,
   STALLED_GENERATION_START_FAILURE_AFTER_MINUTES,
   STALLED_GENERATION_START_FAILURE_BATCH_LIMIT,
   STALLED_GENERATION_SYNC_AFTER_MINUTES,
@@ -19,6 +20,8 @@ import {
 vi.mock('@/lib/generation-status-sync', () => ({
   syncGenerationStatusByPredictionId: vi.fn(),
 }));
+
+vi.mock('@/lib/completed-remix-notification', () => ({ notifyCompletedRemix: vi.fn() }));
 
 vi.mock('@/lib/generation-services', () => ({
   getPublicGenerationStartFailure: vi.fn(() => ({
@@ -46,7 +49,8 @@ function createGenerationsClient(
   const not = vi.fn(() => builder);
   const lt = vi.fn(() => builder);
   const order = vi.fn(() => builder);
-  Object.assign(builder, { select, in: inFilter, eq, is, not, lt, order, limit });
+  const update = vi.fn(() => builder);
+  Object.assign(builder, { select, in: inFilter, eq, is, not, lt, order, limit, update });
   const from = vi.fn(() => builder);
   const rpc = vi.fn(async () => {
     const result = rpcResults.shift();
@@ -54,7 +58,7 @@ function createGenerationsClient(
     return result;
   });
 
-  return { from, select, in: inFilter, eq, is, not, lt, order, limit, rpc };
+  return { from, select, in: inFilter, eq, is, not, lt, order, limit, update, rpc };
 }
 
 function syncedGeneration(predictionId: string, status: 'succeeded' | 'failed' | 'processing' | 'waiting') {
@@ -145,6 +149,7 @@ describe('stalled generation reaper', () => {
         error: null,
       },
       { data: [], error: null },
+      { data: [], error: null },
     ]);
     vi.mocked(syncGenerationStatusByPredictionId)
       .mockResolvedValueOnce(syncedGeneration('task-1', 'succeeded'))
@@ -156,13 +161,13 @@ describe('stalled generation reaper', () => {
       creditSupabase: client as never,
       nowMs: NOW_MS,
     })).resolves.toEqual({
-      providerSync: { eligible: 4, reconciled: 1, stillActive: 1, skipped: 1, failed: 1, deferred: 0 },
+      providerSync: { eligible: 4, reconciled: 1, stillActive: 1, abandoned: 0, skipped: 1, failed: 1, deferred: 0 },
       startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0, submissionUnknown: 0 },
     });
 
     expect(client.lt).toHaveBeenNthCalledWith(1, 'created_at', '2026-06-21T09:30:00.000Z');
     expect(client.order).toHaveBeenCalledWith('created_at', { ascending: true });
-    expect(client.limit).toHaveBeenNthCalledWith(1, STALLED_GENERATION_SYNC_BATCH_LIMIT);
+    expect(client.limit).toHaveBeenNthCalledWith(1, STALLED_GENERATION_SYNC_BATCH_LIMIT * 3);
     expect(syncGenerationStatusByPredictionId).toHaveBeenCalledTimes(3);
     expect(syncGenerationStatusByPredictionId).toHaveBeenNthCalledWith(1, {
       supabase: client,
@@ -203,12 +208,12 @@ describe('stalled generation reaper', () => {
       creditSupabase: client as never,
       nowMs: NOW_MS,
     })).resolves.toEqual({
-      providerSync: { eligible: 0, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 0 },
+      providerSync: { eligible: 0, reconciled: 0, stillActive: 0, abandoned: 0, skipped: 0, failed: 0, deferred: 0 },
       startFailures: { eligible: 4, settled: 1, skipped: 1, failed: 2, deferred: 0, submissionUnknown: 1 },
     });
 
     expect(client.lt).toHaveBeenNthCalledWith(2, 'created_at', '2026-06-21T09:15:00.000Z');
-    expect(client.limit).toHaveBeenNthCalledWith(2, STALLED_GENERATION_START_FAILURE_BATCH_LIMIT);
+    expect(client.limit).toHaveBeenLastCalledWith(STALLED_GENERATION_START_FAILURE_BATCH_LIMIT);
     expect(getPublicGenerationStartFailure).toHaveBeenCalledWith(expect.objectContaining({ status: 504 }));
     expect(client.rpc).toHaveBeenCalledTimes(8);
     expect(client.rpc).toHaveBeenNthCalledWith(2, 'settle_generation_start_failed', {
@@ -227,6 +232,7 @@ describe('stalled generation reaper', () => {
         ],
         error: null,
       },
+      { data: [], error: null },
       {
         data: [
           { id: 'gen-a', prediction_id: null, status: 'pending', created_at: '2026-06-21T08:00:00.000Z' },
@@ -241,7 +247,7 @@ describe('stalled generation reaper', () => {
       nowMs: NOW_MS,
       timeBudgetMs: 0,
     })).resolves.toEqual({
-      providerSync: { eligible: 2, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 2 },
+      providerSync: { eligible: 2, reconciled: 0, stillActive: 0, abandoned: 0, skipped: 0, failed: 0, deferred: 2 },
       startFailures: { eligible: 1, settled: 0, skipped: 0, failed: 0, deferred: 1, submissionUnknown: 0 },
     });
 
@@ -449,6 +455,144 @@ describe('stalled generation reaper', () => {
 
       expect(client.rpc).toHaveBeenCalledTimes(1);
       expect(history.started).toEqual([]);
+    });
+  });
+
+  describe('rotation, the import window and the maximum age', () => {
+    const HOUR = 60 * 60 * 1000;
+    function activeRow(id: string, ageHours: number, overrides: Record<string, unknown> = {}) {
+      return {
+        id,
+        prediction_id: `task-${id}`,
+        status: 'processing',
+        created_at: new Date(NOW_MS - ageHours * HOUR).toISOString(),
+        user_id: 'user-1',
+        category: 'video',
+        model: 'kling-2.6',
+        template_run_id: null,
+        provider_sync_attempted_at: null,
+        ...overrides,
+      };
+    }
+
+    it('takes the least recently tried rows first and leaves generations whose provider finished to the import pipeline', async () => {
+      const client = createGenerationsClient([
+        { data: [activeRow('gen-owned', 3), activeRow('gen-free', 2)], error: null },
+        { data: [{ generation_id: 'gen-owned' }], error: null },
+        { data: [], error: null },
+      ]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValueOnce(syncedGeneration('task-gen-free', 'processing'));
+
+      await expect(reapStalledGenerations({ supabase: client as never, creditSupabase: client as never, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ providerSync: { eligible: 1, stillActive: 1 } });
+
+      // Plain reads, no embedded filter: up to three batches of candidates, then their import jobs by id.
+      expect(client.select).toHaveBeenNthCalledWith(1, expect.not.stringContaining('generation_output_import_jobs'));
+      expect(client.from).toHaveBeenNthCalledWith(2, 'generation_output_import_jobs');
+      expect(client.in).toHaveBeenCalledWith('generation_id', ['gen-owned', 'gen-free']);
+      expect(client.order).toHaveBeenNthCalledWith(1, 'provider_sync_attempted_at', { ascending: true, nullsFirst: true });
+      expect(client.order).toHaveBeenNthCalledWith(2, 'created_at', { ascending: true });
+      expect(syncGenerationStatusByPredictionId).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ predictionId: 'task-gen-free' }));
+      // The owned row is stamped too, so it rotates behind the rest instead of filling every read.
+      expect(client.eq).toHaveBeenCalledWith('id', 'gen-owned');
+      expect(client.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('records each attempt before asking the provider, so a row that never resolves moves to the back', async () => {
+      const client = createGenerationsClient([
+        { data: [activeRow('gen-1', 2)], error: null },
+        { data: [], error: null },
+        { data: [], error: null },
+      ]);
+      vi.mocked(syncGenerationStatusByPredictionId).mockRejectedValueOnce(new Error('provider exploded'));
+
+      await reapStalledGenerations({ supabase: client as never, creditSupabase: client as never, nowMs: NOW_MS });
+
+      expect(client.update).toHaveBeenCalledExactlyOnceWith({ provider_sync_attempted_at: '2026-06-21T10:00:00.000Z' });
+      expect(client.eq).toHaveBeenCalledWith('id', 'gen-1');
+    });
+
+    it('fails and refunds a row the provider still reports as running after 24 hours, and tells the creator', async () => {
+      const client = createGenerationsClient(
+        [
+          { data: [activeRow('gen-old', 25), activeRow('gen-young', 23)], error: null },
+          { data: [], error: null },
+          { data: [], error: null },
+        ],
+        [{ data: { status: 'failed', refunded: true }, error: null }],
+      );
+      vi.mocked(syncGenerationStatusByPredictionId)
+        .mockResolvedValueOnce(syncedGeneration('task-gen-old', 'processing'))
+        .mockResolvedValueOnce(syncedGeneration('task-gen-young', 'processing'));
+      const history = createMobileNotificationHistory();
+      const notified = withMobileNotificationHistory(client as never, history);
+
+      await expect(reapStalledGenerations({ supabase: notified, creditSupabase: notified, nowMs: NOW_MS }))
+        .resolves.toMatchObject({
+          providerSync: { eligible: 2, reconciled: 0, stillActive: 1, abandoned: 1, failed: 0 },
+        });
+
+      expect(STALLED_GENERATION_GIVE_UP_AFTER_HOURS).toBe(24);
+      expect(client.rpc).toHaveBeenCalledExactlyOnceWith('settle_generation_failed', {
+        p_prediction_id: 'task-gen-old',
+        p_completed_at: null,
+        p_error_message: expect.stringContaining('never reported a final result'),
+      });
+      expect(history.sent).toEqual([expect.objectContaining({
+        user_id: 'user-1',
+        type: 'generation_failed',
+        dedupe_key: 'generation:gen-old:failed',
+      })]);
+    });
+
+    it('gives up on a row past the maximum age whose task the provider no longer knows', async () => {
+      const client = createGenerationsClient(
+        [{ data: [activeRow('gen-old', 30)], error: null }, { data: [], error: null }, { data: [], error: null }],
+        [{ data: { status: 'failed', refunded: true }, error: null }],
+      );
+      vi.mocked(syncGenerationStatusByPredictionId).mockRejectedValueOnce(new Error('recordInfo is null'));
+
+      await expect(reapStalledGenerations({ supabase: client as never, creditSupabase: client as never, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ providerSync: { abandoned: 1, failed: 0 } });
+      expect(client.rpc).toHaveBeenCalledWith('settle_generation_failed', expect.objectContaining({
+        p_prediction_id: 'task-gen-old',
+        p_error_message: expect.stringContaining('recordInfo is null'),
+      }));
+    });
+
+    it('sends nothing when the give-up finds the render succeeded after all', async () => {
+      const client = createGenerationsClient(
+        [{ data: [activeRow('gen-old', 30)], error: null }, { data: [], error: null }, { data: [], error: null }],
+        [{ data: { status: 'already_succeeded' }, error: null }],
+      );
+      vi.mocked(syncGenerationStatusByPredictionId).mockResolvedValueOnce(syncedGeneration('task-gen-old', 'waiting'));
+      const history = createMobileNotificationHistory();
+      const notified = withMobileNotificationHistory(client as never, history);
+
+      await expect(reapStalledGenerations({ supabase: notified, creditSupabase: notified, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ providerSync: { abandoned: 0, skipped: 1 } });
+      expect(history.started).toEqual([]);
+    });
+
+    it('stops starting rows at the run deadline it is given, whatever its own budget', async () => {
+      const client = createGenerationsClient([
+        { data: [activeRow('gen-1', 2)], error: null },
+        { data: [], error: null },
+        { data: [activeRow('gen-a', 2, { status: 'pending', prediction_id: null })], error: null },
+      ]);
+
+      await expect(reapStalledGenerations({
+        supabase: client as never,
+        creditSupabase: client as never,
+        nowMs: NOW_MS,
+        timeBudgetMs: 120_000,
+        deadlineMs: Date.now() - 1,
+      })).resolves.toMatchObject({
+        providerSync: { eligible: 1, deferred: 1 },
+        startFailures: { eligible: 1, deferred: 1 },
+      });
+      expect(syncGenerationStatusByPredictionId).not.toHaveBeenCalled();
+      expect(client.update).not.toHaveBeenCalled();
     });
   });
 

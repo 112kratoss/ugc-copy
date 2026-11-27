@@ -15,6 +15,7 @@ import {
   RAZORPAY_WEBHOOK_PROCESSING_SERVICE_NAME,
   recordPaymentWebhookProcessingFailure,
 } from '@/lib/provider-dependency-telemetry';
+import { recordPaymentCaptureAnomaly } from '@/lib/payment-capture-anomalies';
 import { notifyRazorpayCreditPurchase } from '@/lib/razorpay-credit-verify-service';
 import { verifyRazorpayPaymentAgainstOrder } from '@/lib/razorpay-payment-verification';
 import {
@@ -147,7 +148,44 @@ export async function processRazorpayWebhookForRoute({
     }, getSupabaseAdmin());
   }
 
-  function isCapturedPaymentValid({
+  /**
+   * A captured payment that credits nothing: acknowledged with 200 so Razorpay
+   * stops retrying, and recorded for the owner (payment-capture-anomalies.ts),
+   * on the alerts endpoint rather than in backend health so it cannot hold a
+   * release. Never throws.
+   */
+  async function recordUnmatchedCapture(
+    payment: RazorpayPaymentResponse,
+    purchaseKind: 'credits' | 'marketplace' | 'post_resource' | 'unknown',
+    reason: string,
+  ) {
+    await recordPaymentCaptureAnomaly(getSupabaseAdmin(), {
+      provider: 'razorpay',
+      paymentId: payment.id,
+      orderId: payment.orderId,
+      purchaseKind,
+      reason,
+    });
+  }
+
+  /**
+   * Razorpay accepts further payment attempts on an order we marked failed, so
+   * a late capture there takes money and credits nothing. Not for an order
+   * marked refunded, nor for the payment the order was failed over (a reversal
+   * of this very payment), nor for a payment already refunded.
+   */
+  async function recordCaptureOnFailedOrder(
+    payment: RazorpayPaymentResponse,
+    purchaseKind: 'credits' | 'marketplace' | 'post_resource',
+    row: { status?: unknown; razorpay_payment_id?: string | null },
+  ) {
+    if (row.status !== 'failed') return;
+    if (row.razorpay_payment_id === payment.id) return;
+    if (payment.amountRefunded > 0 || payment.status === 'refunded') return;
+    await recordUnmatchedCapture(payment, purchaseKind, 'order_marked_failed');
+  }
+
+  async function isCapturedPaymentValid({
     buyerNoteKey,
     expectedAmount,
     expectedBuyerUserId,
@@ -161,7 +199,7 @@ export async function processRazorpayWebhookForRoute({
     expectedCurrency: string;
     payment: RazorpayPaymentResponse;
     purchaseKind: 'credits' | 'marketplace' | 'post_resource';
-  }): boolean {
+  }): Promise<boolean> {
     const verification = verifyRazorpayPaymentAgainstOrder({
       payment,
       expectedPaymentId: payment.id,
@@ -172,13 +210,18 @@ export async function processRazorpayWebhookForRoute({
       buyerNoteKey,
     });
     if (verification.state !== 'captured') {
+      const reason = verification.state === 'rejected'
+        ? verification.reason
+        : 'payment_not_captured';
       logBackendError('razorpay_webhook_payment_validation_failed', {
         orderId: payment.orderId,
         purchaseKind,
-        reason: verification.state === 'rejected'
-          ? verification.reason
-          : 'payment_not_captured',
+        reason,
       });
+      // A payment already refunded owes nothing: refund.processed reconciles it.
+      if (reason !== 'payment_already_reversed') {
+        await recordUnmatchedCapture(payment, purchaseKind, reason);
+      }
       return false;
     }
 
@@ -211,19 +254,24 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         status: typedTxn.status,
       });
+      await recordCaptureOnFailedOrder(payment, 'credits', typedTxn);
       return { handled: true, shouldRetry: false };
     }
 
+    if (!Number.isSafeInteger(typedTxn.amount)) {
+      logBackendError('razorpay_webhook_credit_transaction_amount_invalid', { orderId, transactionId: typedTxn.id });
+      await recordUnmatchedCapture(payment, 'credits', 'stored_amount_invalid');
+      return { handled: true, shouldRetry: false };
+    }
     if (
-      !Number.isSafeInteger(typedTxn.amount)
-      || !isCapturedPaymentValid({
+      !(await isCapturedPaymentValid({
         payment,
         expectedAmount: typedTxn.amount ?? -1,
         expectedCurrency: 'INR',
         expectedBuyerUserId: typedTxn.user_id,
         buyerNoteKey: 'user_id',
         purchaseKind: 'credits',
-      })
+      }))
     ) {
       return { handled: true, shouldRetry: false };
     }
@@ -236,6 +284,8 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         transactionId: typedTxn.id,
       });
+      // Paid already by another payment: this one credits nothing.
+      await recordUnmatchedCapture(payment, 'credits', 'order_already_paid_by_another_payment');
       return { handled: true, shouldRetry: false };
     }
 
@@ -568,10 +618,11 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         status: typedMarketplaceOrder.status,
       });
+      await recordCaptureOnFailedOrder(payment, 'marketplace', typedMarketplaceOrder);
       return { handled: true, shouldRetry: false };
     }
 
-    if (!isCapturedPaymentValid({
+    if (!await isCapturedPaymentValid({
       payment,
       expectedAmount: typedMarketplaceOrder.amount_subunits,
       expectedCurrency: typedMarketplaceOrder.currency,
@@ -589,6 +640,8 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         marketplaceOrderId: typedMarketplaceOrder.id,
       });
+      // Paid already by another payment: this one credits nothing.
+      await recordUnmatchedCapture(payment, 'marketplace', 'order_already_paid_by_another_payment');
       return { handled: true, shouldRetry: false };
     }
 
@@ -668,10 +721,11 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         status: typedBundleOrder.status,
       });
+      await recordCaptureOnFailedOrder(payment, 'post_resource', typedBundleOrder);
       return { handled: true, shouldRetry: false };
     }
 
-    if (!isCapturedPaymentValid({
+    if (!await isCapturedPaymentValid({
       payment,
       expectedAmount: typedBundleOrder.amount_subunits,
       expectedCurrency: typedBundleOrder.currency,
@@ -689,6 +743,8 @@ export async function processRazorpayWebhookForRoute({
         orderId,
         resourceOrderId: typedBundleOrder.id,
       });
+      // Paid already by another payment: this one credits nothing.
+      await recordUnmatchedCapture(payment, 'post_resource', 'order_already_paid_by_another_payment');
       return { handled: true, shouldRetry: false };
     }
 
@@ -816,5 +872,14 @@ export async function processRazorpayWebhookForRoute({
   }
 
   logBackendInfo('razorpay_webhook_no_matching_order', { orderId: payment.orderId });
+  // Captured money no order here accounts for. Recorded once per payment;
+  // the answer stays 200, as before.
+  await recordPaymentCaptureAnomaly(getSupabaseAdmin(), {
+    provider: 'razorpay',
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    purchaseKind: 'unknown',
+    reason: 'no_matching_order',
+  });
   return { status: 200, body: 'OK' };
 }

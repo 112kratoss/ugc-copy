@@ -50,8 +50,17 @@ function createAdminSupabaseMock(state: {
   const tableReads: string[] = [];
   const rpcCalls: Array<{ name: string; payload: Record<string, unknown> }> = [];
   const providerDependencyInserts: Array<Record<string, unknown>> = [];
+  const paymentCaptureAnomalyInserts: Array<Record<string, unknown>> = [];
   const client = {
     from(table: string) {
+      if (table === 'payment_capture_anomalies') {
+        return {
+          async insert(row: Record<string, unknown>) {
+            paymentCaptureAnomalyInserts.push(row);
+            return { error: null };
+          },
+        };
+      }
       if (table === 'provider_dependency_events') {
         return {
           async insert(row: Record<string, unknown>) {
@@ -217,6 +226,7 @@ function createAdminSupabaseMock(state: {
     // assertion in one reviewable place instead of scattering casts through the
     // tests.
     client: client as unknown as SupabaseClient,
+    paymentCaptureAnomalyInserts,
     providerDependencyInserts,
     rpcCalls,
     tableReads,
@@ -481,7 +491,7 @@ describe('processRazorpayWebhookForRoute', () => {
     ]);
   });
 
-  it('still acknowledges payments with no matching order without recording a failure', async () => {
+  it('still acknowledges payments with no matching order without recording a processing failure', async () => {
     const admin = createAdminSupabaseMock({});
 
     const result = await processRazorpayWebhookForRoute({
@@ -496,6 +506,46 @@ describe('processRazorpayWebhookForRoute', () => {
       'post_resource_bundle_orders',
     ]);
     expect(admin.providerDependencyInserts).toEqual([]);
+    // Money was taken for an order nothing here knows: on record for the owner, still answered 200.
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([{
+      provider: 'razorpay',
+      payment_id: 'pay_123',
+      order_id: 'order_123',
+      purchase_kind: 'unknown',
+      reason: 'no_matching_order',
+    }]);
+  });
+
+  it.each([
+    ['credits', { creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, status: 'failed' as const } }],
+    ['marketplace', { marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-1', status: 'failed' as const } }],
+    ['post_resource', { bundleOrder: { id: 'bundle-order-1', buyer_user_id: 'user-1', status: 'failed' as const } }],
+  ])('records a late capture on a %s order marked failed, answered 200 as before', async (purchaseKind, state) => {
+    const admin = createAdminSupabaseMock(state);
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([
+      expect.objectContaining({ purchase_kind: purchaseKind, reason: 'order_marked_failed' }),
+    ]);
+    expect(admin.rpcCalls).toEqual([]);
+  });
+
+  it('records nothing for an order marked refunded, or failed after this very payment was reversed', async () => {
+    for (const state of [
+      { creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, status: 'refunded' as const } },
+      { marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-1', razorpay_payment_id: 'pay_123', status: 'failed' as const } },
+    ]) {
+      const admin = createAdminSupabaseMock(state);
+      await expect(processRazorpayWebhookForRoute({
+        createAdminSupabase: () => admin.client,
+        rawBody: paymentCapturedBody(),
+      })).resolves.toEqual({ status: 200, body: 'OK' });
+      expect(admin.paymentCaptureAnomalyInserts).toEqual([]);
+    }
   });
 
   it('records a durable payment failure when add_credits errors', async () => {
@@ -902,6 +952,74 @@ describe('processRazorpayWebhookForRoute', () => {
     })).resolves.toEqual({ status: 200, body: 'OK' });
     expect(admin.rpcCalls).toEqual([]);
     expect(admin.tableReads).toEqual(['transactions']);
+    // A real captured payment that credits nothing is recorded durably for the
+    // owner, outside backend health so it cannot hold a release.
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([{
+      provider: 'razorpay',
+      payment_id: 'pay_123',
+      order_id: 'order_123',
+      purchase_kind: 'credits',
+      reason: 'amount_mismatch',
+    }]);
+    expect(admin.providerDependencyInserts).toEqual([]);
+  });
+
+  it.each([
+    ['marketplace', { marketplaceOrder: { id: 'marketplace-order-1', buyer_user_id: 'user-2', status: 'created' as const } }, 'buyer_mismatch'],
+    ['post_resource', { bundleOrder: { id: 'bundle-order-1', buyer_user_id: 'user-1', currency: 'USD', status: 'created' as const } }, 'currency_mismatch'],
+  ])('records a %s capture that does not match its order', async (purchaseKind, state, reason) => {
+    const admin = createAdminSupabaseMock(state);
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([expect.objectContaining({ purchase_kind: purchaseKind, reason })]);
+    expect(admin.providerDependencyInserts).toEqual([]);
+  });
+
+  it('records a second captured payment for an order another payment already paid', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, razorpay_payment_id: 'pay_other', status: 'success' },
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([
+      expect.objectContaining({ payment_id: 'pay_123', reason: 'order_already_paid_by_another_payment' }),
+    ]);
+  });
+
+  it('records nothing for a capture already refunded, which refund.processed reconciles', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, status: 'pending' },
+    });
+    const body = JSON.parse(paymentCapturedBody());
+    body.payload.payment.entity.amount_refunded = 10_000;
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: JSON.stringify(body),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([]);
+  });
+
+  it('records a credit transaction whose stored amount cannot be checked', async () => {
+    const admin = createAdminSupabaseMock({
+      creditTransaction: { id: 'txn-1', user_id: 'user-1', credits: 100, amount: 99.5, status: 'pending' },
+    });
+
+    await expect(processRazorpayWebhookForRoute({
+      createAdminSupabase: () => admin.client,
+      rawBody: paymentCapturedBody(),
+    })).resolves.toEqual({ status: 200, body: 'OK' });
+
+    expect(admin.paymentCaptureAnomalyInserts).toEqual([expect.objectContaining({ reason: 'stored_amount_invalid' })]);
   });
 
   it('does not re-grant commerce access when a delayed capture arrives after reversal', async () => {

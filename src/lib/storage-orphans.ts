@@ -223,6 +223,8 @@ export const ORPHAN_SKIPPED_TABLES: Readonly<Record<string, string>> = {
   mobile_notification_preferences: NO_TEXT,
   nsfw_post_reveals: NO_TEXT,
   onboarding_events: TELEMETRY,
+  // A captured payment that matched no order: provider ids and a reason code.
+  payment_capture_anomalies: 'payment and order ids and a reason code: never a stored path',
   playback_metrics: TELEMETRY,
   playback_metrics_daily_rollup: TELEMETRY,
   post_comment_reactions: COMMENT_REACTIONS,

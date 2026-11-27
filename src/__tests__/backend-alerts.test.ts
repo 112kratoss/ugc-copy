@@ -218,6 +218,40 @@ describe('backend alerts', () => {
     expect(recovered.status).toBe('ok');
   });
 
+  it('reports a failing output import and an unmatched captured payment as degraded alerts while health stays ok', async () => {
+    const client = { service: 'supabase' };
+    const now = new Date('2026-11-27T12:00:00.000Z');
+    const collectHealth = vi.fn(async () => healthyBackend);
+    const options = {
+      now,
+      collectHealth,
+      collectCosts: vi.fn(async () => quietCosts),
+      collectModeration: vi.fn(async () => quietModeration),
+      collectKieBalance: vi.fn(async () => null as never),
+      collectOutputImportFailures: vi.fn(async () => ({
+        available: true, error: null, count: 2, truncated: false, byClass: { host_not_allowed: 2 },
+      })),
+      collectPaymentCaptureAnomalies: vi.fn(async () => ({
+        available: true, error: null, count: 1, truncated: false,
+        payments: [{ paymentId: 'pay_1', purchaseKind: 'credits', reason: 'amount_mismatch' }],
+      })),
+    };
+
+    const summary = await collectBackendAlerts(client as never, options);
+
+    expect(options.collectOutputImportFailures).toHaveBeenCalledWith(client, now);
+    expect(options.collectPaymentCaptureAnomalies).toHaveBeenCalledWith(client, now);
+    // Degraded makes /api/ops/backend-alerts answer 503, so the hourly watchdog mails the owner.
+    expect(summary.status).toBe('degraded');
+    expect(summary.alerts).toEqual([
+      expect.objectContaining({ source: 'generation-imports', severity: 'degraded', code: 'GENERATION_OUTPUT_IMPORT_FAILING' }),
+      expect.objectContaining({ source: 'payments', severity: 'degraded', code: 'PAYMENT_CAPTURE_UNMATCHED' }),
+    ]);
+    // That backend health itself never reads or reports either is proven in
+    // backend-health.test.ts ("never reads or reports the operator alerts").
+    expect(summary.signals.healthStatus).toBe('ok');
+  });
+
   it('documents production alert delivery wiring against the normalized payload', () => {
     expect(operationsRunbook).toContain('## Production Alert Delivery Wiring');
     expect(operationsRunbook).toContain('/api/ops/backend-alerts');

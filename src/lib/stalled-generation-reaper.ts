@@ -1,7 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError, logBackendInfo } from '@/lib/backend-logger';
+import { GenerationServiceError } from '@/lib/generation-service-core';
 import { getPublicGenerationStartFailure } from '@/lib/generation-services';
+import { settleGenerationFailed } from '@/lib/generation-settlement';
 import { syncGenerationStatusByPredictionId } from '@/lib/generation-status-sync';
 import { notifyGenerationStatus } from '@/lib/mobile-notifications';
 
@@ -21,7 +23,18 @@ import { notifyGenerationStatus } from '@/lib/mobile-notifications';
  * 1. Provider sync — active generations (`waiting`/`processing`) that have a
  *    provider task id and are older than the sync TTL are re-polled through
  *    `syncGenerationStatusByPredictionId`, which drives them to a terminal
- *    state exactly once when the provider has finished.
+ *    state exactly once when the provider has finished. Rows are taken least
+ *    recently tried first (`provider_sync_attempted_at`, written before each
+ *    attempt), so a handful of rows that never resolve cannot keep the pass
+ *    from reaching a newer one whose callback was lost. A generation whose
+ *    provider already finished has an output import job and is left to the
+ *    import pipeline, which owns its retries, its 24-hour window and its
+ *    refund (generation-output-import-retries.ts). A row the provider still
+ *    reports as running, or no longer knows, after
+ *    STALLED_GENERATION_GIVE_UP_AFTER_HOURS is failed and refunded through
+ *    `settle_generation_failed`, the settlement an exhausted completion job
+ *    uses. A provider callback that arrives after that finds the row failed
+ *    and changes nothing: no second refund and no reopened import.
  * 2. Start-failure settlement — `pending` generations that never received a
  *    provider task id and are older than the start-failure TTL are settled
  *    through the atomic `settle_generation_start_failed` RPC (the same
@@ -45,17 +58,22 @@ import { notifyGenerationStatus } from '@/lib/mobile-notifications';
  * come back.
  *
  * One bad row never aborts the batch: per-row failures are logged, counted,
- * and retried naturally on a later tick because the row stays eligible.
+ * and retried on a later tick, behind the rows not yet tried, until the
+ * maximum age ends it.
  */
 
 export const STALLED_GENERATION_SYNC_AFTER_MINUTES = 30;
 export const STALLED_GENERATION_SYNC_BATCH_LIMIT = 10;
 export const STALLED_GENERATION_START_FAILURE_AFTER_MINUTES = 45;
 export const STALLED_GENERATION_START_FAILURE_BATCH_LIMIT = 10;
+/** A provider task still running, or unknown to the provider, after this is given up on and refunded. */
+export const STALLED_GENERATION_GIVE_UP_AFTER_HOURS = 24;
 
-// Soft in-run budget so a slow provider cannot push the shared
-// generation-completions run into the scheduler's function limit. Rows left
-// unattempted stay eligible and are picked up on the next tick.
+// Admission budget: no row is started after it, so a slow provider cannot
+// push the shared generation-completions run into its function limit. The
+// caller also passes the run's own deadline (`deadlineMs`); the earlier wins.
+// A row already started runs to the end of its provider poll (at most three
+// ten-second tries). Rows left unattempted stay eligible for the next tick.
 export const STALLED_GENERATION_REAP_TIME_BUDGET_MS = 120_000;
 
 const STALLED_SYNCABLE_STATUSES = ['waiting', 'processing'] as const;
@@ -81,6 +99,7 @@ type StalledGenerationRow = {
   template_run_id?: string | null;
   template_run_step_id?: string | null;
   submission_unknown_at?: string | null;
+  provider_sync_attempted_at?: string | null;
 };
 
 /**
@@ -105,6 +124,8 @@ export type StalledGenerationReapSummary = {
     eligible: number;
     reconciled: number;
     stillActive: number;
+    /** Past the maximum age: failed and refunded here, terminal transitions the run wakes steps for. */
+    abandoned: number;
     skipped: number;
     failed: number;
     deferred: number;
@@ -174,21 +195,55 @@ export async function hasStalledGenerationWork(
   return hasRows(stalledPending.data);
 }
 
+/** Candidates read per tick, as a multiple of the batch: room to set aside rows the import pipeline owns. */
+export const STALLED_GENERATION_SYNC_CANDIDATE_FACTOR = 3;
+
+/**
+ * The provider-sync batch: active rows least recently tried first, without
+ * the ones whose provider already finished. Those have an output import job
+ * and belong to the import pipeline (its retries, its window, its refund).
+ *
+ * Two plain bounded reads rather than an embedded anti-join, so the query is
+ * the same on PostgREST and on the database-backed test harness: up to three
+ * batches of candidates, then their import jobs by id. A candidate set aside
+ * is returned too, so the caller stamps it and it rotates behind the rest
+ * instead of filling the head of every read.
+ */
 async function loadStalledProviderSyncRows(
   client: GenerationsProbeClient,
   params: { nowMs: number; limit: number },
-): Promise<StalledGenerationRow[]> {
+): Promise<{ rows: StalledGenerationRow[]; importOwned: StalledGenerationRow[] }> {
   const { data, error } = await client
     .from('generations')
-    .select('id, prediction_id, status, created_at')
+    .select('id, prediction_id, status, created_at, user_id, category, model, template_run_id, provider_sync_attempted_at')
     .in('status', [...STALLED_SYNCABLE_STATUSES])
     .not('prediction_id', 'is', null)
     .lt('created_at', syncCutoffIso(params.nowMs))
+    .order('provider_sync_attempted_at', { ascending: true, nullsFirst: true })
     .order('created_at', { ascending: true })
-    .limit(params.limit);
+    .limit(params.limit * STALLED_GENERATION_SYNC_CANDIDATE_FACTOR);
 
   if (error) throw error;
-  return (Array.isArray(data) ? data : []) as StalledGenerationRow[];
+  const candidates = (Array.isArray(data) ? data : []) as StalledGenerationRow[];
+  if (candidates.length === 0) return { rows: [], importOwned: [] };
+
+  const ids = candidates.map((row) => row.id);
+  const imports = await client
+    .from('generation_output_import_jobs')
+    .select('generation_id')
+    .in('generation_id', ids)
+    .limit(ids.length);
+  if (imports.error) throw imports.error;
+  const owned = new Set(
+    (Array.isArray(imports.data) ? imports.data : [])
+      .map((row) => (row as { generation_id?: unknown }).generation_id)
+      .filter((id): id is string => typeof id === 'string'),
+  );
+
+  return {
+    rows: candidates.filter((row) => !owned.has(row.id)).slice(0, params.limit),
+    importOwned: candidates.filter((row) => owned.has(row.id)),
+  };
 }
 
 async function loadStalledStartFailureRows(
@@ -208,6 +263,71 @@ async function loadStalledStartFailureRows(
   return (Array.isArray(data) ? data : []) as StalledGenerationRow[];
 }
 
+function isPastMaximumAge(row: StalledGenerationRow, nowMs: number): boolean {
+  const createdAtMs = Date.parse(row.created_at);
+  return Number.isFinite(createdAtMs)
+    && nowMs - createdAtMs >= STALLED_GENERATION_GIVE_UP_AFTER_HOURS * 60 * 60 * 1000;
+}
+
+async function recordProviderSyncAttempt(
+  client: SupabaseClient,
+  row: StalledGenerationRow,
+  nowMs: number,
+): Promise<void> {
+  // Rotation is an ordering aid, not a precondition: a row whose stamp did not
+  // land is still worth asking about now.
+  try {
+    const result = await client
+      .from('generations')
+      .update({ provider_sync_attempted_at: new Date(nowMs).toISOString() })
+      .eq('id', row.id);
+    if (result?.error) throw result.error;
+  } catch (error) {
+    logBackendError('stalled_generation_sync_attempt_stamp_failed', { generationId: row.id, error });
+  }
+}
+
+/**
+ * Fails and refunds a row past the maximum age. `already_succeeded` (the
+ * render landed in between) and a row that no longer exists settle nothing.
+ */
+async function abandonStalledGeneration(
+  creditSupabase: SupabaseClient,
+  row: StalledGenerationRow & { prediction_id: string },
+  lastStatus: string,
+): Promise<'abandoned' | 'skipped'> {
+  let settlement: 'failed' | 'succeeded';
+  try {
+    settlement = await settleGenerationFailed(
+      creditSupabase,
+      row.prediction_id,
+      null,
+      `The provider never reported a final result within ${STALLED_GENERATION_GIVE_UP_AFTER_HOURS} hours (last status: ${lastStatus})`,
+    );
+  } catch (error) {
+    if (error instanceof GenerationServiceError && error.status === 404) return 'skipped';
+    throw error;
+  }
+  if (settlement !== 'failed') return 'skipped';
+
+  logBackendInfo('stalled_generation_abandoned', {
+    generationId: row.id,
+    predictionId: row.prediction_id,
+    createdAt: row.created_at,
+    lastStatus,
+  });
+  if (row.user_id) {
+    await notifyGenerationStatus(creditSupabase, {
+      id: row.id,
+      user_id: row.user_id,
+      category: row.category,
+      model: row.model,
+      template_run_id: row.template_run_id,
+    }, 'failed');
+  }
+  return 'abandoned';
+}
+
 export async function reapStalledGenerations(params: {
   supabase: SupabaseClient;
   creditSupabase: SupabaseClient;
@@ -215,6 +335,8 @@ export async function reapStalledGenerations(params: {
   syncLimit?: number;
   startFailureLimit?: number;
   timeBudgetMs?: number;
+  /** The shared run's own admission deadline (absolute ms); the earlier of it and the budget wins. */
+  deadlineMs?: number;
 }): Promise<StalledGenerationReapSummary> {
   const nowMs = params.nowMs ?? Date.now();
   const syncLimit = params.syncLimit ?? STALLED_GENERATION_SYNC_BATCH_LIMIT;
@@ -228,16 +350,17 @@ export async function reapStalledGenerations(params: {
     throw new Error('Stalled generation reap time budget must be a non-negative number');
   }
 
-  // The deadline is measured from real elapsed time, not the caller's logical
-  // clock, so the reaper backs off when the completion drain has already
-  // consumed most of the shared run.
-  const deadlineMs = Date.now() + timeBudgetMs;
+  // Real elapsed time, not the caller's logical clock. The budget starts now;
+  // the caller's `deadlineMs` is what is left of the shared run once the
+  // completion drain has had its share, so the earlier of the two applies.
+  const deadlineMs = Math.min(Date.now() + timeBudgetMs, params.deadlineMs ?? Number.POSITIVE_INFINITY);
   const summary: StalledGenerationReapSummary = {
-    providerSync: { eligible: 0, reconciled: 0, stillActive: 0, skipped: 0, failed: 0, deferred: 0 },
+    providerSync: { eligible: 0, reconciled: 0, stillActive: 0, abandoned: 0, skipped: 0, failed: 0, deferred: 0 },
     startFailures: { eligible: 0, settled: 0, skipped: 0, failed: 0, deferred: 0, submissionUnknown: 0 },
   };
 
-  const syncRows = await loadStalledProviderSyncRows(params.supabase, { nowMs, limit: syncLimit });
+  const { rows: syncRows, importOwned } = await loadStalledProviderSyncRows(params.supabase, { nowMs, limit: syncLimit });
+  for (const row of importOwned) await recordProviderSyncAttempt(params.supabase, row, nowMs);
   summary.providerSync.eligible = syncRows.length;
 
   for (const row of syncRows) {
@@ -250,26 +373,50 @@ export async function reapStalledGenerations(params: {
       continue;
     }
 
-    try {
-      const result = await syncGenerationStatusByPredictionId({
-        supabase: params.supabase,
-        creditSupabase: params.creditSupabase,
-        predictionId: row.prediction_id,
-      });
+    await recordProviderSyncAttempt(params.supabase, row, nowMs);
+    const syncableRow = row as StalledGenerationRow & { prediction_id: string };
 
-      if (result.found && (result.status === 'succeeded' || result.status === 'failed')) {
-        summary.providerSync.reconciled += 1;
-        logBackendInfo('stalled_generation_reconciled', {
+    try {
+      let lastStatus: string | null = null;
+      try {
+        const result = await syncGenerationStatusByPredictionId({
+          supabase: params.supabase,
+          creditSupabase: params.creditSupabase,
+          predictionId: row.prediction_id,
+        });
+
+        if (result.found && (result.status === 'succeeded' || result.status === 'failed')) {
+          summary.providerSync.reconciled += 1;
+          logBackendInfo('stalled_generation_reconciled', {
+            generationId: row.id,
+            predictionId: row.prediction_id,
+            status: result.status,
+            createdAt: row.created_at,
+          });
+          continue;
+        }
+        if (!(result.found && (result.status === 'waiting' || result.status === 'processing'))) {
+          summary.providerSync.skipped += 1;
+          continue;
+        }
+        lastStatus = result.status;
+      } catch (error) {
+        // Inside the maximum age a failed poll is retried on a later tick.
+        // Past it, a task the provider cannot answer for is given up on.
+        if (!isPastMaximumAge(row, nowMs)) throw error;
+        lastStatus = `provider status check failed: ${error instanceof Error ? error.message : String(error)}`;
+        logBackendError('stalled_generation_sync_failed', {
           generationId: row.id,
           predictionId: row.prediction_id,
-          status: result.status,
-          createdAt: row.created_at,
+          error,
         });
-      } else if (result.found && (result.status === 'waiting' || result.status === 'processing')) {
-        summary.providerSync.stillActive += 1;
-      } else {
-        summary.providerSync.skipped += 1;
       }
+
+      if (!isPastMaximumAge(row, nowMs)) {
+        summary.providerSync.stillActive += 1;
+        continue;
+      }
+      summary.providerSync[await abandonStalledGeneration(params.creditSupabase, syncableRow, lastStatus ?? 'unknown')] += 1;
     } catch (error) {
       summary.providerSync.failed += 1;
       logBackendError('stalled_generation_sync_failed', {
