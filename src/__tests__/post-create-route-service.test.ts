@@ -231,7 +231,7 @@ describe('createOwnerPostForRoute', () => {
           then(resolve: (value: unknown) => void) {
             resolve(head ? { count: rows().length, error: null, data: null } : { data: rows(), error: null });
           },
-          async insert(row: ClaimRow) {
+          async insert(row: Omit<ClaimRow, 'claimed_at'> & { claimed_at?: string }) {
             if (table === 'post_create_claims'
               && db.post_create_claims.some((claim) => claim.user_id === row.user_id && claim.idempotency_key === row.idempotency_key)) {
               return { error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
