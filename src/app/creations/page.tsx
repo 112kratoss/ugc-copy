@@ -1079,8 +1079,10 @@ export default function CreationsPage() {
 
             const generationsData = await readJsonResponse(generationsRes) as GenerationsApiResponse;
             let nextGenerations: Generation[] | null = null;
-            if (generationsRes.ok) {
-                const loadedGenerations = (generationsData.generations || []) as Generation[];
+            // A 200 whose body is not the list (a page the platform put in its place) is a failed
+            // read, not an empty library: what is shown stays.
+            if (generationsRes.ok && Array.isArray(generationsData.generations)) {
+                const loadedGenerations = generationsData.generations as Generation[];
                 const freshCursor = getNextGenerationCursor(generationsData);
                 // With later pages loaded, they stay, and Load more goes on after
                 // them; rewinding the cursor made it fetch pages already on
@@ -1109,8 +1111,10 @@ export default function CreationsPage() {
 
             const postsData = await readJsonResponse(postsRes) as OwnerPostsApiResponse;
             let nextPosts: OwnerPost[] | null = null;
-            if (postsRes.ok) {
-                const loadedPosts = ((postsData.posts || []) as OwnerPost[]).map(withoutRetiredRecipe);
+            if (postsRes.ok && !Array.isArray(postsData.posts)) {
+                setLoadError('Could not load your creations. Check your connection and try again.');
+            } else if (postsRes.ok) {
+                const loadedPosts = (postsData.posts as OwnerPost[]).map(withoutRetiredRecipe);
                 const freshPostsOffset = postsData.pageInfo?.hasMore
                     ? postsData.pageInfo.nextOffset ?? null
                     : null;
@@ -1172,11 +1176,12 @@ export default function CreationsPage() {
                 });
                 const data = await readJsonResponse(response) as GenerationsApiResponse;
 
-                if (!response.ok) {
+                // A 200 with no list (a page the platform put in its place) is a failed read too.
+                if (!response.ok || !Array.isArray(data.generations)) {
                     throw new Error('Failed to load more creations.');
                 }
 
-                const loadedGenerations = Array.isArray(data.generations) ? data.generations : [];
+                const loadedGenerations = data.generations;
                 const nextGenerations = mergeGenerationAppend(generationsRef.current, loadedGenerations);
                 const nextCursor = getNextGenerationCursor(data);
                 generationsRef.current = nextGenerations;
@@ -1280,13 +1285,14 @@ export default function CreationsPage() {
                 // is the one Load more goes on from): this page followed the pages that are gone,
                 // and added to the new list it would follow a gap. Its failure is that list's too.
                 if (postsListGenerationRef.current !== listGeneration) return;
-                if (!response.ok) throw new Error('Failed to load more posts.');
+                // A 200 with no list (a page the platform put in its place) is a failed read too.
+                if (!response.ok || !Array.isArray(data.posts)) throw new Error('Failed to load more posts.');
 
                 // Onto the posts as they stand now, and with the totals as they stand now: a post
                 // archived while the page was on its way stays archived, and its move stays counted.
                 const nextPosts = mergePostAppend(
                     postsRef.current,
-                    Array.isArray(data.posts) ? data.posts.map(withoutRetiredRecipe) : [],
+                    data.posts.map(withoutRetiredRecipe),
                 );
                 const nextOffset = data.pageInfo?.hasMore ? data.pageInfo.nextOffset ?? null : null;
                 postsRef.current = nextPosts;

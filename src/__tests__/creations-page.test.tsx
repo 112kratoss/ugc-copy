@@ -607,6 +607,31 @@ describe('CreationsPage', () => {
     });
   });
 
+  // A next page answered 200 with no list read as an empty last page: Load more went away for good
+  // (review of the 2026-11-27 fix). It is a failed read, and Load more stays to try again.
+  it('keeps Load more when the next page answers 200 with no list', async () => {
+    stubStudioFetch((url) => {
+      if (url === GENERATIONS_PAGE_URL) {
+        return Promise.resolve(jsonResponse({
+          generations: [makeGeneration({ id: 'gen-picture-1', title: 'Picture one' })],
+          pagination: { limit: 36, hasMore: true, nextCursor: '36' },
+        }));
+      }
+      if (url === NEXT_GENERATIONS_PAGE_URL) {
+        return Promise.resolve(new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 }));
+      }
+      return null;
+    });
+    render(<CreationsPage />);
+    expect(await screen.findByText('Picture one')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /load more creations/i }));
+
+    expect(await screen.findByText('Failed to load more creations.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /load more creations/i })).toBeInTheDocument();
+    expect(screen.getByText('Picture one')).toBeInTheDocument();
+  });
+
   // Live sweep of 2026-11-17: "54 CREATIONS TOTAL" over "All (29)" and "Images (29)", the filters
   // counting the one page of 36 loaded. The rule is getStudioCreationCounts (creation-workspace.ts);
   // studio-counts-and-first-screen.spec.ts draws the sweep's own numbers in a browser.
@@ -991,6 +1016,43 @@ describe('CreationsPage', () => {
         return null;
       });
     };
+
+    // A refresh answered 200 with a body that is not the list (a page the platform put in its
+    // place) read as an empty object: the grid emptied and the library was marked complete
+    // (review of the 2026-11-27 fix). It is a failed read: what is shown stays.
+    it('keeps the grid and says the read failed when a refresh answers 200 with no list', async () => {
+      const state = { unreadable: false };
+      stubStudioFetch((url, init) => {
+        if (url === GENERATIONS_PAGE_URL) {
+          if (state.unreadable) return Promise.resolve(new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 }));
+          return Promise.resolve(jsonResponse({
+            generations: library,
+            pagination: { limit: 36, hasMore: false, nextCursor: null },
+          }));
+        }
+        if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0' && state.unreadable) {
+          return Promise.resolve(new Response('<!DOCTYPE html><p>Busy</p>', { status: 200 }));
+        }
+        if (url === '/api/generations/gen-clip-1' && init?.method === 'DELETE') {
+          state.unreadable = true;
+          return Promise.resolve(jsonResponse({ success: true, deleted: true }));
+        }
+        if (url === '/api/profile') {
+          return Promise.resolve(jsonResponse({ username: 'creator-user1' }));
+        }
+        return null;
+      });
+      render(<><CreationsPage /><FeedbackViewport /></>);
+      expect(await screen.findByText('Picture one')).toBeInTheDocument();
+
+      await chooseCardAction('Clip one', 'Delete creation');
+      fireEvent.click(within(await screen.findByRole('alertdialog', { name: 'Delete this creation?' }))
+        .getByRole('button', { name: 'Delete' }));
+
+      expect(await screen.findByText('Could not load your creations. Check your connection and try again.')).toBeInTheDocument();
+      expect(screen.getByText('Picture one')).toBeInTheDocument();
+      expect(screen.getByText('Picture two')).toBeInTheDocument();
+    });
 
     it('keeps the counts right after a delete when the refresh after it fails', async () => {
       stubLibrary();
