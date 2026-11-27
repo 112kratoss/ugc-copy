@@ -1541,7 +1541,9 @@ test('a signed-in reader of a post with no recipe logs no failed recipe read, lo
 // yet. It read as "", a recipe that was not theirs. `RECORDER` reads a link the parser is still
 // inside as none (.claude/rules/e2e.md, "Frames drawn from part of the HTML"). This draws that frame
 // on purpose, a document sent in two parts with the first ending inside the link, and asks it the
-// check that failed. It needs no page of the app's: the rail here is the recorder's own selectors.
+// check that failed. The second part is held until the page has been seen in that state with a frame
+// recorded, so no timing decides it. It needs no page of the app's: the rail here is the recorder's
+// own selectors.
 test('a frame drawn with the HTML parser inside the recipe link reads as no link yet', async ({ page }) => {
   const firstPart = '<!doctype html><html><head><meta charset="utf-8"><title>A rail in two parts</title></head><body>'
     // Past any buffer the browser fills before it starts on a document.
@@ -1550,23 +1552,42 @@ test('a frame drawn with the HTML parser inside the recipe link reads as no link
     + '<a data-testid="recipe-jump-link" href="#recipe" style="display:inline-flex;padding:8px 12px;border:1px solid">';
   const secondPart = '<span>Your recipe</span> <span>View</span></a><span>Owner tools</span>'
     + '<section data-testid="canonical-post-comments"><h2>Comments</h2></section></div></body></html>';
+  let sendSecondPart = () => {};
   const server = createServer((request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'x-content-type-options': 'nosniff' });
     response.write(firstPart);
-    setTimeout(() => response.end(secondPart), 500);
+    let sent = false;
+    sendSecondPart = () => {
+      if (sent) return;
+      sent = true;
+      response.end(secondPart);
+    };
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     const { port } = server.address() as AddressInfo;
     await page.addInitScript(RECORDER);
-    await page.goto(`http://127.0.0.1:${port}/rail-in-two-parts`);
+    await page.goto(`http://127.0.0.1:${port}/rail-in-two-parts`, { waitUntil: 'commit' });
+    // The state CI drew: the document still arriving, the link's box there with no word in it, and
+    // the recorder with a frame of the rail.
+    await expect.poll(() => page.evaluate(() => {
+      const link = document.querySelector<HTMLElement>('[data-testid="recipe-jump-link"]');
+      const recorded = (window as unknown as { __railFrames?: unknown[] }).__railFrames ?? [];
+      return document.readyState === 'loading' && link !== null && link.getClientRects().length > 0
+        && link.innerText === '' && recorded.length > 0;
+    })).toBe(true);
+    // Two more frames of it, so a recorder that reads the link's empty box has recorded that.
+    await twoFrames(page);
+    sendSecondPart();
     await expect(page.getByTestId('canonical-post-comments')).toBeVisible();
     const frames = await recordedFrames(page, { path: '/rail-in-two-parts' });
     const all = JSON.stringify(frames);
-    // The first part was on screen by itself: a frame of the rail with no Comments yet.
+    // The first part's frame is among them: the rail with no Comments yet.
     expect(frames.filter((frame) => frame.commentsOffset === null).length, all).toBeGreaterThan(0);
     expectOwnRecipe(frames);
   } finally {
+    // A request left open would keep the server from closing.
+    sendSecondPart();
     await new Promise((resolve) => server.close(resolve));
   }
 });
