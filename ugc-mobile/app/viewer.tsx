@@ -7,7 +7,7 @@ import { type VideoPlayer, type VideoPlayerStatus } from 'expo-video';
 import { useViewerVideoPlayer } from '@/lib/use-viewer-video-player';
 import { useReelBackdrop } from '@/lib/reel-backdrop';
 import { AudioLines, ImageOff, Play, Volume2, VolumeX } from 'lucide-react-native';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useRoute } from '@react-navigation/native';
 import { createContext, memo, useContext, useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { AccessibilityInfo, ActivityIndicator, Animated, AppState, Easing, FlatList, Linking, Platform, Pressable, Share, Text, useWindowDimensions, View, type GestureResponderEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
@@ -71,6 +71,7 @@ import {
 import { itemsWithoutBlockedRemixCredits } from '@/lib/remix-credit/remix-credit';
 import { createLeavesMediaReport, leavesMediaPage, viewerNativeBackOptions, viewerNativeBarSoundOptions } from '@/lib/viewer-native-back';
 import { createReelHandoffPage, useReelChromePage, type ReelHandoffPage } from '@/lib/reel-chrome-page';
+import { reelLeaveFor } from '@/lib/reel-leave';
 import { hydrateViewerAudioMuted, isViewerAudioMuted, toggleViewerAudioMuted, useViewerAudioMuted } from '@/lib/viewer-audio';
 import { viewerTopBadgeTop } from '@/lib/viewer-chrome';
 import { useViewerRefreshSpinner } from '@/lib/viewer-refresh-indicator';
@@ -308,6 +309,21 @@ export default function ImmersivePreviewViewerScreen() {
       </ViewerTopControlsContext.Provider>
     </ThemeScope>
   );
+}
+
+/**
+ * Takes this reel's own route away, for its zoom's exits (lib/reel-leave.ts):
+ * back the usual way while it is in front, and by its key from under a screen
+ * pushed while it closed.
+ */
+function useLeaveReel() {
+  const navigation = useNavigation();
+  const routeKey = useRoute().key;
+  return useCallback(() => {
+    const leaveBy = reelLeaveFor(navigation.getState?.(), routeKey);
+    if (leaveBy.kind === 'back') leaveViewer();
+    else if (leaveBy.kind === 'dispatch') navigation.dispatch(leaveBy.action);
+  }, [navigation, routeKey]);
 }
 
 function ImmersivePreviewViewer() {
@@ -802,6 +818,7 @@ function ImmersivePreviewViewer() {
     fromTile: true,
   });
   const barBack = nativeBack && !flownBack;
+  const leaveReel = useLeaveReel();
   const zoom = useMediaZoomStage({
     screen: { width, height },
     initialItemId: initialId,
@@ -818,7 +835,8 @@ function ImmersivePreviewViewer() {
     // A close into the tile this video came from hands the tile its player back.
     activeVideoUrl: activeMedia.playbackUrl,
     playerFor: playbackHandoff.playerFor,
-    onExit: leaveViewer,
+    // By the reel's own route: a screen can be pushed while a close lands.
+    onExit: leaveReel,
   });
   // iOS: the reel keeps its black behind its media, and UIKit's zoom grows and
   // shrinks that page, black, buttons and all, as Instagram's does (filmed on

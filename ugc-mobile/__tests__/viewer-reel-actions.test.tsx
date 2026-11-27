@@ -101,13 +101,25 @@ const screenState = vi.hoisted(() => ({
 const passThrough = vi.hoisted(() => ({ children }: { children?: unknown }) => children ?? null);
 const nothing = vi.hoisted(() => () => null);
 
+// The stack the reel's route is in, which a close takes that route out of.
+const stackState = vi.hoisted(() => ({
+  state: undefined as undefined | { key: string; index: number; routes: { key: string }[] },
+  dispatch: vi.fn(),
+}));
+
 vi.mock('expo-router', () => ({
   router: routerState,
   // Its options are what the tests read of the navigation bar.
   Stack: { Screen: (props: MockProps) => React.createElement('stack-screen', props) },
   useLocalSearchParams: () => routerState.params,
-  // The reel listens to its own transitions (its iOS ground) and to nothing else here.
-  useNavigation: () => ({ addListener: () => () => undefined, isFocused: () => true }),
+  // The reel listens to its own transitions (its iOS ground), and its close
+  // reads the stack it is in and takes its own route out of it.
+  useNavigation: () => ({
+    addListener: () => () => undefined,
+    isFocused: () => true,
+    getState: () => stackState.state,
+    dispatch: stackState.dispatch,
+  }),
 }));
 
 vi.mock('expo-status-bar', () => ({ StatusBar: nothing }));
@@ -493,6 +505,7 @@ beforeEach(() => {
   authState.api.undoFeedFeedback.mockReset().mockImplementation(() => Promise.resolve({ ok: true, removed: true }));
   screenState.callbacksFor = null;
   screenState.zoomOptions = null;
+  stackState.state = undefined;
 });
 
 afterEach(() => {
@@ -2026,5 +2039,42 @@ describe('whom the reader follows, for the posts beside the one on screen', () =
     await renderReel('post-b');
 
     expect(askedFor()).toEqual([luna.id]);
+  });
+});
+
+/** What the reel handed its zoom stage: how it leaves. */
+const zoomExits = () => screenState.zoomOptions as unknown as { onExit: () => void };
+
+// Review of #947: an Android close keeps the reel's route until the picture
+// has landed in its tile, up to half a second after Back. A screen pushed in
+// that time (a forced sign-in, a notification opened) was on top when the
+// close then went back: it popped that screen, and left the reel in front,
+// out of sight and taking every touch, the app frozen.
+describe("the reel's close leaves by its own route", () => {
+  it('takes the reel out from under a screen pushed while it closed', async () => {
+    seedLane('viewer-1', lanePosts());
+    await renderReel('post-b');
+    stackState.state = { key: 'root-stack', index: 2, routes: [{ key: 'tabs' }, { key: reelRoute.key }, { key: 'auth' }] };
+
+    act(() => zoomExits().onExit());
+
+    expect(stackState.dispatch).toHaveBeenCalledTimes(1);
+    expect(stackState.dispatch).toHaveBeenCalledWith({ type: 'POP', payload: { count: 1 }, source: reelRoute.key, target: 'root-stack' });
+    expect(routerState.back).not.toHaveBeenCalled();
+  });
+
+  it('goes back as before when it is in front, and does nothing once it is gone', async () => {
+    seedLane('viewer-1', lanePosts());
+    await renderReel('post-b');
+    stackState.state = { key: 'root-stack', index: 1, routes: [{ key: 'tabs' }, { key: reelRoute.key }] };
+    act(() => zoomExits().onExit());
+    expect(routerState.back).toHaveBeenCalledTimes(1);
+    expect(stackState.dispatch).not.toHaveBeenCalled();
+
+    routerState.back.mockClear();
+    stackState.state = { key: 'root-stack', index: 1, routes: [{ key: 'tabs' }, { key: 'creator-page' }] };
+    act(() => zoomExits().onExit());
+    expect(routerState.back).not.toHaveBeenCalled();
+    expect(stackState.dispatch).not.toHaveBeenCalled();
   });
 });
