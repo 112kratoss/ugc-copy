@@ -317,12 +317,23 @@ export const MOBILE_MEDIA_DIAGNOSTICS_RATE_LIMIT = {
 
 /**
  * The mobile app's error reports (`/api/mobile/client-errors`): an app sends five per session at
- * most, so this only stops a crash loop or a hostile sender, per network.
+ * most, so this only stops a crash loop or a hostile sender. Keyed by the account for a signed-in
+ * report and by the network for a guest's, so people behind one network are not one budget.
  */
 export const MOBILE_CLIENT_ERRORS_RATE_LIMIT = {
   scope: 'mobile:client-errors',
   limit: 20,
   windowSeconds: 10 * 60,
+} as const;
+
+/**
+ * Every error report the server keeps in a day, across all senders (one key, `all`): many
+ * addresses cannot fill the table. Past it a report is dropped quietly with a 204.
+ */
+export const MOBILE_CLIENT_ERRORS_DAILY_CAP = {
+  scope: 'mobile:client-errors-global',
+  limit: 5_000,
+  windowSeconds: 24 * 60 * 60,
 } as const;
 
 /**

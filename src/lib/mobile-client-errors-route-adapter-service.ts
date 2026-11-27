@@ -4,6 +4,7 @@ import { applyPrivateNoStoreApiResponseHeaders } from '@/lib/api-cache';
 import { logBackendRouteError } from '@/lib/backend-logger';
 import {
   BackendRateLimitError,
+  MOBILE_CLIENT_ERRORS_DAILY_CAP,
   MOBILE_CLIENT_ERRORS_RATE_LIMIT,
   createBackendRateLimitResponse,
   enforceBackendRateLimit,
@@ -55,18 +56,6 @@ function resolveDependencies(dependencies: MobileClientErrorsRouteDependencies |
 }
 
 async function handleMobileClientErrorPost(request: Request, dependencies: ReturnType<typeof resolveDependencies>) {
-  const admin = dependencies.createServiceClient();
-  try {
-    await dependencies.enforceBackendRateLimit(admin, {
-      ...MOBILE_CLIENT_ERRORS_RATE_LIMIT,
-      key: dependencies.getRateLimitKey(request.headers),
-    });
-  } catch (error) {
-    if (error instanceof BackendRateLimitError) return createBackendRateLimitResponse(error);
-    dependencies.logError('Client error report rate limit failed:', error);
-    return Response.json({ error: 'Failed to check client error report limits.' }, { status: 500 });
-  }
-
   const contentType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
   if (contentType !== 'application/json') {
     return Response.json({ error: 'Unsupported client error report content type.' }, { status: 415 });
@@ -89,7 +78,27 @@ async function handleMobileClientErrorPost(request: Request, dependencies: Retur
   const report = parseMobileClientErrorReport(body.value);
   if (!report) return Response.json({ error: 'Invalid client error report.' }, { status: 400 });
 
+  const admin = dependencies.createServiceClient();
   const userId = await dependencies.getOptionalUserId(request);
+  try {
+    // The sender's own budget: its account when signed in, its network when a guest's.
+    await dependencies.enforceBackendRateLimit(admin, {
+      ...MOBILE_CLIENT_ERRORS_RATE_LIMIT,
+      key: userId ? `user:${userId}` : `network:${dependencies.getRateLimitKey(request.headers)}`,
+    });
+  } catch (error) {
+    if (error instanceof BackendRateLimitError) return createBackendRateLimitResponse(error);
+    dependencies.logError('Client error report rate limit failed:', error);
+    return Response.json({ error: 'Failed to check client error report limits.' }, { status: 500 });
+  }
+  try {
+    await dependencies.enforceBackendRateLimit(admin, { ...MOBILE_CLIENT_ERRORS_DAILY_CAP, key: 'all' });
+  } catch (error) {
+    // Past the day's cap, or unable to count it: dropped quietly, never stored.
+    if (!(error instanceof BackendRateLimitError)) dependencies.logError('Client error report daily cap failed:', error);
+    return new Response(null, { status: 204 });
+  }
+
   try {
     await dependencies.recordMobileClientError(admin, report, userId);
   } catch (error) {
@@ -102,7 +111,8 @@ async function handleMobileClientErrorPost(request: Request, dependencies: Retur
 /**
  * `POST /api/mobile/client-errors`: the mobile app's error reports (audit 2026-11-27). Public in
  * the route policy, so a guest's report and one sent while the session is what is failing both
- * arrive; rate-limited per network, body-capped, and validated and truncated again here.
+ * arrive; rate-limited per account (per network for a guest), held to a global daily cap that
+ * drops quietly, body-capped, and validated and truncated again here.
  */
 export async function postMobileClientErrorsRouteResponse({
   dependencies,

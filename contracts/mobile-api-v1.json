@@ -3582,7 +3582,7 @@
       "method": "POST",
       "path": "/api/mobile/client-errors",
       "auth": "optional",
-      "rule": "A JS error the app caught (its error boundary, its global handler, an unhandled rejection), sent by lib/client-error-report.ts: never in development, each distinct error once per app session, five per session at most, and nothing a person typed. A session token, when sent, ties the report to the account; one that cannot be verified is stored without it. The server truncates again (message 500, stack 4000, componentStack 2000), keeps a route's path alone, and keeps rows 30 days.",
+      "rule": "A JS error the app caught (its error boundary, its global handler, an unhandled rejection), sent by lib/client-error-report.ts: never in development, never for a plain network failure, each distinct error once per app session, five per session at most; a fatal one is kept on the device and sent at the next launch. No form field, prompt or request body is sent, but an error's own text can quote what it was handed (a server's message, text a parser could not read). A session token, when sent, ties the report to the account; one that cannot be verified is stored without it. Limited per account (per network for a guest) and by a global daily cap past which a report is dropped with a 204. The server truncates again (message 500, stack 4000, componentStack 2000), keeps a route's path alone, and keeps rows 30 days.",
       "limits": { "message": 500, "stack": 4000, "componentStack": 2000, "perSession": 5 },
       "request": {
         "message": "TypeError: Cannot read property 'id' of undefined",

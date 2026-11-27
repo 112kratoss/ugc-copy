@@ -3,7 +3,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import operations from '../../contracts/mobile-api-operations-v1.json';
-import { BackendRateLimitError, MOBILE_CLIENT_ERRORS_RATE_LIMIT } from '@/lib/backend-rate-limit';
+import {
+  BackendRateLimitError,
+  MOBILE_CLIENT_ERRORS_DAILY_CAP,
+  MOBILE_CLIENT_ERRORS_RATE_LIMIT,
+} from '@/lib/backend-rate-limit';
 import { parseMobileClientErrorReport } from '@/lib/mobile-client-errors';
 import {
   MAX_MOBILE_CLIENT_ERROR_BYTES,
@@ -79,7 +83,29 @@ describe('POST /api/mobile/client-errors', () => {
       stack: contract.request.stack,
       component_stack: contract.request.componentStack,
     }]);
-    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: 'network-1' });
+    // A signed-in report is limited by its account, so people behind one network are not one budget.
+    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: 'user:user-1' });
+    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(admin.client, { ...MOBILE_CLIENT_ERRORS_DAILY_CAP, key: 'all' });
+  });
+
+  it('limits a guest\'s report by its network', async () => {
+    const { deps } = dependencies();
+    await postMobileClientErrorsRouteResponse({ request: post(contract.request), dependencies: deps });
+    expect(deps.enforceBackendRateLimit).toHaveBeenCalledWith(expect.anything(), { ...MOBILE_CLIENT_ERRORS_RATE_LIMIT, key: 'network:network-1' });
+  });
+
+  // Many addresses must not fill the table: past the day's cap a report is dropped quietly.
+  it('drops a report past the global daily cap with a 204, storing nothing', async () => {
+    const full = new BackendRateLimitError({ allowed: false, limit: 5000, remaining: 0, retryAfterSeconds: 600, resetAt: '2026-11-28T00:00:00.000Z' });
+    const { admin, deps } = dependencies({
+      enforceBackendRateLimit: vi.fn(async (_client: unknown, options: { scope: string }) => {
+        if (options.scope === MOBILE_CLIENT_ERRORS_DAILY_CAP.scope) throw full;
+        return { allowed: true, limit: 20, remaining: 19, retryAfterSeconds: 0, resetAt: '2026-11-27T10:10:00.000Z' };
+      }) as never,
+    });
+    const response = await postMobileClientErrorsRouteResponse({ request: post(contract.request), dependencies: deps });
+    expect(response.status).toBe(204);
+    expect(admin.inserted).toEqual([]);
   });
 
   it('keeps a report whose session could not be verified, without an account', async () => {

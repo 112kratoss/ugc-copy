@@ -6,7 +6,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * The mobile app's error reports (audit 2026-11-27): what its error boundary, its global JS error
  * handler and its unhandled-rejection tracker caught, sent by `ugc-mobile/lib/client-error-report.ts`
  * and kept 30 days in `mobile_client_errors` (migration 20261127060127). The app truncates before it
- * sends; the server truncates again, so a modified client cannot store more.
+ * sends; the server truncates again, so a modified client cannot store more. No form field is sent,
+ * but an error's text can quote what it was handed, so a row is treated as possibly personal.
  */
 export const MOBILE_CLIENT_ERROR_LIMITS = {
   message: 500,
