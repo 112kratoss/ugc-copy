@@ -839,7 +839,9 @@ describe('paging the grid', () => {
 
       // The cooldown ends with nothing drawn again: the gate asks by itself.
       now += 10;
-      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+      await act(async () => {
+        await vi.waitFor(() => expect(pageAsks()).toHaveLength(2), { timeout: 2000, interval: 5 });
+      });
       await settle();
       expect(pageAsks()).toHaveLength(2);
     } finally {
