@@ -679,6 +679,11 @@ jobs:
           SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
         run: npx vitest run src/__tests__/feed-interest-progress-database.test.ts
 
+      - name: Test the sitemap's creator list with real SQL
+        env:
+          SUPABASE_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:54322/postgres
+        run: npx vitest run src/__tests__/sitemap-creators-database.test.ts
+
       - name: Stop isolated Supabase database
         if: always()
         continue-on-error: true
