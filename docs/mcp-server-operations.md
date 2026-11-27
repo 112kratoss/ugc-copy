@@ -87,7 +87,7 @@ here at the cutover with their ids, redirect URIs and, for the confidential dire
 stored hash of its secret (GoTrue v2.186.0 stored `base64url(SHA-256(secret))`, the form this
 server uses), so no setup command, plugin or directory listing changed; the one-time import that
 did it is gone. The ids in `MCP_POSTING_ONLY_CLIENT_IDS` are `posts` rows: such a client is never
-granted `/api/mcp`. A new redirect URI for an existing client (ChatGPT's per-account callback) is
+granted `/api/mcp`. A new redirect URI for an existing client (a further callback for ChatGPT, say) is
 an `update` of `redirect_uris` in the SQL editor, the existing ones kept, until the CLI grows a
 command for it. `--app`, which chose this table while Supabase's server was the default, is still
 accepted and changes nothing.
@@ -267,19 +267,28 @@ coming soon until one of three things happens:
    one to try first: it takes minutes and needs no code.
 2. The app is listed in ChatGPT's directory ("ChatGPT directory submission").
 3. The authorization server supports RFC 9207. OpenAI's Apps SDK auth guide says ChatGPT then
-   sends every account to its stable `https://chatgpt.com/connector_platform_oauth_redirect`.
-   It takes both halves: `authorization_response_iss_parameter_supported: true` in the metadata
-   and `iss` in the authorization responses. `iss` alone changes nothing. The app's server does
-   neither, and this has not been tried here. Codex also picks its callback differently once
-   the flag is advertised ("Distribution" → "Setup facts per client" → Codex), so the URI
-   `codex mcp add` then prints is registered on Codex's client before the flag goes live: an
-   unregistered redirect is refused.
+   uses its stable `https://chatgpt.com/connector_platform_oauth_redirect`, the same for every
+   account. It takes both halves together:
+   `authorization_response_iss_parameter_supported: true` in the metadata, and `iss`, equal to
+   the metadata's `issuer` character for character, in every authorization response, error
+   responses included. `iss` alone changes nothing, and
+   with the flag but no `iss`, or a different one, ChatGPT and Codex reject the response. The
+   app's server does neither, and this has not been tried here: the guide speaks of "an
+   eligible OAuth client" and does not say whether a pre-registered one like ours is one. Two
+   redirect URIs are registered before the flag goes live, because an unregistered redirect is
+   refused. One is the stable redirect, on ChatGPT's client, the existing URI kept. The other
+   is on Codex's client: the URI `codex mcp add` then prints, since Codex picks its callback
+   differently once the flag is advertised ("Distribution" → "Setup facts per client" →
+   Codex).
 
-Switching ChatGPT on then needs no new page text, because the setup
+By the first or the third, switching ChatGPT on needs no new page text, because the setup
 page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, token method
 `none`). The id goes into `MCP_CLIENT_IDS` and the shared callback into
-`MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by an `update` of the client's `redirect_uris` on
-`public.agent_oauth_clients`, the existing URI kept (`ops:oauth-clients` has no update command).
+`MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it.
+With a directory listing people add the app from ChatGPT's directory, not through Add custom
+MCP server, so the page's ChatGPT steps are rewritten for that. A different callback id is
+added by an `update` of the client's `redirect_uris` on `public.agent_oauth_clients`, the
+existing URI kept (`ops:oauth-clients` has no update command).
 
 The move to the app's own authorization server on 2026-11-26 signed the plugin out, and its
 Reconnect could not sign it back in. A ChatGPT plugin keeps the authorize and token URLs it
