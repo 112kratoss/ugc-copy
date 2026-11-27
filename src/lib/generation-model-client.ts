@@ -1,5 +1,6 @@
 'use client';
 
+import { readJsonResponse } from '@/lib/read-json-response';
 import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
 import { ModelCatalogSession, type CatalogSessionState } from '../../ugc-mobile/lib/model-catalog/session';
 import { catalogRunWithShownCost, type ModelCatalogKind, type ModelCatalogSummary } from '../../ugc-mobile/lib/model-catalog/protocol';
@@ -414,7 +415,7 @@ export function useWebGenerationModelCatalog(options: {
     const headers = new Headers(); if (etag) headers.set('If-None-Match', etag);
     const response = await fetch(path, { headers });
     if (response.status === 304) return { body: null, etag: response.headers.get('etag') ?? etag ?? null, notModified: true };
-    const body = await response.json();
+    const body = await readJsonResponse(response, { unreadableSuccess: 'Could not load model settings.' });
     if (!response.ok) throw new Error(body.error ?? 'Could not load model settings.');
     return { body, etag: response.headers.get('etag'), notModified: false };
   }, value => parseClientGenerationModelCatalog({ schemaVersion: 3, revision: 'detail', defaults: { image: null, video: null, motion: null }, models: [value] }).models[0],
@@ -874,7 +875,7 @@ export async function requestWebGenerationQuote(
     body: JSON.stringify(input),
     signal,
   });
-  const body = await response.json() as GenerationModelQuote & {
+  const body = await readJsonResponse(response) as GenerationModelQuote & {
     error?: string;
     code?: string;
     fieldErrors?: Record<string, string>;
@@ -888,6 +889,10 @@ export async function requestWebGenerationQuote(
       body.code,
       fieldErrors
     );
+  }
+  // A 200 whose body cannot be read is no quote: it fails as a quote the server refused would.
+  if (typeof body.costCredits !== 'number') {
+    throw new WebCatalogRequestError('Could not calculate generation cost.', response.status);
   }
   return body;
 }
@@ -913,7 +918,7 @@ export async function requestWebGenerationQuoteBatch(
     body: JSON.stringify({ quotes: inputs }),
     signal,
   });
-  const body = await response.json() as { quotes?: unknown; error?: string; code?: string };
+  const body = await readJsonResponse(response) as { quotes?: unknown; error?: string; code?: string };
   if (!response.ok || !Array.isArray(body.quotes) || body.quotes.length !== inputs.length) {
     throw new WebCatalogRequestError(body.error ?? 'Could not price these settings.', response.status, body.code);
   }

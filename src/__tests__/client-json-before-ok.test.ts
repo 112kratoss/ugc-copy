@@ -29,10 +29,20 @@ function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// The browser's helpers in src/lib that read an API answer (review of the 2026-11-27 change):
+// uploads, their finalize, and the catalog's quotes.
+const CLIENT_LIB_FILES = [
+  'src/lib/profile-media-upload.ts',
+  'src/lib/upload-finalize-client.ts',
+  'src/lib/temporary-media-upload.ts',
+  'src/lib/workflow-asset-upload.ts',
+  'src/lib/generation-model-client.ts',
+].map((file) => path.join(process.cwd(), file));
+
 /** Each `await x.json()` read before `x.ok` is checked, or inside `if (!x.ok)`, outside a try. */
 function findUnguardedReads(): string[] {
   const found: string[] = [];
-  for (const file of ROOTS.flatMap(walk)) {
+  for (const file of [...ROOTS.flatMap(walk), ...CLIENT_LIB_FILES]) {
     const lines = readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, index) => {
       for (const match of line.matchAll(JSON_READ)) {
