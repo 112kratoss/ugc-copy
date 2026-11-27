@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { createOwnerPostForRoute } from '@/lib/post-create-route-service';
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
+import {
+  createOwnerPostForRoute,
+  readPostCreateIdempotencyKey,
+  type ExistingPostForCreate,
+} from '@/lib/post-create-route-service';
 import type { PostCreationSubmission } from '@/lib/post-creation-submission-service';
 import type { SourceToolOption } from '@/lib/source-tools';
 
@@ -188,6 +193,110 @@ describe('createOwnerPostForRoute', () => {
       ok: false,
       status: 500,
       body: { error: 'Failed to create post.' },
+    });
+  });
+
+  // Audit 2026-11-27, finding 4: a publish whose answer was lost and was pressed again made a
+  // second post. The composer's Idempotency-Key is the new post's id, and a repeat answers it.
+  describe('with an Idempotency-Key', () => {
+    const idempotency = mobileApiContract.endpoints.createPost.idempotency;
+    const key = idempotency.key;
+    const NOW = Date.parse('2026-11-27T10:00:00.000Z');
+
+    function existing(overrides: Partial<ExistingPostForCreate> = {}): ExistingPostForCreate {
+      return {
+        userId: 'user-1',
+        visibility: 'public',
+        postFormat: 'media',
+        createdAt: '2026-11-27T09:00:00.000Z',
+        tombstoned: false,
+        mediaCount: 1,
+        bundleStatus: null,
+        ...overrides,
+      };
+    }
+
+    function run(read: Awaited<ReturnType<NonNullable<Parameters<typeof createOwnerPostForRoute>[0]['dependencies']>['readExistingPostForCreate']>>) {
+      const admin = createRateLimitClient();
+      const readFormData = vi.fn(async () => new FormData());
+      const publishPreparedPost = vi.fn(async () => ({ ok: true as const, body: idempotency.replay.response as never }));
+      const readExistingPostForCreate = vi.fn(async () => read);
+      const result = createOwnerPostForRoute({
+        adminSupabase: admin.client,
+        ownerUserId: 'user-1',
+        readFormData,
+        idempotencyKey: key,
+        createPostId: () => 'random-id',
+        now: () => NOW,
+        dependencies: {
+          listSourceToolsCatalog: vi.fn(async () => sourceToolCatalog),
+          preparePostCreationSubmission: vi.fn(async () => ({ ok: true as const, submission: {} as PostCreationSubmission })),
+          publishPreparedPost,
+          readExistingPostForCreate,
+        },
+      });
+      return { result, readFormData, publishPreparedPost, readExistingPostForCreate };
+    }
+
+    it('reads only a UUID as a key, and anything else as no key', () => {
+      expect(readPostCreateIdempotencyKey(key)).toBe(key);
+      expect(readPostCreateIdempotencyKey(` ${key.toUpperCase()} `)).toBe(key);
+      for (const value of [null, '', 'mobile:abc', `${key}0`, 'post-1', '00000000-0000-0000-0000-000000000000']) {
+        expect(readPostCreateIdempotencyKey(value)).toBeNull();
+      }
+    });
+
+    it('makes the post under the key when no post has it', async () => {
+      const { result, publishPreparedPost, readExistingPostForCreate } = run({ ok: true, post: null });
+      expect((await result).ok).toBe(true);
+      expect(readExistingPostForCreate).toHaveBeenCalledWith(expect.anything(), key);
+      expect(publishPreparedPost).toHaveBeenCalledWith(expect.objectContaining({ postId: key }));
+    });
+
+    it('answers a repeat with the post in the shape of a fresh create, and creates nothing', async () => {
+      const { result, readFormData, publishPreparedPost } = run({ ok: true, post: existing() });
+      expect(await result).toEqual({ ok: true, body: idempotency.replay.response });
+      expect(readFormData).not.toHaveBeenCalled();
+      expect(publishPreparedPost).not.toHaveBeenCalled();
+    });
+
+    it('answers a private post and a recipe still a draft as a fresh create would', async () => {
+      const { result } = run({ ok: true, post: existing({ visibility: 'private', bundleStatus: 'draft' }) });
+      expect(await result).toEqual({
+        ok: true,
+        body: {
+          success: true,
+          postId: key,
+          visibility: 'private',
+          showcasePath: null,
+          ownerPath: `/post/${key}/edit`,
+          resourceBundlePath: `/post/${key}/edit#recipe`,
+          resourceBundleStatus: 'draft',
+        },
+      });
+    });
+
+    it('refuses another account\'s post without saying whose, and a post deleted since', async () => {
+      for (const post of [existing({ userId: 'user-2' }), existing({ tombstoned: true })]) {
+        const { result, publishPreparedPost } = run({ ok: true, post });
+        expect(await result).toEqual({ ok: false, status: idempotency.errors.conflict.status, body: idempotency.errors.conflict.response });
+        expect(publishPreparedPost).not.toHaveBeenCalled();
+      }
+    });
+
+    it('says a media post with none of its files yet is still being saved, and one left so is unfinished', async () => {
+      const saving = run({ ok: true, post: existing({ mediaCount: 0, visibility: 'private', createdAt: new Date(NOW - 30_000).toISOString() }) });
+      expect(await saving.result).toEqual({ ok: false, status: idempotency.errors.inProgress.status, body: idempotency.errors.inProgress.response });
+      const left = run({ ok: true, post: existing({ mediaCount: 0, visibility: 'private', createdAt: new Date(NOW - 600_000).toISOString() }) });
+      expect(await left.result).toEqual({ ok: false, status: idempotency.errors.conflict.status, body: idempotency.errors.conflict.response });
+      const text = run({ ok: true, post: existing({ mediaCount: 0, postFormat: 'text' }) });
+      expect((await text.result).ok).toBe(true);
+    });
+
+    it('creates nothing when whether the post exists cannot be read', async () => {
+      const { result, publishPreparedPost } = run({ ok: false });
+      expect(await result).toEqual({ ok: false, status: 500, body: { error: 'Failed to create post.' } });
+      expect(publishPreparedPost).not.toHaveBeenCalled();
     });
   });
 });

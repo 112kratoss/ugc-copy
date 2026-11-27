@@ -1544,6 +1544,26 @@ describe('mobile api client caching', () => {
     expect((init.headers as Headers).get('Authorization')).toBe('Bearer token-1');
   });
 
+  // Audit 2026-11-27, finding 4: a retried publish made a second post. The composer's key rides
+  // in the header the contract names, the same on every retry of that post.
+  it('sends the composed post\'s key as the Idempotency-Key the contract names', async () => {
+    const fetcher = vi.fn(async () => jsonResponse({ success: true, postId: 'post-1', visibility: 'public' }));
+    const api = createApiClient({
+      baseUrl: 'https://magicbooklet.test',
+      getAccessToken: async () => 'token-1',
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    const key = '3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a';
+    const { header } = mobileApiContract.endpoints.createPost.idempotency;
+
+    await api.createPost(new FormData(), key);
+    await api.createPost(new FormData(), key);
+
+    for (const call of fetcher.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit]>) {
+      expect((call[1].headers as Headers).get(header)).toBe(key);
+    }
+  });
+
   it('requests signed resource file URLs with JSON metadata', async () => {
     const fetcher = vi.fn(async () => jsonResponse({
       success: true,

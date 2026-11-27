@@ -3592,6 +3592,40 @@
         "resourceBundlePath": "/marketplace/resources/resource-1",
         "message": "Post created."
       },
+      "idempotency": {
+        "header": "Idempotency-Key",
+        "format": "uuid",
+        "rule": "A UUID the client makes once per composed post and sends on every retry of it. It becomes the new post's id. A repeat by the same account answers that post in the shape of a fresh create and creates nothing; a header that is missing or not a UUID creates as before.",
+        "key": "3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
+        "replay": {
+          "status": 200,
+          "response": {
+            "success": true,
+            "postId": "3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
+            "visibility": "public",
+            "showcasePath": "/showcase/3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a",
+            "ownerPath": "/post/3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a/edit",
+            "resourceBundlePath": "/showcase/3f0b8d0e-8f5a-4c1e-9d2b-7a6c5e4d3b2a#recipe",
+            "resourceBundleStatus": null
+          }
+        },
+        "errors": {
+          "inProgress": {
+            "status": 409,
+            "response": {
+              "error": "This post is still being saved. Try again in a moment.",
+              "code": "POST_CREATE_IN_PROGRESS"
+            }
+          },
+          "conflict": {
+            "status": 409,
+            "response": {
+              "error": "This post could not be saved. Try again.",
+              "code": "IDEMPOTENCY_KEY_CONFLICT"
+            }
+          }
+        }
+      },
       "errors": {
         "recipeTitleTooShort": {
           "status": 400,

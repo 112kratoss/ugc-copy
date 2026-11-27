@@ -87,6 +87,7 @@ import {
   withSavedPostMedia,
   type MediaVerification,
 } from '@/lib/post-composer-media-recovery';
+import { createPostCreateKey, postCreateKeyAfterFailure } from '@/lib/post-create-key';
 import {
   buildCreatePostFormData,
   buildOptimisticOwnerPostListItem,
@@ -2428,6 +2429,10 @@ function NewPostComposer() {
   // be finishing, and a retry that read the rows before it did is refused once it
   // has, which a read on the next press puts right.
   const savedMediaIdsStaleRef = useRef(false);
+  // The key this composed post is created under (`lib/post-create-key.ts`): made at the first
+  // create, kept across failed attempts so a retry answers the post the first may have made, and
+  // gone with the screen, so a new post starts with a new one.
+  const createKeyRef = useRef<string | null>(null);
   const draftStorageId = user ? getPostComposerDraftStorageId({
     userId: user.id,
     postId,
@@ -2940,6 +2945,7 @@ function NewPostComposer() {
         : effectiveDraft;
       const submittedDraft = await uploadMediaAwaitingUpload(draftToSave);
       let sentPostMedia = false;
+      let sentCreateKey: string | null = null;
       try {
         if (postId) {
           const isGen = Boolean(postQuery.data?.post?.generationId);
@@ -2953,8 +2959,11 @@ function NewPostComposer() {
           return await api.publishGeneration(buildPublishGenerationPostPayload(selectedGeneration, submittedDraft));
         }
 
-        return await api.createPost(buildCreatePostFormData(submittedDraft));
+        createKeyRef.current ??= createPostCreateKey();
+        sentCreateKey = createKeyRef.current;
+        return await api.createPost(buildCreatePostFormData(submittedDraft), sentCreateKey);
       } catch (error) {
+        if (sentCreateKey) createKeyRef.current = postCreateKeyAfterFailure(sentCreateKey, error);
         // Sending the same staged paths after the server may have moved them
         // was refused on every retry; the next publish uploads those files again.
         if (saveMayHaveConsumedUploads(error)) {

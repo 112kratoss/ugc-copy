@@ -1881,8 +1881,16 @@ export function createApiClient({
       }),
     publishGeneration: (body: Record<string, unknown>) =>
       request<CreatePostResponse>('/api/showcase/publish', { method: 'POST', body: JSON.stringify(body) }),
-    createPost: (body: FormData) =>
-      request<CreatePostResponse>('/api/posts', { method: 'POST', body }, POST_CREATE_REQUEST_OPTIONS),
+    /**
+     * `idempotencyKey` is the composed post's key (`lib/post-create-key.ts`): the server makes the
+     * post under it and answers a retry with that post, so a lost answer pressed again makes one.
+     */
+    createPost: (body: FormData, idempotencyKey?: string) =>
+      request<CreatePostResponse>('/api/posts', {
+        method: 'POST',
+        body,
+        ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
+      }, POST_CREATE_REQUEST_OPTIONS),
     // The same public catalog for everyone, which the server marks cacheable
     // for five minutes: sent without the session token, so no identity check
     // runs for it and the edge may serve it.

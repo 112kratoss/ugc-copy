@@ -1,3 +1,4 @@
+import mobileApiContract from '../../contracts/mobile-api-v1.json';
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -93,7 +94,25 @@ describe('posts route adapter service', () => {
       adminSupabase,
       ownerUserId: 'user-1',
       readFormData: expect.any(Function),
+      idempotencyKey: null,
     });
+  });
+
+  // Audit 2026-11-27, finding 4: the composer's key reaches the create, read as the contract says.
+  it('hands the create the Idempotency-Key the contract names, and nothing that is not a UUID', async () => {
+    const { header, key } = mobileApiContract.endpoints.createPost.idempotency;
+    for (const [sent, read] of [[key, key], [key.toUpperCase(), key], ['mobile:abc', null]] as const) {
+      const createOwnerPostForRoute = vi.fn(async () => ({ ok: true as const, body: mobileApiContract.endpoints.createPost.idempotency.replay.response as never }));
+      await postPostsRouteResponse({
+        request: new Request('http://localhost/api/posts', { method: 'POST', headers: { [header]: sent }, body: new FormData() }),
+        dependencies: {
+          createOwnerPostForRoute,
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: () => createUserClient('user-1'),
+        },
+      });
+      expect(createOwnerPostForRoute).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: read }));
+    }
   });
 
   it('maps post creation rate limits to standard backend rate-limit responses', async () => {
@@ -252,7 +271,25 @@ describe('posts route adapter service', () => {
       adminSupabase,
       ownerUserId: 'user-1',
       readFormData: expect.any(Function),
+      idempotencyKey: null,
     });
+  });
+
+  // Audit 2026-11-27, finding 4: the composer's key reaches the create, read as the contract says.
+  it('hands the create the Idempotency-Key the contract names, and nothing that is not a UUID', async () => {
+    const { header, key } = mobileApiContract.endpoints.createPost.idempotency;
+    for (const [sent, read] of [[key, key], [key.toUpperCase(), key], ['mobile:abc', null]] as const) {
+      const createOwnerPostForRoute = vi.fn(async () => ({ ok: true as const, body: mobileApiContract.endpoints.createPost.idempotency.replay.response as never }));
+      await postPostsRouteResponse({
+        request: new Request('http://localhost/api/posts', { method: 'POST', headers: { [header]: sent }, body: new FormData() }),
+        dependencies: {
+          createOwnerPostForRoute,
+          createServiceClient: vi.fn(() => ({}) as SupabaseClient),
+          createUserClient: () => createUserClient('user-1'),
+        },
+      });
+      expect(createOwnerPostForRoute).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: read }));
+    }
   });
 
   it('maps owner post list failures to stable route errors', async () => {

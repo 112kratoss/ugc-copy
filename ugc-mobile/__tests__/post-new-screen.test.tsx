@@ -2346,6 +2346,21 @@ describe('mobile external post composer', () => {
       });
     }
 
+    // Audit 2026-11-27, finding 4: the retry goes under the first attempt's key, so the server
+    // answers the post that attempt made instead of making a second; a new post gets a new key.
+    it('sends the retry under the same Idempotency-Key, and a new post under a new one', async () => {
+      const tree = await failFirstPublish(new ApiError('Network request failed.', 0, { cause: 'Network request failed' }));
+      await publishAgain();
+      const keys = authState.api.createPost.mock.calls.map((call) => (call as unknown[])[1]);
+      expect(keys).toHaveLength(2);
+      expect(keys[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(keys[1]).toBe(keys[0]);
+      renderer.act(() => tree.unmount());
+
+      await failFirstPublish(new ApiError('Failed to publish post.', 500, { error: 'Failed to publish post.' }));
+      expect((authState.api.createPost.mock.calls.at(-1) as unknown[])[1]).not.toBe(keys[0]);
+    });
+
     it.each([
       ['no answer came back', new ApiError('Network request failed. Please check your connection and try again.', 0, {
         url: 'https://magicbooklet.com/api/posts',
