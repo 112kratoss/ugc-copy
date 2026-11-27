@@ -33,6 +33,7 @@ import { RecipeUnlockedNotice } from '@/components/recipe-unlocked-notice';
 import { nativeMenuTouchGuardProps } from '@/lib/native-menu-shield';
 import { SignOutOverlay } from '@/components/sign-out-overlay';
 import { CriticalUpdateSheet } from '@/components/critical-update-sheet';
+import { useIapLaunchConfiguration } from '@/lib/use-iap-launch-configuration';
 import { useOtaUpdateGate } from '@/lib/use-ota-update-gate';
 import { useRootRemountReload } from '@/lib/root-remount-reload-native';
 import {
@@ -286,6 +287,7 @@ function RootLayoutNav() {
           <SessionRejectedCoordinator />
           <AccountDeletingCoordinator />
           <OtaUpdateCoordinator />
+          <IapLaunchCoordinator shellReady={shellReady} />
           <MediaDiagnosticsCoordinator />
           <SaverNoticeSync />
           <SafeAreaProvider>
@@ -607,6 +609,15 @@ function OtaUpdateCoordinator() {
       visible={criticalPromptVisible}
     />
   );
+}
+
+function IapLaunchCoordinator({ shellReady }: { shellReady: boolean }) {
+  // RevenueCat for the current identity, once after launch and again when the identity changes
+  // (lib/iap-launch-configuration.ts), so a purchase the store approved later reaches the account
+  // without the Credits tab being opened. Never part of sign-in or the first frames.
+  const { identityUserId } = useAuth();
+  useIapLaunchConfiguration(identityUserId, shellReady);
+  return null;
 }
 
 function MediaDiagnosticsCoordinator() {

@@ -51,7 +51,19 @@ function platformApiKey(os: 'ios' | 'android' | 'web' | string) {
   return '';
 }
 
-export async function configureIapForUser(userId: string | null, os: 'ios' | 'android' | 'web' | string) {
+/**
+ * One setup at a time. The launch (`use-iap-launch-configuration.ts`) and the Credits tab both ask,
+ * and two calls that each read `isConfigured()` as false would both call `configure`.
+ */
+let configureQueue: Promise<unknown> = Promise.resolve();
+
+export function configureIapForUser(userId: string | null, os: 'ios' | 'android' | 'web' | string): Promise<boolean> {
+  const run = configureQueue.then(() => configureIapForUserNow(userId, os));
+  configureQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function configureIapForUserNow(userId: string | null, os: 'ios' | 'android' | 'web' | string) {
   if (!isIapConfigured(os) || !userId) {
     return false;
   }
