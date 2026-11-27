@@ -1582,8 +1582,8 @@ export function useMediaZoomStage({
   // (~120 ms on the S24), ran before the release could, and the landed picture
   // stood over its tile, and over the tab bar or status strip in front of it,
   // for that long (review of #947). A frame after the release, so the layer's
-  // commit is on screen before that render starts. The safety net in `dismiss`
-  // still pops a reel whose picture is never let go.
+  // commit is on screen before that render starts. The safety net
+  // (`armCloseBackstop`) still pops a reel whose picture is never let go.
   const releaseWaitRef = useRef<(() => void) | null>(null);
   const leaveOnceReleased = useCallback(() => {
     const landed = getHeldZoomPicture();
@@ -1601,6 +1601,26 @@ export function useMediaZoomStage({
     releaseWaitRef.current = stopWaiting;
   }, [leave]);
   useEffect(() => () => releaseWaitRef.current?.(), []);
+
+  // The net that keeps a closing reel from sticking: `leave`, once, if
+  // nothing else has by then. Armed at the press for a close that never takes
+  // off (a tile that never answers its measure, a flight another one
+  // replaced), and armed again from the take-off of a close that pops at its
+  // landing. Timed from the press alone, it reached a picture whose copy took
+  // its whole draw deadline, flew ~200 ms and waited ~3 frames for the release
+  // (~600–650 ms at 60 Hz) before it had landed on a busy thread, and popped
+  // the reel mid-flight or before the picture let go (review of #947).
+  const closeBackstopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armCloseBackstop = useCallback(() => {
+    if (closeBackstopRef.current) clearTimeout(closeBackstopRef.current);
+    closeBackstopRef.current = setTimeout(() => {
+      closeBackstopRef.current = null;
+      leave();
+    }, DISMISS_SAFETY_MS + RETURN_DRAWN_DEADLINE_MS);
+  }, [leave]);
+  useEffect(() => () => {
+    if (closeBackstopRef.current) clearTimeout(closeBackstopRef.current);
+  }, []);
 
   // A reel that goes without closing — replaced after its post is deleted, a
   // deep link, a reset of the stack — must not leave the screen beneath it
@@ -2013,7 +2033,7 @@ export function useMediaZoomStage({
     // A recycled/detached source's native measure callback may never arrive.
     // Arm recovery before asking for geometry, otherwise dismissal disables
     // interaction forever while its only safety timer waits inside the callback.
-    setTimeout(leave, DISMISS_SAFETY_MS + RETURN_DRAWN_DEADLINE_MS);
+    armCloseBackstop();
     // The screen beneath is drawn again from the close's first frame.
     setZoomUnderlayHidden(false);
     // A picture closes alone (`ZoomGeometry.pictureOnly`): the layer carries it
@@ -2179,9 +2199,13 @@ export function useMediaZoomStage({
           }
           // Out of sight from this frame, and moving from the next: the copy
           // covers the picture's place for a frame first, as it did. The pop
-          // comes once it has landed (the flight's `landed`, above).
+          // comes once it has landed (the flight's `landed`, above), and the
+          // net is timed from the take-off, not the press.
           if (popsAtLanding) {
-            requestAnimationFrame(takeOffZoomFlight);
+            requestAnimationFrame(() => {
+              takeOffZoomFlight();
+              armCloseBackstop();
+            });
             return;
           }
           requestAnimationFrame(() => {
@@ -2202,13 +2226,17 @@ export function useMediaZoomStage({
       }
       closeRef.current = { id: flight.id, live, dissolves, popsAtLanding };
       ownFlightRef.current = flight.id;
-      // A live close is moving already: the reel's own window shrinks from here.
-      if (live) closeSetsOff();
+      // A live close is moving already: the reel's own window shrinks from
+      // here, and pops at its landing, so the net is timed from here too.
+      if (live) {
+        closeSetsOff();
+        armCloseBackstop();
+      }
       // With no layer to step it the flight has already landed.
       if ((live || popsAtLanding) && !getZoomFlight()) leave();
     });
     measureTile(TILE_REMEASURE_FRAMES);
-  }, [closeDissolves, closeSetsOff, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
+  }, [armCloseBackstop, closeDissolves, closeSetsOff, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
 
   const stageProps = useAnimatedProps(() => ({
     pointerEvents: interactive.value ? ('box-none' as const) : ('auto' as const),

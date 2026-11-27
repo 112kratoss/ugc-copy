@@ -79,6 +79,7 @@ vi.mock('react-native-reanimated', async () => {
 
 import { MediaZoomFlightLayer, useMediaZoomStage } from '../components/media-zoom';
 import {
+  beginZoomFlight,
   clearPendingZoomOrigin,
   getHeldZoomPicture,
   getZoomFlight,
@@ -95,8 +96,20 @@ const TILE = { x: 16, y: 300, width: 180, height: 240 };
 const PICTURE = { url: 'https://example.test/post.display.webp', cacheKey: 'post:display', thumbhash: null };
 /** The tile's own picture, which a close begun before the reel was uncovered turns round with. */
 const TILE_PICTURE = { url: 'https://example.test/post.tile.webp', cacheKey: 'post:tile', thumbhash: null };
-/** The longest a close waits for its landing before the reel is popped anyway (`DISMISS_SAFETY_MS` + `RETURN_DRAWN_DEADLINE_MS`). */
+/**
+ * The net that pops a closing reel whatever happens (`DISMISS_SAFETY_MS` +
+ * `RETURN_DRAWN_DEADLINE_MS`): from the press for a close that never takes
+ * off, and from take-off for one that pops at its landing.
+ */
 const SAFETY_MS = 670;
+/** The longest a picture closing alone waits for its copy to draw (`PICTURE_CLOSE_DRAW_DEADLINE_MS`). */
+const DRAW_DEADLINE_MS = 300;
+/**
+ * A picture the layer has never drawn. The layer remembers the last picture it
+ * drew (module state no reset clears), and a close of that one is shown at
+ * once, so a close that has to wait for its copy needs a picture of its own.
+ */
+const unseenPicture = (name: string): ZoomPreview => ({ url: `https://example.test/${name}.display.webp`, cacheKey: `${name}:display`, thumbhash: null });
 
 /** Every host node answers measurement, as a mounted native view does. */
 const createNodeMock = () => ({
@@ -257,17 +270,73 @@ describe('a picture closing alone, on Android', () => {
     renderer.act(() => tree.unmount());
   });
 
-  it('still pops the reel when the close never lands', () => {
+  it('still pops the reel when the close never lands, timed from take-off', () => {
     const { tree, exit, dismiss } = openReel();
     renderer.act(() => dismiss());
     copyDrawn(tree);
     advance(16);
     expect(timeline).toEqual(['close set off', 'flight frames on']);
 
-    // No frames reach the flight: the safety net, from the press.
-    advance(SAFETY_MS - 32);
+    // No frames reach the flight: the safety net, from the take-off a frame
+    // after the press.
+    advance(SAFETY_MS - 1);
     expect(exit).not.toHaveBeenCalled();
+    advance(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    advance(2000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  // Review of #947: timed from the press, the net reached a close whose copy
+  // took its whole draw deadline, flew ~200 ms and waited ~3 frames for the
+  // release (~600–650 ms at 60 Hz) before it had landed on a busy thread, and
+  // popped the reel mid-flight or before the picture let go.
+  it('leaves a close whose copy was slow to draw to land and let go before the reel goes', () => {
+    const { tree, exit, dismiss } = openReel({ picture: unseenPicture('slow-to-draw') });
+    renderer.act(() => dismiss());
+
+    // The copy never says it has drawn: the flight goes on its deadline.
+    advance(DRAW_DEADLINE_MS);
+    expect(timeline).toEqual(['close set off']);
+    advance(16);
+    expect(timeline).toEqual(['close set off', 'flight frames on']);
+
+    // A busy thread: no frame reaches the flight for 300 ms, then a frame
+    // each 16 ms until it lands, well past the press's 670 ms.
+    advance(300);
+    for (let frame = 0; frame < 40 && getZoomFlight(); frame += 1) {
+      advance(16);
+      renderer.act(() => { frames.step?.({ timeSincePreviousFrame: 16 }); });
+    }
+    expect(getZoomFlight()).toBeNull();
+    expect(exit).not.toHaveBeenCalled();
+
     advance(32);
+    expect(getHeldZoomPicture()).toBeNull();
+    expect(exit).not.toHaveBeenCalled();
+    advance(16);
+    expect(timeline).toEqual(['close set off', 'flight frames on', 'flight frames off', 'picture let go', 'reel popped']);
+    advance(2000);
+    expect(exit).toHaveBeenCalledTimes(1);
+    renderer.act(() => tree.unmount());
+  });
+
+  // The press's net still stands for a close that never takes off: here its
+  // flight is replaced by another before its copy draws, so it is never
+  // shown, never moves and never lands.
+  it('still pops the reel when the close never takes off, timed from the press', () => {
+    const { tree, exit, dismiss } = openReel({ picture: unseenPicture('never-drawn') });
+    renderer.act(() => dismiss());
+    const close = getZoomFlight();
+    renderer.act(() => {
+      beginZoomFlight({ direction: 'open', geometry: close!.geometry, preview: TILE_PICTURE, still: true });
+    });
+
+    advance(SAFETY_MS - 1);
+    expect(timeline).toEqual([]);
+    expect(exit).not.toHaveBeenCalled();
+    advance(1);
     expect(exit).toHaveBeenCalledTimes(1);
     advance(2000);
     expect(exit).toHaveBeenCalledTimes(1);
