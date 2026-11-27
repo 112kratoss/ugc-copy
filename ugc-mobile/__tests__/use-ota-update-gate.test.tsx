@@ -274,7 +274,7 @@ describe('the OTA gate’s check on return', () => {
   beforeEach(() => { resetAppReloadClaim(); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it('checks and fetches after a long absence, and the fetched update reloads', async () => {
+  it('checks and fetches after a long absence, and applies the fetch only at the next long return', async () => {
     const clock = fakeClock();
     api.getAppVersion.mockResolvedValue(appVersion(null));
     updates.checkForUpdateAsync.mockResolvedValueOnce({ isAvailable: true });
@@ -290,6 +290,10 @@ describe('the OTA gate’s check on return', () => {
 
     await act(async () => { tree.update(<GateProbe />); });
     await settle();
+    // Someone may have started typing since the return: no reload in the foreground.
+    expect(updates.reloadAsync).not.toHaveBeenCalled();
+
+    await returnAfter(THRESHOLD + 1, clock);
     expect(updates.reloadAsync).toHaveBeenCalledTimes(1);
   });
 

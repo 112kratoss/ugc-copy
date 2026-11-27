@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { FOREGROUND_RELOAD_THRESHOLD_MS } from '../lib/app-update-policy';
 import {
-  FETCHED_UPDATE_APPLY_WINDOW_MS,
   OTA_CHECK_MIN_INTERVAL_MS,
   checkAndFetchUpdate,
   effectiveBackgroundedForMs,
@@ -76,20 +75,21 @@ describe('checking and fetching', () => {
   });
 });
 
-// A download that lands long after the return must not reload under someone already using the app.
+// The check only downloads: an update it fetched never reloads the app in the foreground, where
+// someone may have started typing. The gate applies it at the next long return or cold start.
 describe('how long the gate reads the app as away', () => {
   const away = FOREGROUND_RELOAD_THRESHOLD_MS + 1;
 
   it('keeps the absence for an update that waited at the return', () => {
-    expect(effectiveBackgroundedForMs({ backgroundedForMs: away, pendingAtReturn: true, returnedAtMs: NOW - 3_600_000, nowMs: NOW })).toBe(away);
+    expect(effectiveBackgroundedForMs({ backgroundedForMs: away, pendingAtReturn: true, returnedAtMs: NOW - 3_600_000 })).toBe(away);
   });
 
-  it('keeps it for an update fetched just after the return, and drops it once that window has passed', () => {
-    expect(effectiveBackgroundedForMs({ backgroundedForMs: away, pendingAtReturn: false, returnedAtMs: NOW - 5_000, nowMs: NOW })).toBe(away);
-    expect(effectiveBackgroundedForMs({ backgroundedForMs: away, pendingAtReturn: false, returnedAtMs: NOW - FETCHED_UPDATE_APPLY_WINDOW_MS - 1, nowMs: NOW })).toBe(0);
+  it('reads an update that arrived after the return as not away, however soon it landed', () => {
+    expect(effectiveBackgroundedForMs({ backgroundedForMs: away, pendingAtReturn: false, returnedAtMs: NOW - 1 })).toBe(0);
+    expect(effectiveBackgroundedForMs({ backgroundedForMs: away, pendingAtReturn: false, returnedAtMs: NOW - 60_000 })).toBe(0);
   });
 
   it('keeps it before any return (a cold start)', () => {
-    expect(effectiveBackgroundedForMs({ backgroundedForMs: 0, pendingAtReturn: false, returnedAtMs: null, nowMs: NOW })).toBe(0);
+    expect(effectiveBackgroundedForMs({ backgroundedForMs: 0, pendingAtReturn: false, returnedAtMs: null })).toBe(0);
   });
 });

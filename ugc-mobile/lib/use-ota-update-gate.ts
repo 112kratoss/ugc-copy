@@ -112,7 +112,6 @@ export function useOtaUpdateGate(api: Pick<MagicbookletApiClient, 'getAppVersion
         backgroundedForMs: clockRef.current.backgroundedForMs,
         pendingAtReturn: pendingAtReturnRef.current,
         returnedAtMs: returnedAtRef.current,
-        nowMs: Date.now(),
       }),
       criticalPromptDismissed: dismissedRef.current,
     });
