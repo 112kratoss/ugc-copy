@@ -10,7 +10,7 @@ import {
   hasDueAccountDeletionCleanup,
   processAccountDeletionCleanup,
 } from '@/lib/account-deletion-service';
-import { logBackendEvent } from '@/lib/backend-logger';
+import { logBackendError, logBackendEvent } from '@/lib/backend-logger';
 import {
   deliverBackendAlerts,
   getBackendAlertDeliveryNotConfiguredSummary,
@@ -44,8 +44,13 @@ import { hasDueGenerationOutputImportJobs } from '@/lib/generation-output-import
 import {
   hasDueGenerationOutputImportRetries,
   retryOrAbandonExhaustedGenerationOutputImports,
+  type GenerationOutputImportRetrySummary,
 } from '@/lib/generation-output-import-retries';
-import { hasStaleAiUsageCharges, refundStaleAiUsageCharges } from '@/lib/stale-ai-usage-refunds';
+import {
+  hasStaleAiUsageCharges,
+  refundStaleAiUsageCharges,
+  type StaleAiUsageRefundSummary,
+} from '@/lib/stale-ai-usage-refunds';
 import {
   GENERATION_OUTPUT_IMPORT_BATCH_LIMIT,
   processGenerationOutputImportJobs,
@@ -122,6 +127,20 @@ const GENERATION_COMPLETION_BATCH_LIMIT = 25;
  * The cheap, money-settling sweeps (exhausted imports, stale AI charges) run
  * right after the drain, so a slow provider in the reaper cannot starve them.
  */
+/**
+ * A has-work probe of the run's safety-net sweeps. One that cannot read is
+ * taken as work, so the run (and the reaper behind it) still happens, and the
+ * sweep's own read reports the failure.
+ */
+async function probeOrAssumeWork(name: string, probe: () => Promise<boolean>): Promise<boolean> {
+  try {
+    return await probe();
+  } catch (error) {
+    logBackendError('generation_completions_probe_failed', { probe: name, error });
+    return true;
+  }
+}
+
 export const GENERATION_COMPLETIONS_RUN_DEADLINES_MS = {
   completionDrain: 90_000,
   stalledReaper: 150_000,
@@ -439,8 +458,12 @@ export function runGenerationCompletionsBackendJob(options: {
       || await hasDueGenerationOutputImportJobs(client)
       || await hasStalledGenerationWork(client, { nowMs: context.startedAtMs })
       || await hasQueuedProviderSubmissions(client)
-      || await hasDueGenerationOutputImportRetries(client, { nowMs: context.startedAtMs })
-      || await hasStaleAiUsageCharges(client, { nowMs: context.startedAtMs })
+      || await probeOrAssumeWork('output_import_retries', () => (
+        hasDueGenerationOutputImportRetries(client, { nowMs: context.startedAtMs })
+      ))
+      || await probeOrAssumeWork('stale_ai_usage_charges', () => (
+        hasStaleAiUsageCharges(client, { nowMs: context.startedAtMs })
+      ))
     ),
     onNoWork: async (client, context) => ({
       pruned: await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs }),
@@ -467,20 +490,38 @@ export function runGenerationCompletionsBackendJob(options: {
         completionFailure = error;
         completionSummary = error.summary;
       }
+      // The two sweeps below are caught like the drain: a batch read that
+      // fails must not switch off the reaper, the imports, the queue backstop
+      // or the wake-ups. Their failure fails the run, at the end.
+      let sweepFailure: unknown = null;
       // A provider-finished generation whose file could not be stored: its
       // exhausted import is reopened hourly, then failed and refunded once the
       // provider's file can no longer be there.
-      const outputImportRetries = await retryOrAbandonExhaustedGenerationOutputImports({
-        client,
-        nowMs: context.startedAtMs,
-        deadlineMs: deadline('outputImports'),
-      });
+      let outputImportRetries: GenerationOutputImportRetrySummary = {
+        eligible: 0, reopened: 0, abandoned: 0, skipped: 0, failed: 0, deferred: 0,
+      };
+      try {
+        outputImportRetries = await retryOrAbandonExhaustedGenerationOutputImports({
+          client,
+          nowMs: context.startedAtMs,
+          deadlineMs: deadline('outputImports'),
+        });
+      } catch (error) {
+        sweepFailure ??= error;
+        logBackendError('generation_output_import_retry_sweep_failed', { error });
+      }
       // A prompt-enhancement or assistant charge whose request died unsettled.
-      const aiUsageRefunds = await refundStaleAiUsageCharges({
-        client,
-        nowMs: context.startedAtMs,
-        deadlineMs: deadline('outputImports'),
-      });
+      let aiUsageRefunds: StaleAiUsageRefundSummary = { eligible: 0, refunded: 0, skipped: 0, failed: 0, deferred: 0 };
+      try {
+        aiUsageRefunds = await refundStaleAiUsageCharges({
+          client,
+          nowMs: context.startedAtMs,
+          deadlineMs: deadline('outputImports'),
+        });
+      } catch (error) {
+        sweepFailure ??= error;
+        logBackendError('ai_usage_stale_pending_sweep_failed', { error });
+      }
       // Webhook-less safety net: reconcile stalled generations that the
       // durable completion queue never heard about (missed webhook, closed
       // app) so credit holds cannot linger forever. Bounded and idempotent.
@@ -525,6 +566,7 @@ export function runGenerationCompletionsBackendJob(options: {
         : null;
       const pruned = await maybePruneGenerationCompletionJobs(client, { nowMs: context.startedAtMs });
       if (completionFailure) throw completionFailure;
+      if (sweepFailure) throw sweepFailure;
       return {
         ...completionSummary,
         stalled,

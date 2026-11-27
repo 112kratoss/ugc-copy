@@ -541,6 +541,48 @@ describe('/api/cron/generation-completions route', () => {
     expect(response.status).toBe(500);
   });
 
+  it.each([
+    ['the exhausted-import sweep', 'retryOrAbandonExhaustedGenerationOutputImports'],
+    ['the stale AI charge sweep', 'refundStaleAiUsageCharges'],
+  ] as const)('keeps the safety net running when %s cannot read its batch, then fails the run', async (_label, sweep) => {
+    mocks[sweep].mockRejectedValueOnce(new Error('sweep read failed'));
+
+    const { GET } = await import('@/app/api/cron/generation-completions/route');
+    const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+      headers: { authorization: 'Bearer secret-123' },
+    }));
+
+    expect(mocks.reapStalledGenerations).toHaveBeenCalled();
+    expect(mocks.processGenerationOutputImportJobs).toHaveBeenCalled();
+    expect(mocks.driveQueuedSubmissions).toHaveBeenCalled();
+    expect(mocks.processWorkflowRunStepJobs).toHaveBeenCalled();
+    expect(mocks.processTemplateRunJobs).toHaveBeenCalled();
+    expect(mocks.retryOrAbandonExhaustedGenerationOutputImports).toHaveBeenCalled();
+    expect(mocks.refundStaleAiUsageCharges).toHaveBeenCalled();
+    expect(mocks.finishBackendJobRun).toHaveBeenCalledWith(
+      { service: 'supabase' },
+      expect.objectContaining({ id: 'run-1' }),
+      expect.objectContaining({ status: 'failed', errorMessage: 'sweep read failed' }),
+    );
+    expect(response.status).toBe(500);
+  });
+
+  it.each(['hasDueGenerationOutputImportRetries', 'hasStaleAiUsageCharges'] as const)(
+    'runs rather than fails when the %s probe cannot read',
+    async (probe) => {
+      mocks.hasDueGenerationCompletionJobs.mockResolvedValueOnce(false);
+      mocks[probe].mockRejectedValueOnce(new Error('probe read failed'));
+
+      const { GET } = await import('@/app/api/cron/generation-completions/route');
+      const response = await GET(new Request('http://localhost/api/cron/generation-completions', {
+        headers: { authorization: 'Bearer secret-123' },
+      }));
+
+      expect(response.status).toBe(200);
+      expect(mocks.reapStalledGenerations).toHaveBeenCalled();
+    },
+  );
+
   it('aborts the run when the completion batch could not be claimed at all', async () => {
     mocks.processGenerationCompletionJobs.mockRejectedValue(new Error('database unavailable'));
 
