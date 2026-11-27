@@ -11,11 +11,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const MAX_ROWS = 1000;
 
 type Call = { kind: 'from' | 'rpc'; name: string; args?: unknown; filters: string[]; orders: string[]; range?: [number, number] };
-const state: { posts: Array<Record<string, unknown>>; creators: Array<Record<string, unknown>>; calls: Call[]; failOnCall: number | null } = {
+const state: {
+    posts: Array<Record<string, unknown>>;
+    creators: Array<Record<string, unknown>>;
+    calls: Call[];
+    failOnCall: number | null;
+    /** Runs after each page is answered: live data changing between two reads. */
+    afterPage: (() => void) | null;
+} = {
     posts: [],
     creators: [],
     calls: [],
     failOnCall: null,
+    afterPage: null,
 };
 
 function builder(call: Call, rows: () => Array<Record<string, unknown>>) {
@@ -35,6 +43,7 @@ function builder(call: Call, rows: () => Array<Record<string, unknown>>) {
             }
             const all = rows();
             const page = all.slice(from, Math.min(to + 1, from + MAX_ROWS));
+            state.afterPage?.();
             return Promise.resolve({ data: page, error: null });
         },
     };
@@ -75,6 +84,7 @@ beforeEach(() => {
     state.creators = [];
     state.calls = [];
     state.failOnCall = null;
+    state.afterPage = null;
 });
 
 describe('showcase sitemap entries', () => {
@@ -101,6 +111,15 @@ describe('showcase sitemap entries', () => {
         expect((await getIndexableShowcasePosts()).map((row) => row.id)).toEqual([post(1).id]);
     });
 
+    it('lists a post once when a new one shifts the pages between two reads', async () => {
+        state.posts = Array.from({ length: 2500 }, (_, i) => post(i + 10));
+        let created = 0;
+        state.afterPage = () => { state.posts.unshift(post(9 - created)); created += 1; };
+        const ids = (await getIndexableShowcasePosts()).map((row) => row.id);
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(ids).toEqual(expect.arrayContaining(Array.from({ length: 2500 }, (_, i) => post(i + 10).id)));
+    });
+
     it('lists nothing when a page fails, as a failed read always did', async () => {
         state.posts = Array.from({ length: 2500 }, (_, i) => post(i));
         state.failOnCall = 1;
@@ -121,6 +140,15 @@ describe('creator sitemap entries', () => {
         expect(reads.every((call) => call.kind === 'rpc' && call.name === 'list_sitemap_creators')).toBe(true);
         expect(reads[0].args).toEqual({ p_min_posts: 1, p_limit: 2000 });
         expect(reads.every((call) => call.orders.join(',') === 'last_posted_at desc,username asc')).toBe(true);
+    });
+
+    it('lists a creator once when another one posts between two reads', async () => {
+        state.creators = Array.from({ length: 1500 }, (_, i) => ({ username: `creator-${i}`, last_posted_at: null }));
+        let posted = 0;
+        state.afterPage = () => { state.creators.unshift({ username: `newcomer-${posted}`, last_posted_at: null }); posted += 1; };
+        const names = (await getIndexableCreators()).map((row) => row.username);
+        expect(new Set(names).size).toBe(names.length);
+        expect(names).toEqual(expect.arrayContaining(Array.from({ length: 1500 }, (_, i) => `creator-${i}`)));
     });
 
     it('lists nothing when the read fails', async () => {

@@ -34,18 +34,26 @@ const API_PAGE_SIZE = 1000;
 type PageResult<T> = PromiseLike<{ data: T[] | null; error: unknown }>;
 
 /**
- * Up to `limit` rows, read page by page. Each page starts where the rows received so far end, and
- * the read stops at the first empty page, so a server cap below API_PAGE_SIZE costs pages, not
- * rows. `readPage` must apply a total order, or pages can repeat or skip rows.
+ * Up to `limit` distinct rows, read page by page. Each page starts where the rows received so far
+ * end, and the read stops at the first empty page, so a server cap below API_PAGE_SIZE costs
+ * pages, not rows. `readPage` must apply a total order, or pages can repeat or skip rows.
+ *
+ * Live data moves between two reads: a post created, or a creator posting, ahead of the offset
+ * shifts the next page by one, which then repeats the last row of the page before. Rows are kept
+ * once by `keyOf`; a row shifted past the end of the list waits for the next sitemap. A page
+ * that adds no new row ends the read, so rows arriving faster than pages cannot keep it going.
  */
 async function readOrderedPages<T>(
     limit: number,
+    keyOf: (row: T) => string,
     readPage: (from: number, to: number) => PageResult<T>,
 ): Promise<{ rows: T[]; error: unknown }> {
     const rows: T[] = [];
+    const seen = new Set<string>();
+    let received = 0;
     while (rows.length < limit) {
-        const from = rows.length;
-        const to = Math.min(from + API_PAGE_SIZE, limit) - 1;
+        const from = received;
+        const to = from + Math.min(API_PAGE_SIZE, limit - rows.length) - 1;
         const { data, error } = await readPage(from, to);
         if (error) {
             return { rows: [], error };
@@ -53,7 +61,17 @@ async function readOrderedPages<T>(
         if (!data || data.length === 0) {
             break;
         }
-        rows.push(...data.slice(0, limit - rows.length));
+        received += data.length;
+        const before = rows.length;
+        for (const row of data) {
+            const key = keyOf(row);
+            if (seen.has(key) || rows.length >= limit) continue;
+            seen.add(key);
+            rows.push(row);
+        }
+        if (rows.length === before) {
+            break;
+        }
     }
     return { rows, error: null };
 }
@@ -123,7 +141,7 @@ export async function getIndexableShowcasePosts(): Promise<ShowcaseSitemapRow[]>
     try {
         const supabase = createServiceClient();
         // `id` breaks ties between posts created in the same instant, so pages neither repeat nor skip.
-        const { rows, error } = await readOrderedPages<ShowcaseSitemapRow>(SHOWCASE_URL_LIMIT, (from, to) => supabase
+        const { rows, error } = await readOrderedPages<ShowcaseSitemapRow>(SHOWCASE_URL_LIMIT, (row) => row.id, (from, to) => supabase
             .from('posts')
             .select('id, title, output_url, showcase_asset_path, created_at, updated_at')
             .eq('visibility', 'public')
@@ -174,6 +192,7 @@ export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
         // `username` is unique, so the order is total and the pages are stable.
         const { rows, error } = await readOrderedPages<{ username: string; last_posted_at: string | null }>(
             CREATOR_URL_LIMIT,
+            (row) => row.username,
             (from, to) => supabase
                 .rpc('list_sitemap_creators', { p_min_posts: MIN_PUBLIC_POSTS_FOR_INDEXING, p_limit: CREATOR_URL_LIMIT })
                 .order('last_posted_at', { ascending: false })
