@@ -66,6 +66,8 @@ const HOUR = 60 * 60 * 1000;
 function exhaustedJob(overrides: Record<string, unknown> = {}) {
   return {
     id: 'import-1',
+    status: 'failed',
+    locked_at: null,
     generation_id: 'generation-1',
     prediction_id: 'task-1',
     provider_completed_at: new Date(NOW_MS - 5 * HOUR).toISOString(),
@@ -101,14 +103,16 @@ describe('exhausted generation output imports', () => {
 
     const calls = builders[0].calls;
     expect(calls).toContainEqual(['select', [expect.stringContaining('generations!inner(')]]);
-    expect(calls).toContainEqual(['eq', ['status', 'failed']]);
+    // Every import that has not succeeded: an exhausted one due its retry, and
+    // any (failed, pending, or processing under a dead worker) past its window.
+    expect(calls).toContainEqual(['in', ['status', ['failed', 'pending', 'processing']]]);
     expect(calls).toContainEqual(['in', ['generations.status', ['waiting', 'processing']]]);
     expect(calls).toContainEqual(['or', [[
-      'completed_at.lte.2026-11-27T11:00:00.000Z',
+      'and(status.eq.failed,completed_at.lte.2026-11-27T11:00:00.000Z)',
       'created_at.lte.2026-11-26T12:00:00.000Z',
       'provider_completed_at.lte.2026-11-26T12:00:00.000Z',
     ].join(',')]]);
-    expect(calls).toContainEqual(['order', ['completed_at', { ascending: true }]]);
+    expect(calls).toContainEqual(['order', ['created_at', { ascending: true }]]);
   });
 
   it('reopens an exhausted import an hour after its last attempt while the provider file may still exist', async () => {
@@ -149,7 +153,7 @@ describe('exhausted generation output imports', () => {
       completed_at: new Date(NOW_MS - 10 * 60_000).toISOString(),
     });
     const { client, builders, rpc } = createClient(
-      [{ data: [job], error: null }],
+      [{ data: [job], error: null }, { data: null, error: null }],
       [{ data: { status: 'failed', refunded: true }, error: null }],
     );
 
@@ -162,8 +166,62 @@ describe('exhausted generation output imports', () => {
       p_error_message: GENERATION_OUTPUT_IMPORT_ABANDONED_MESSAGE,
     });
     expect(mocks.notify).toHaveBeenCalledExactlyOnceWith(client, job.generations, 'failed');
-    // Nothing reopens it: the generation is terminal now.
-    expect(builders).toHaveLength(1);
+    // Nothing reopens it: the job is closed, conditional on the state it was read in.
+    expect(builders).toHaveLength(2);
+    expect(builders[1].calls).toEqual([
+      ['update', [{ status: 'cancelled', locked_at: null, locked_by: null, updated_at: '2026-11-27T12:00:00.000Z' }]],
+      ['eq', ['id', 'import-1']],
+      ['eq', ['status', 'failed']],
+    ]);
+  });
+
+  describe('an import whose worker was killed mid-run', () => {
+    const pastWindow = {
+      provider_completed_at: new Date(NOW_MS - 25 * HOUR).toISOString(),
+      created_at: new Date(NOW_MS - 25 * HOUR).toISOString(),
+      completed_at: null,
+    };
+
+    it('fails and refunds the generation once its window has ended, and closes the job', async () => {
+      const job = exhaustedJob({ ...pastWindow, status: 'processing', locked_at: new Date(NOW_MS - 10 * 60_000).toISOString() });
+      const { client, builders, rpc } = createClient(
+        [{ data: [job], error: null }, { data: null, error: null }],
+        [{ data: { status: 'failed', refunded: true }, error: null }],
+      );
+
+      const summary = await retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS });
+
+      expect(summary).toMatchObject({ abandoned: 1, failed: 0 });
+      expect(rpc).toHaveBeenCalledExactlyOnceWith('settle_generation_failed', expect.objectContaining({ p_prediction_id: 'task-1' }));
+      expect(mocks.notify).toHaveBeenCalledTimes(1);
+      expect(builders[1].calls).toContainEqual(['eq', ['status', 'processing']]);
+    });
+
+    it('also ends a job left pending past its window', async () => {
+      const { client, rpc } = createClient(
+        [{ data: [exhaustedJob({ ...pastWindow, status: 'pending' })], error: null }, { data: null, error: null }],
+        [{ data: { status: 'failed', refunded: true }, error: null }],
+      );
+      await expect(retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ abandoned: 1 });
+      expect(rpc).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a job whose worker still holds a live lease, even past the window', async () => {
+      const job = exhaustedJob({ ...pastWindow, status: 'processing', locked_at: new Date(NOW_MS - 60_000).toISOString() });
+      const { client, rpc } = createClient([{ data: [job], error: null }]);
+      await expect(retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ abandoned: 0, skipped: 1 });
+      expect(rpc).not.toHaveBeenCalled();
+    });
+
+    it('never reopens a job that is not failed', async () => {
+      const { client, rpc, builders } = createClient([{ data: [exhaustedJob({ status: 'pending', completed_at: null })], error: null }]);
+      await expect(retryOrAbandonExhaustedGenerationOutputImports({ client: client as never, nowMs: NOW_MS }))
+        .resolves.toMatchObject({ reopened: 0, skipped: 1 });
+      expect(rpc).not.toHaveBeenCalled();
+      expect(builders).toHaveLength(1);
+    });
   });
 
   it('announces nothing when the import landed first or the generation is gone, and keeps going after a settlement error', async () => {
@@ -177,7 +235,7 @@ describe('exhausted generation output imports', () => {
           exhaustedJob({ id: 'import-4', prediction_id: 'task-4', ...old }),
         ],
         error: null,
-      }],
+      }, { data: null, error: null }],
       [
         { data: { status: 'already_succeeded' }, error: null },
         { data: { status: 'missing' }, error: null },

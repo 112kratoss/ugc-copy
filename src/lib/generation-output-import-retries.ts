@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { logBackendError, logBackendInfo } from '@/lib/backend-logger';
+import { GENERATION_OUTPUT_IMPORT_LOCK_TTL_SECONDS } from '@/lib/generation-output-import-jobs';
 import { GenerationServiceError } from '@/lib/generation-service-core';
 import { settleGenerationFailed } from '@/lib/generation-settlement';
 import { notifyGenerationStatus, type GenerationNotificationSubject } from '@/lib/mobile-notifications';
@@ -60,10 +61,20 @@ export const GENERATION_OUTPUT_IMPORT_ABANDONED_MESSAGE =
   'The render finished, but its file could not be saved before the provider removed it. Your credits have been refunded.';
 
 const ACTIVE_GENERATION_STATUSES = ['waiting', 'processing'];
+/**
+ * Every state an import can be stuck in. A `failed` job is reopened hourly;
+ * past its window, any of them ends: `pending` (never claimed in time) and
+ * `processing` under a worker that died (its lease expired) included. A
+ * crash loop also exhausts by itself, since each expired lease the claim
+ * takes back counts as an attempt (migration 20261127060200).
+ */
+const UNFINISHED_IMPORT_STATUSES = ['failed', 'pending', 'processing'];
 const HOUR_MS = 60 * 60 * 1000;
 
 type ExhaustedImportRow = {
   id: string;
+  status: 'failed' | 'pending' | 'processing';
+  locked_at: string | null;
   generation_id: string;
   prediction_id: string;
   provider_completed_at: string | null;
@@ -93,7 +104,7 @@ function cutoffs(nowMs: number) {
 function dueFilter(nowMs: number): string {
   const { retryBeforeIso, giveUpBeforeIso } = cutoffs(nowMs);
   return [
-    `completed_at.lte.${retryBeforeIso}`,
+    `and(status.eq.failed,completed_at.lte.${retryBeforeIso})`,
     `created_at.lte.${giveUpBeforeIso}`,
     `provider_completed_at.lte.${giveUpBeforeIso}`,
   ].join(',');
@@ -103,7 +114,7 @@ function exhaustedImportsQuery(client: Pick<SupabaseClient, 'from'>, columns: st
   return client
     .from('generation_output_import_jobs')
     .select(columns)
-    .eq('status', 'failed')
+    .in('status', UNFINISHED_IMPORT_STATUSES)
     .in('generations.status', ACTIVE_GENERATION_STATUSES)
     .or(dueFilter(nowMs));
 }
@@ -145,6 +156,31 @@ async function abandon(
   return 'abandoned';
 }
 
+/**
+ * Closes the job of a generation settled here, conditional on the state it
+ * was read in, so nothing claims it again for a render that is already
+ * failed. Best effort: the settlement above is what matters, and a job left
+ * open only fails against the failed generation and stays out of the alert.
+ */
+async function close(client: SupabaseClient, row: ExhaustedImportRow, nowMs: number): Promise<void> {
+  try {
+    const { error } = await client
+      .from('generation_output_import_jobs')
+      .update({ status: 'cancelled', locked_at: null, locked_by: null, updated_at: new Date(nowMs).toISOString() })
+      .eq('id', row.id)
+      .eq('status', row.status);
+    if (error) throw error;
+  } catch (error) {
+    logBackendError('generation_output_import_close_failed', { importJobId: row.id, error });
+  }
+}
+
+function holdsLiveLease(row: ExhaustedImportRow, nowMs: number): boolean {
+  if (row.status !== 'processing') return false;
+  const lockedAtMs = row.locked_at ? Date.parse(row.locked_at) : Number.NaN;
+  return Number.isFinite(lockedAtMs) && nowMs - lockedAtMs < GENERATION_OUTPUT_IMPORT_LOCK_TTL_SECONDS * 1000;
+}
+
 async function reopen(client: SupabaseClient, row: ExhaustedImportRow, nowMs: number): Promise<boolean> {
   const nowIso = new Date(nowMs).toISOString();
   // Conditional on `failed`: only this pass reopens an exhausted import, and
@@ -161,7 +197,7 @@ async function reopen(client: SupabaseClient, row: ExhaustedImportRow, nowMs: nu
 
 /**
  * Reopens exhausted imports due their hourly retry and fails, refunds and
- * announces the ones whose window has ended. Bounded, and idempotent: a row it
+ * announces every unfinished one whose window has ended. Bounded, and idempotent: a row it
  * settles is no longer active, so it is never selected again.
  */
 export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
@@ -179,11 +215,11 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
 
   const { data, error } = await exhaustedImportsQuery(
     params.client,
-    'id, generation_id, prediction_id, provider_completed_at, created_at, completed_at, last_error, '
+    'id, status, locked_at, generation_id, prediction_id, provider_completed_at, created_at, completed_at, last_error, '
       + 'generations!inner(id, user_id, status, category, model, template_run_id)',
     nowMs,
   )
-    .order('completed_at', { ascending: true })
+    .order('created_at', { ascending: true })
     .limit(limit);
   if (error) throw error;
 
@@ -198,7 +234,18 @@ export async function retryOrAbandonExhaustedGenerationOutputImports(params: {
     }
     try {
       if (generationOutputImportWindowEnded(row, nowMs)) {
-        summary[await abandon(params.client, row)] += 1;
+        // A worker still inside its lease may be saving the file right now.
+        if (holdsLiveLease(row, nowMs)) {
+          summary.skipped += 1;
+          continue;
+        }
+        const outcome = await abandon(params.client, row);
+        if (outcome === 'abandoned') await close(params.client, row, nowMs);
+        summary[outcome] += 1;
+        continue;
+      }
+      if (row.status !== 'failed') {
+        summary.skipped += 1;
         continue;
       }
       const lastAttemptMs = row.completed_at ? Date.parse(row.completed_at) : Number.NaN;

@@ -22,8 +22,9 @@ COMMENT ON COLUMN public.generations.provider_sync_attempted_at IS
 --    provider's file may still be there, and its generation is failed and
 --    refunded when that window ends (src/lib/generation-output-import-retries.ts).
 --    A repeated enqueue still refreshes the output URLs of an unfinished job,
---    so the hourly retry uses the newest ones. Otherwise unchanged from
---    20260810107000_durable_generation_output_imports.sql.
+--    and reopens a failed one at once when the URLs differ (a later callback
+--    with a fresh render), without resetting its attempt count. Otherwise
+--    unchanged from 20260810107000_durable_generation_output_imports.sql.
 CREATE OR REPLACE FUNCTION public.enqueue_generation_output_import_job(
   p_generation_id uuid,
   p_output_urls jsonb,
@@ -74,12 +75,21 @@ BEGIN
       public.generation_output_import_jobs.provider_completed_at,
       excluded.provider_completed_at
     ),
+    -- A failed job reopens only for different URLs (a later callback with a
+    -- fresh render), keeping its attempt count: one more try, then the hourly
+    -- retry again. The same URLs again leave it failed.
     status = CASE
+      WHEN public.generation_output_import_jobs.status = 'failed'
+          AND public.generation_output_import_jobs.output_urls IS DISTINCT FROM excluded.output_urls
+        THEN 'pending'
       WHEN public.generation_output_import_jobs.status IN ('processing', 'succeeded', 'failed')
         THEN public.generation_output_import_jobs.status
       ELSE 'pending'
     END,
     next_attempt_at = CASE
+      WHEN public.generation_output_import_jobs.status = 'failed'
+          AND public.generation_output_import_jobs.output_urls IS DISTINCT FROM excluded.output_urls
+        THEN now()
       WHEN public.generation_output_import_jobs.status IN ('processing', 'succeeded', 'failed')
         THEN public.generation_output_import_jobs.next_attempt_at
       ELSE least(public.generation_output_import_jobs.next_attempt_at, now())
@@ -104,7 +114,69 @@ $function$;
 REVOKE ALL ON FUNCTION public.enqueue_generation_output_import_job(uuid, jsonb, timestamptz) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.enqueue_generation_output_import_job(uuid, jsonb, timestamptz) TO service_role;
 
--- 3. A captured Razorpay payment that does not match its order (amount,
+-- 3. A reclaimed lease counts as an attempt. Only the finish function added to
+--    attempt_count, so an import whose function was killed mid-run (past the
+--    route's limit, or out of memory on a large video) went processing, lease
+--    expired, reclaimed, killed again, for ever, and never reached failed:
+--    nothing then owned it. Now each reclaim of an expired lease adds one, and
+--    the reclaim that would use the last try (10, GENERATION_OUTPUT_IMPORT_MAX_
+--    ATTEMPTS in src/lib/generation-output-import-jobs.ts) marks the job failed
+--    instead, where the hourly retry and the 24-hour give-up own it. Otherwise
+--    unchanged from 20260810107000.
+CREATE OR REPLACE FUNCTION public.claim_generation_output_import_jobs(
+  p_limit integer,
+  p_locked_by text,
+  p_lock_ttl_seconds integer DEFAULT 300
+)
+RETURNS SETOF public.generation_output_import_jobs
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $function$
+BEGIN
+  IF btrim(coalesce(p_locked_by, '')) = '' THEN RAISE EXCEPTION 'locked_by is required'; END IF;
+
+  WITH crashed AS (
+    SELECT id
+    FROM public.generation_output_import_jobs
+    WHERE status = 'processing'
+      AND locked_at <= now() - make_interval(secs => greatest(p_lock_ttl_seconds, 1))
+      AND attempt_count + 1 >= 10
+    FOR UPDATE SKIP LOCKED
+  )
+  UPDATE public.generation_output_import_jobs AS jobs
+  SET status = 'failed', attempt_count = attempt_count + 1,
+      locked_at = NULL, locked_by = NULL,
+      last_error = left('Import worker stopped before finishing (lease expired); last error: '
+        || coalesce(jobs.last_error, 'none recorded'), 2000),
+      completed_at = now(), updated_at = now()
+  FROM crashed
+  WHERE jobs.id = crashed.id;
+
+  RETURN QUERY
+  WITH candidates AS (
+    SELECT id
+    FROM public.generation_output_import_jobs
+    WHERE (status = 'pending' AND next_attempt_at <= now())
+       OR (status = 'processing' AND locked_at <= now() - make_interval(secs => greatest(p_lock_ttl_seconds, 1)))
+    ORDER BY next_attempt_at, created_at
+    LIMIT least(greatest(p_limit, 1), 25)
+    FOR UPDATE SKIP LOCKED
+  )
+  UPDATE public.generation_output_import_jobs AS jobs
+  SET status = 'processing',
+      attempt_count = jobs.attempt_count + CASE WHEN jobs.status = 'processing' THEN 1 ELSE 0 END,
+      locked_at = now(), locked_by = p_locked_by, updated_at = now()
+  FROM candidates
+  WHERE jobs.id = candidates.id
+  RETURNING jobs.*;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.claim_generation_output_import_jobs(integer, text, integer) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_generation_output_import_jobs(integer, text, integer) TO service_role;
+
+-- 4. A captured Razorpay payment that does not match its order (amount,
 --    currency or buyer) credits nothing, and the webhook answers 200 so
 --    Razorpay stops retrying. It was a log line only. It is recorded here and
 --    reported on /api/ops/backend-alerts (src/lib/payment-capture-anomalies.ts),
@@ -117,7 +189,7 @@ CREATE TABLE IF NOT EXISTS public.payment_capture_anomalies (
   provider text NOT NULL CHECK (provider IN ('razorpay')),
   payment_id text NOT NULL CHECK (btrim(payment_id) <> '' AND length(payment_id) <= 200),
   order_id text CHECK (order_id IS NULL OR length(order_id) <= 200),
-  purchase_kind text NOT NULL CHECK (purchase_kind IN ('credits', 'marketplace', 'post_resource')),
+  purchase_kind text NOT NULL CHECK (purchase_kind IN ('credits', 'marketplace', 'post_resource', 'unknown')),
   reason text NOT NULL CHECK (btrim(reason) <> '' AND length(reason) <= 120),
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT payment_capture_anomalies_payment_reason_key UNIQUE (provider, payment_id, reason)

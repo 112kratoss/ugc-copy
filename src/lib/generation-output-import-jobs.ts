@@ -8,6 +8,8 @@ type RpcClient = Pick<SupabaseClient, 'rpc'>;
  * retry that fails exhausts it again at once.
  */
 export const GENERATION_OUTPUT_IMPORT_MAX_ATTEMPTS = 10;
+/** A claimed job's lease; one older than this belongs to a worker that died. */
+export const GENERATION_OUTPUT_IMPORT_LOCK_TTL_SECONDS = 300;
 
 export type GenerationOutputImportJob = {
   id: string;
@@ -47,7 +49,7 @@ export async function claimGenerationOutputImportJobs(params: {
   const { data, error } = await params.client.rpc('claim_generation_output_import_jobs', {
     p_limit: params.limit,
     p_locked_by: params.lockedBy,
-    p_lock_ttl_seconds: 300,
+    p_lock_ttl_seconds: GENERATION_OUTPUT_IMPORT_LOCK_TTL_SECONDS,
   });
   if (error) throw error;
   return (Array.isArray(data) ? data : []) as GenerationOutputImportJob[];
@@ -75,7 +77,7 @@ export async function finishGenerationOutputImportJob(params: {
 
 export async function hasDueGenerationOutputImportJobs(client: RpcClient): Promise<boolean> {
   const { data, error } = await client.rpc('has_due_generation_output_import_jobs', {
-    p_lock_ttl_seconds: 300,
+    p_lock_ttl_seconds: GENERATION_OUTPUT_IMPORT_LOCK_TTL_SECONDS,
   });
   if (error) throw error;
   return data === true;
