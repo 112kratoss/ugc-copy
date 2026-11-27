@@ -126,6 +126,17 @@ const SHOWCASE_SNAPSHOT_IDLE_TIMEOUT_MS = 1_000;
 const SHOWCASE_ANONYMOUS_REFRESH_IDLE_TIMEOUT_MS = 3_000;
 const SHOWCASE_REFRESH_RETRY_BASE_MS = 2_000;
 const SHOWCASE_REFRESH_MAX_RETRIES = 2;
+// A tile off screen skips its layout and paint, and until it has been drawn
+// once it stands in the grid at the placeholder's height, not its own (at
+// 1440px a row of placeholders is 113px taller than the row drawn).
+const SHOWCASE_TILE_CLASS = 'flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]';
+// The tiles of a grid brought back as the reader left it (Back) are laid out
+// in full from their first frame. They are new elements, none drawn yet, so
+// as placeholders every row above the reader's place stood taller than when
+// they left, the browser put the scroll back into that longer page, and the
+// rows then took their own heights under them: the reader came back a row or
+// more away from the post they had stopped on (owner's report, 2026-11-27).
+const SHOWCASE_RESTORED_TILE_CLASS = 'flex min-w-0 flex-col';
 
 function getShowcaseDeferredRevealBatchSize(): number {
     if (typeof window.matchMedia !== 'function') {
@@ -409,6 +420,8 @@ function useMostVisibleVideoTile(enabled: boolean) {
 interface ShowcaseGridCardProps {
     item: ShowcaseFeedItem;
     index: number;
+    /** One of the tiles a kept grid came back with: laid out in full, never a placeholder. */
+    laidOutInFull: boolean;
     isSaved: boolean;
     isPriority: boolean;
     priorityPoster: ShowcasePriorityPosterData | null;
@@ -459,6 +472,7 @@ function BrowseRecipesLink({ className = '' }: { className?: string }) {
 const ShowcaseGridCard = memo(function ShowcaseGridCard({
     item,
     index,
+    laidOutInFull,
     isSaved,
     isPriority,
     priorityPoster,
@@ -491,7 +505,7 @@ const ShowcaseGridCard = memo(function ShowcaseGridCard({
             position={index}
             feedSessionId={feedSessionId}
             accessToken={accessToken}
-            className="flex min-w-0 flex-col [content-visibility:auto] [contain-intrinsic-size:auto_520px]"
+            className={laidOutInFull ? SHOWCASE_RESTORED_TILE_CLASS : SHOWCASE_TILE_CLASS}
         >
             {/* Pinterest Style Card Frame */}
             <div className="group relative overflow-hidden rounded-3xl border border-[var(--ui-border-subtle)] bg-[var(--ui-surface-1)] transition duration-200 hover:border-[rgba(255,122,89,0.28)] hover:shadow-[0_12px_40px_rgba(0,0,0,0.42)] has-[:focus-visible:not([data-quiet-focus])]:border-[rgba(255,122,89,0.34)]">
@@ -780,6 +794,13 @@ export default function ShowcaseClient({
         )
     ));
     const renderedItemCountRef = useRef(renderedItemCount);
+    // How many tiles a kept grid came back with (`SHOWCASE_RESTORED_TILE_CLASS`):
+    // none on a first visit, and none once the grid is drawn afresh (another
+    // lane, a new first page, Refresh). Tiles a later page adds are placeholders
+    // until drawn, as on any visit: they come in below the reader.
+    const [restoredTileCount, setRestoredTileCount] = useState(() => (
+        restoredClientState.snapshot ? renderedItemCount : 0
+    ));
     const [hasAnonymousPersonalizationDemand, setHasAnonymousPersonalizationDemand] = useState(() => (
         Boolean(searchParams.get('post'))
     ));
@@ -1276,6 +1297,7 @@ export default function ShowcaseClient({
         setItems(visibleInitialItems);
         setPageInfo(initialFeed.pageInfo);
         setRenderedItemCount(Math.min(SHOWCASE_INITIAL_RENDER_COUNT, visibleInitialItems.length));
+        setRestoredTileCount(0);
         setFeedSessionId(getShowcaseFeedSessionId(initialFeed));
         setLaneFetchedAt(Date.now());
         // Another page: a removal still offering Undo stands.
@@ -1814,6 +1836,7 @@ export default function ShowcaseClient({
             setFeedSessionId(getShowcaseFeedSessionId(firstPage));
             setLaneFetchedAt(Date.now());
             setRenderedItemCount(Math.min(SHOWCASE_INITIAL_RENDER_COUNT, visibleItems.length));
+            setRestoredTileCount(0);
             setSavedItemIds(new Set(visibleItems.filter((item) => item.isSaved).map((item) => item.id)));
             // The reader was at the end of the old grid; the new one starts at the top.
             window.scrollTo({ top: 0 });
@@ -2424,6 +2447,7 @@ export default function ShowcaseClient({
                                     key={item.id}
                                     item={item}
                                     index={itemIndex}
+                                    laidOutInFull={itemIndex < restoredTileCount}
                                     isSaved={savedItemIds.has(item.id)}
                                     isPriority={item.id === priorityMediaItemId}
                                     priorityPoster={item.id === initialPriorityPoster?.postId ? initialPriorityPoster : null}
