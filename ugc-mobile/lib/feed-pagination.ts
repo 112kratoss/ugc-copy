@@ -13,6 +13,18 @@
  */
 export const FEED_NEXT_PAGE_RUNWAY_SCREENS = 2;
 
+/**
+ * Home's lanes and Explore keep their short runways. The server marks every post
+ * on a page it hands out as served to that viewer
+ * (`src/lib/showcase-feed-personalization.ts`), and for six hours the ranking reads
+ * a served post the viewer never reached as passed over: a lighter penalty and no
+ * cold-start slot. A page asked two screens early would count against posts nobody
+ * saw; Explore's first page of 12 is about two screens tall, so it would read its
+ * second at once. The profile grid and a creator's page serve no deliveries.
+ */
+export const HOME_LANE_NEXT_PAGE_RUNWAY_SCREENS = 0.32;
+export const EXPLORE_NEXT_PAGE_RUNWAY_SCREENS = 0.5;
+
 export type FeedPaginationGate = {
   cooldownMs: number;
   hasNextPage: boolean | undefined;

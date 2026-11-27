@@ -33,7 +33,7 @@ import { useAutoplayPolicy } from '@/lib/autoplay-preference';
 import { env } from '@/lib/env';
 import { REMIX_NEEDS_WEB_BODY, REMIX_NEEDS_WEB_TITLE } from '@/lib/viewer-actions';
 import { feedWindowPaginationPosition } from '@/lib/feed-page-window';
-import { FEED_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
+import { HOME_LANE_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import {
   HOME_FEED_CHIPS,
   homeFeedEmptyState,
@@ -640,8 +640,8 @@ export function HomeDashboard() {
     return cancelScheduledPersistHomeShelf;
   }, [identityUserId, isAuthLoading, queryClient, shelfQuery.dataUpdatedAt, shelfQuery.isSuccess]);
 
-  // Asked two screens from the end (`FEED_NEXT_PAGE_RUNWAY_SCREENS`), so a page
-  // can land inside the gate's cooldown with the lane still that near its end:
+  // A page can land inside the gate's cooldown with the lane still within its
+  // runway (`HOME_LANE_NEXT_PAGE_RUNWAY_SCREENS`):
   // FlashList asks as it lands, is refused, and asks no more until its data
   // changes. A request refused only for the cooldown is asked again as it ends.
   const requestNextPage = () => {
@@ -1220,10 +1220,10 @@ export function HomeDashboard() {
         onStartReached={requestPreviousPage}
         onStartReachedThreshold={0.25}
         onEndReached={requestNextPage}
-        // Two screens of runway: a third of one ran out under a fling (feel
-        // audit 2026-11-27). Impressions and dwell come from viewability alone,
-        // so a page read early files neither for cards not yet drawn.
-        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
+        // A third of a screen: every page the server hands out marks its posts
+        // served, so a page read early would count against posts never seen
+        // (`HOME_LANE_NEXT_PAGE_RUNWAY_SCREENS`).
+        onEndReachedThreshold={HOME_LANE_NEXT_PAGE_RUNWAY_SCREENS}
         refreshControl={pull.refreshControl}
         showsVerticalScrollIndicator={false}
         onScrollBeginDrag={() => playbackController.dispatch({ type: 'dragBegin' })}

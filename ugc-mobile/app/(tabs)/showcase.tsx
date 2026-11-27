@@ -45,7 +45,7 @@ import { setCachedCreatorProfileBlocked } from '@/lib/creator-profile-view-model
 import { createFeedVideoActivationStore, FeedVideoActivationContext, useFeedVideoActivation } from '@/lib/feed-video-activation';
 import { buildFeedFeedbackMenu, canHideFeedCreator, isOwnFeedPost } from '@/lib/feed-feedback-menu';
 import { hideCreatorLabel } from '@/lib/hide-creator-label';
-import { FEED_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
+import { EXPLORE_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import { buildImmersiveShowcaseItems, showcaseFeedItemOpenHref } from '@/lib/immersive-preview-view-model';
 import type { NativeMenuModel } from '@/lib/native-menu';
 import { resolvedBottomInset, resolvedTopInset } from '@/lib/safe-area';
@@ -618,8 +618,8 @@ export default function ShowcaseScreen() {
     router.setParams({ tool: undefined } as never);
   };
 
-  // Asked two screens from the end (`FEED_NEXT_PAGE_RUNWAY_SCREENS`), so a page
-  // can land inside the gate's cooldown with the grid still that near its end:
+  // A page can land inside the gate's cooldown with the grid still within its
+  // runway (`EXPLORE_NEXT_PAGE_RUNWAY_SCREENS`):
   // FlashList asks as it lands, is refused, and asks no more until its data
   // changes. A request refused only for the cooldown is asked again as it ends.
   const requestNextPage = () => {
@@ -1025,11 +1025,11 @@ export default function ShowcaseScreen() {
         // to diverge from strict alternation so variable-height cards stay balanced.
         optimizeItemArrangement={true}
         onEndReached={requestNextPage}
-        // Two screens of runway (`FEED_NEXT_PAGE_RUNWAY_SCREENS`). Half a screen
-        // was chosen when pending-preview posts stopped being filtered out; the
-        // feel audit of 2026-11-27 saw a third of a screen run out under a fling
-        // on the profile grid. A masonry grid measures its end at its tallest column.
-        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
+        // Half a screen (`EXPLORE_NEXT_PAGE_RUNWAY_SCREENS`): every page the server
+        // hands out marks its posts served, and a longer runway would read the
+        // second page as Explore opens. A masonry grid measures its end at its
+        // tallest column.
+        onEndReachedThreshold={EXPLORE_NEXT_PAGE_RUNWAY_SCREENS}
         refreshControl={pull.refreshControl}
         renderItem={renderCard}
         scrollEnabled={!isSwipingMedia}

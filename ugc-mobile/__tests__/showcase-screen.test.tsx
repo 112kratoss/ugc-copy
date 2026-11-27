@@ -668,10 +668,10 @@ describe('Showcase screen', () => {
     renderer.act(() => tree!.unmount());
   });
 
-  // Two screens of runway so a fling never outruns the next page (feel audit
-  // 2026-11-27: the profile grid's third of a screen ran out under a fling).
-  it('asks for the next page two screens before the end of the grid', () => {
-    expect(flashListProps().onEndReachedThreshold).toBe(2);
+  // Half a screen: a page the server hands out marks its posts served, and a
+  // longer runway would read Explore's second page as it opens.
+  it('asks for the next page half a screen before the end of the grid', () => {
+    expect(flashListProps().onEndReachedThreshold).toBe(0.5);
   });
 
   // FlashList asks once as the list nears its end and again only when its data

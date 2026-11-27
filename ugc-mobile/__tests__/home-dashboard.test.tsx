@@ -1109,11 +1109,11 @@ describe('Home screen', () => {
     renderer.act(() => tree.unmount());
   });
 
-  // Two screens of runway so a fling never outruns the next page (feel audit
-  // 2026-11-27: a third of a screen ran out under a fling on the S24).
-  it('asks for the next page two screens before the end of the lane', () => {
+  // A third of a screen: a page the server hands out marks its posts served, so
+  // a longer runway would count against posts the reader never reached.
+  it('asks for the next page a third of a screen before the end of the lane', () => {
     const { tree } = renderHome();
-    expect(listProps(tree).onEndReachedThreshold).toBe(2);
+    expect(listProps(tree).onEndReachedThreshold).toBe(0.32);
     renderer.act(() => tree.unmount());
   });
 
