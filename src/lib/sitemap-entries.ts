@@ -26,6 +26,39 @@ const TEMPLATE_URL_LIMIT = 2000;
 const MIN_PUBLIC_POSTS_FOR_INDEXING = 1;
 
 /**
+ * The most rows one API response carries (`max_rows` in supabase/config.toml). A `.limit()`
+ * above it is cut silently, so the lists below are read in ordered pages instead.
+ */
+const API_PAGE_SIZE = 1000;
+
+type PageResult<T> = PromiseLike<{ data: T[] | null; error: unknown }>;
+
+/**
+ * Up to `limit` rows, read page by page. Each page starts where the rows received so far end, and
+ * the read stops at the first empty page, so a server cap below API_PAGE_SIZE costs pages, not
+ * rows. `readPage` must apply a total order, or pages can repeat or skip rows.
+ */
+async function readOrderedPages<T>(
+    limit: number,
+    readPage: (from: number, to: number) => PageResult<T>,
+): Promise<{ rows: T[]; error: unknown }> {
+    const rows: T[] = [];
+    while (rows.length < limit) {
+        const from = rows.length;
+        const to = Math.min(from + API_PAGE_SIZE, limit) - 1;
+        const { data, error } = await readPage(from, to);
+        if (error) {
+            return { rows: [], error };
+        }
+        if (!data || data.length === 0) {
+            break;
+        }
+        rows.push(...data.slice(0, limit - rows.length));
+    }
+    return { rows, error: null };
+}
+
+/**
  * Titles the product itself writes when a user supplied none. These are real
  * page titles on live posts today, duplicated across every untitled creation,
  * which is exactly the duplicate-title cluster that suppresses a domain.
@@ -89,21 +122,23 @@ export function isIndexableShowcasePost(row: ShowcaseSitemapRow): boolean {
 export async function getIndexableShowcasePosts(): Promise<ShowcaseSitemapRow[]> {
     try {
         const supabase = createServiceClient();
-        const { data, error } = await supabase
+        // `id` breaks ties between posts created in the same instant, so pages neither repeat nor skip.
+        const { rows, error } = await readOrderedPages<ShowcaseSitemapRow>(SHOWCASE_URL_LIMIT, (from, to) => supabase
             .from('posts')
             .select('id, title, output_url, showcase_asset_path, created_at, updated_at')
             .eq('visibility', 'public')
             .eq('review_status', 'visible')
             .is('archived_at', null)
             .order('created_at', { ascending: false })
-            .limit(SHOWCASE_URL_LIMIT);
+            .order('id', { ascending: false })
+            .range(from, to));
 
         if (error) {
             logBackendError('failed_to_load_showcase_sitemap_entries', { error });
             return [];
         }
 
-        return ((data ?? []) as ShowcaseSitemapRow[]).filter(isIndexableShowcasePost);
+        return rows.filter(isIndexableShowcasePost);
     } catch (error) {
         logBackendError('failed_to_load_showcase_sitemap_entries', { error });
         return [];
@@ -116,7 +151,7 @@ export type CreatorSitemapRow = {
 };
 
 /**
- * Creators with something published.
+ * Creators with something published, the most recently active first.
  *
  * The post count is the gate that matters: it excludes abandoned signups and
  * the test accounts that are currently indexable, without maintaining a
@@ -125,67 +160,33 @@ export type CreatorSitemapRow = {
  *
  * `lastModified` comes from the creator's most recent post rather than from the
  * profile row: `profiles` has no `updated_at` column, and a profile page's
- * content is its posts anyway, so the newest one is the honest answer. It costs
- * nothing extra — the same rows are already being read to count them.
+ * content is its posts anyway, so the newest one is the honest answer.
+ *
+ * `list_sitemap_creators` groups the public posts per creator and joins the
+ * profile in the database (same gates: public, visible, unarchived posts, at
+ * least MIN_PUBLIC_POSTS_FOR_INDEXING of them, a username and a non-blank
+ * display name). Reading the posts here was cut at the API's 1,000 rows, and
+ * the profiles read carried every id in its URL.
  */
 export async function getIndexableCreators(): Promise<CreatorSitemapRow[]> {
     try {
         const supabase = createServiceClient();
-
-        const { data: postRows, error: postError } = await supabase
-            .from('posts')
-            .select('user_id, created_at')
-            .eq('visibility', 'public')
-            .eq('review_status', 'visible')
-            .is('archived_at', null)
-            .limit(20000);
-
-        if (postError) {
-            logBackendError('failed_to_load_creator_sitemap_entries', { error: postError });
-            return [];
-        }
-
-        const stats = new Map<string, { count: number; lastPostedAt: string | null }>();
-        for (const row of (postRows ?? []) as Array<{ user_id: string | null; created_at: string | null }>) {
-            if (!row.user_id) continue;
-            const existing = stats.get(row.user_id);
-            const lastPostedAt = !existing?.lastPostedAt
-                || (row.created_at && row.created_at > existing.lastPostedAt)
-                ? row.created_at ?? existing?.lastPostedAt ?? null
-                : existing.lastPostedAt;
-            stats.set(row.user_id, {
-                count: (existing?.count ?? 0) + 1,
-                lastPostedAt,
-            });
-        }
-
-        const publishingUserIds = [...stats.entries()]
-            .filter(([, entry]) => entry.count >= MIN_PUBLIC_POSTS_FOR_INDEXING)
-            .map(([userId]) => userId)
-            .slice(0, CREATOR_URL_LIMIT);
-
-        if (publishingUserIds.length === 0) {
-            return [];
-        }
-
-        const { data, error } = await supabase
-            .from('profiles')
-            .select('id, username, display_name')
-            .in('id', publishingUserIds)
-            .not('username', 'is', null)
-            .not('display_name', 'is', null);
+        // `username` is unique, so the order is total and the pages are stable.
+        const { rows, error } = await readOrderedPages<{ username: string; last_posted_at: string | null }>(
+            CREATOR_URL_LIMIT,
+            (from, to) => supabase
+                .rpc('list_sitemap_creators', { p_min_posts: MIN_PUBLIC_POSTS_FOR_INDEXING, p_limit: CREATOR_URL_LIMIT })
+                .order('last_posted_at', { ascending: false })
+                .order('username', { ascending: true })
+                .range(from, to),
+        );
 
         if (error) {
             logBackendError('failed_to_load_creator_sitemap_entries', { error });
             return [];
         }
 
-        return ((data ?? []) as Array<{ id: string; username: string | null; display_name: string | null }>)
-            .filter((row) => Boolean(row.username?.trim() && row.display_name?.trim()))
-            .map((row) => ({
-                username: row.username as string,
-                lastPostedAt: stats.get(row.id)?.lastPostedAt ?? null,
-            }));
+        return rows.map((row) => ({ username: row.username, lastPostedAt: row.last_posted_at ?? null }));
     } catch (error) {
         logBackendError('failed_to_load_creator_sitemap_entries', { error });
         return [];
