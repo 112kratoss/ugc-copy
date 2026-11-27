@@ -1478,7 +1478,11 @@ export function useMediaZoomStage({
   const [uncovering] = useState(() => createZoomUncovering(!zooming));
   const dismissingRef = useRef(false);
   const leftRef = useRef(false);
-  const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean } | null>(null);
+  /**
+   * The close under way. `popsAtLanding`: a picture flying home alone on
+   * Android, whose reel is popped once it has landed (`whenDisplayed`).
+   */
+  const closeRef = useRef<{ id: number; live: boolean; dissolves: boolean; popsAtLanding: boolean } | null>(null);
   /** Gives the tile back to UIKit's zoom after a picture-only close (`withholdAppleZoomSource`). */
   const restoreZoomSourceRef = useRef<(() => void) | null>(null);
   /** The flight this reel follows and may reshape: its open, then its close. */
@@ -1844,6 +1848,9 @@ export function useMediaZoomStage({
             leaveIntoTile();
           }
         }
+        // A picture that flew home alone has landed: the reel, out of sight
+        // since it set off, goes now (`whenDisplayed` below).
+        if (event.type === 'landed' && close.popsAtLanding) leave();
         return;
       }
       if (event.flight.id !== origin.flightId || event.type !== 'landed') return;
@@ -2083,6 +2090,16 @@ export function useMediaZoomStage({
       // standing over it until it lets go.
       const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
       closeDissolves.set(dissolves);
+      // Android: a picture flying home alone out of a reel at rest leaves the
+      // reel standing, out of sight, until it has landed, as a live close does.
+      // Popped first, the flight waited for the route's removal to be rendered
+      // (the reel's unmount, the screen beneath taking the focus) before its
+      // first frame: 100–133 ms on an iPhone 16e when iOS had the same order
+      // (#718), and the S24 measured ~160 ms from Back to the first movement
+      // (audit, 2026-11-27). A close begun before the reel was uncovered keeps
+      // the old order: that reel may still be mounting, which would hold the
+      // frames of the flight.
+      const popsAtLanding = alone && !nativeZoom;
       const flight = startZoomFlight({ direction: 'close', geometry, preview, video, post, still: !live }, live ? {} : {
         // A picture closing alone has the reel hidden (and on iOS the screen
         // covered) once it is up, so going on the usual deadline before it had
@@ -2113,6 +2130,13 @@ export function useMediaZoomStage({
             leave();
             return;
           }
+          // Out of sight from this frame, and moving from the next: the copy
+          // covers the picture's place for a frame first, as it did. The pop
+          // comes once it has landed (the flight's `landed`, above).
+          if (popsAtLanding) {
+            requestAnimationFrame(takeOffZoomFlight);
+            return;
+          }
           requestAnimationFrame(() => {
             leave();
             requestAnimationFrame(takeOffZoomFlight);
@@ -2129,10 +2153,10 @@ export function useMediaZoomStage({
         flightTime.set(1);
         flightProgress.set(1);
       }
-      closeRef.current = { id: flight.id, live, dissolves };
+      closeRef.current = { id: flight.id, live, dissolves, popsAtLanding };
       ownFlightRef.current = flight.id;
       // With no layer to step it the flight has already landed.
-      if (live && !getZoomFlight()) leave();
+      if ((live || popsAtLanding) && !getZoomFlight()) leave();
     });
     measureTile(TILE_REMEASURE_FRAMES);
   }, [closeDissolves, following, interactive, leave, lentVideo, nativeZoom, origin, plainLeave, reducedMotion, returnableVideo, stageOpacity]);
