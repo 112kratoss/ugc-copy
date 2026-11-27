@@ -1,6 +1,6 @@
 'use client';
 
-import { readJsonResponse } from '@/lib/read-json-response';
+import { isUnconfirmedOutcome, readJsonResponse } from '@/lib/read-json-response';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { WorkflowCanvasRecord, WorkflowCanvasGraph } from '@/lib/workflow-canvas';
@@ -49,8 +49,17 @@ class WorkflowAssistantRequestError extends Error {
   }
 }
 
-async function readAssistantResponse(response: Response) {
-  const data = await readJsonResponse(response, { unreadableSuccess: 'Workflow assistant request failed.' });
+// An assistant message costs credits: after an answer that cannot be read or explained, it may
+// have been charged and answered, and sending it again could pay twice.
+const UNCONFIRMED_ASSISTANT_MESSAGE = 'We could not confirm the assistant answered. Reopen the assistant to check before sending again.';
+
+async function readAssistantResponse(response: Response, { paid = false }: { paid?: boolean } = {}) {
+  const data = await readJsonResponse(response, {
+    unreadableSuccess: paid ? UNCONFIRMED_ASSISTANT_MESSAGE : 'Workflow assistant request failed.',
+  });
+  if (!response.ok && paid && isUnconfirmedOutcome(response, data)) {
+    throw new WorkflowAssistantRequestError(UNCONFIRMED_ASSISTANT_MESSAGE);
+  }
   if (!response.ok) {
     throw new WorkflowAssistantRequestError(
       data.error || 'Workflow assistant request failed.',
@@ -163,7 +172,7 @@ export function useWorkflowCanvasAssistant({
         body: JSON.stringify({ content: nextInput }),
       });
 
-      const data = await readAssistantResponse(response);
+      const data = await readAssistantResponse(response, { paid: true });
       setMessages(data.messages ?? []);
       setProposal(data.proposal ?? null);
       setAvailability(data.availability ?? 'ready');
