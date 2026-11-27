@@ -82,7 +82,8 @@ export function OptimizedPreviewImage({
         fill
         sizes={sizes}
         loading={priority ? undefined : loading}
-        priority={priority}
+        // `priority` is deprecated since Next 16; `preload` is what it did (the head's <link>).
+        preload={priority}
         fetchPriority={priority ? 'high' : undefined}
         // Preview workers already emit a bounded WebP. The optimizer returned
         // the same 22 KB payload in production but added another serverless
