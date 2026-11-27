@@ -1,4 +1,4 @@
-import { router, usePathname } from 'expo-router';
+import { router } from 'expo-router';
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { View } from 'react-native';
 
@@ -47,16 +47,6 @@ function leaveForHome() {
   router.navigate('/');
 }
 
-/**
- * What a screen's own boundary draws. The navigator is still up around it, so the page offers the
- * way out as well: a screen that fails every time used to keep the person on Try again until the
- * app was restarted. On Home itself there is nowhere to leave to, and Try again stands alone.
- */
-function ScreenErrorFallback({ onRetry }: { onRetry: () => void }) {
-  const pathname = usePathname();
-  return <AppErrorFallback onRetry={onRetry} onHome={pathname === '/' ? undefined : leaveForHome} />;
-}
-
 type State = { failed: boolean };
 
 /**
@@ -64,10 +54,12 @@ type State = { failed: boolean };
  * which the report carries. Try again draws what failed again.
  *
  * It is drawn twice over. Around each screen (`screen`, through `screenErrorLayout`), where an
- * error leaves the navigator and every other screen up; and once around the navigator, for what
- * fails outside any screen, where nothing is left to leave by.
+ * error leaves the navigator and every other screen up, so the page offers the way out as well:
+ * a screen that fails every time used to keep the person on Try again until the app was
+ * restarted. And once around the navigator, for what fails outside any screen, where nothing is
+ * left to leave by.
  */
-export class AppErrorBoundary extends Component<{ children: ReactNode; screen?: boolean }, State> {
+export class AppErrorBoundary extends Component<{ children: ReactNode; screen?: 'leaves-for-home' | 'holds-home' }, State> {
   state: State = { failed: false };
 
   static getDerivedStateFromError(): State {
@@ -84,17 +76,44 @@ export class AppErrorBoundary extends Component<{ children: ReactNode; screen?: 
 
   render() {
     if (!this.state.failed) return this.props.children;
-    return this.props.screen
-      ? <ScreenErrorFallback onRetry={this.retry} />
-      : <AppErrorFallback onRetry={this.retry} />;
+    return (
+      <AppErrorFallback
+        onRetry={this.retry}
+        onHome={this.props.screen === 'leaves-for-home' ? leaveForHome : undefined}
+      />
+    );
   }
+}
+
+/** What a navigator hands its `screenLayout` of the screen it wraps (React Navigation's `useDescriptors`). */
+type ScreenLayoutArgs = {
+  children: ReactNode;
+  route: { name: string };
+  navigation: { getState: () => { type: string } };
+};
+
+/**
+ * Whether Home is this screen or inside it: the Home tab itself, and the tabs' own route in the
+ * root Stack, which holds every tab (its boundary catches what the tab bar or the tabs' layout
+ * throws). Leaving for Home cannot take such a screen's error page off the screen, so the page
+ * offers Try again alone there. Read from the wrapped route, not from the focused one: a failed
+ * tab that is not in front is still not Home.
+ */
+function holdsHome({ route, navigation }: Pick<ScreenLayoutArgs, 'route' | 'navigation'>) {
+  if (route.name === '(tabs)') return true;
+  return route.name === 'index' && navigation.getState().type === 'tab';
 }
 
 /**
  * A navigator's `screenLayout`: each of its screens inside a boundary of its own. Every navigator
  * the app draws takes it (`__tests__/app-error-boundary.test.tsx` reads the layouts), so a screen
  * that throws shows the error page in its own place, Back still leaves it, and Go to Home works.
+ * The navigator calls this as a plain function while it builds its screens, so it uses no hook.
  */
-export function screenErrorLayout({ children }: { children: ReactNode }) {
-  return <AppErrorBoundary screen>{children}</AppErrorBoundary>;
+export function screenErrorLayout({ children, route, navigation }: ScreenLayoutArgs) {
+  return (
+    <AppErrorBoundary screen={holdsHome({ route, navigation }) ? 'holds-home' : 'leaves-for-home'}>
+      {children}
+    </AppErrorBoundary>
+  );
 }
