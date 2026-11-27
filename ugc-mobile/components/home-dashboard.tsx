@@ -43,6 +43,8 @@ import {
   type HomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
+import { isLaunchRefreshOut, keepRestoredPage } from '@/lib/launch-feed-refresh';
+import { applyShowcaseFeedLaneChange } from '@/lib/showcase-feed-lane-refresh';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { homeShelfGuestReturnTo, isHomeShelfInView, readHomeShelfItems } from '@/lib/home-shelf-view-model';
 import { createHomeFeedPlaybackController } from '@/lib/home-feed-playback';
@@ -552,6 +554,13 @@ export function HomeDashboard() {
   // Posts drawn from the page the last launch saved, or from this launch's own
   // request. The interactive mark carries which, so the two can be told apart.
   const feedSource = isPersistedHomeFeedData(feedQuery.dataUpdatedAt) ? 'persisted' : 'network';
+  // The read this launch owes the saved page replaces it only while nobody has
+  // touched Home. Once the reader has, the saved page's posts stay where they
+  // are and the new ranking lands under them (`lib/launch-feed-refresh.ts`).
+  const launchRefreshOut = isLaunchRefreshOut(feedQuery);
+  const keepSavedPageAtTouch = () => {
+    if (launchRefreshOut) keepRestoredPage(queryKey);
+  };
   useEffect(() => {
     // Held until auth settles. Before then the lane on screen is the signed-out
     // one, under StartupCoordinator's cover, and a returning member's own lane
@@ -868,7 +877,14 @@ export function HomeDashboard() {
           return;
         }
         void remixLaunch.close();
-        void queryClient.invalidateQueries({ queryKey: ['showcase-feed'] });
+        // The lanes' copy of this one post is brought up to date, so its card
+        // offers the recipe. Reading the lanes again for it re-ranked every
+        // loaded page under the reader (`showcase-feed-lane-refresh.ts`).
+        void api.getShowcasePost(item.id)
+          .then((response) => {
+            if (response?.item) applyShowcaseFeedLaneChange(queryClient, { refreshedPost: response.item });
+          })
+          .catch(() => null);
         showMessageDialog({
           title: 'Unlock needed',
           message: 'The creator has put this remix behind a recipe. Open the post to get it.',
@@ -1201,7 +1217,7 @@ export function HomeDashboard() {
     // Tiles on this screen are what the reel grows out of and returns to.
     <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }} onTouchStart={keepSavedPageAtTouch}>
       <BookPullArea pull={pull}>
       <FlashList
         keyboardShouldPersistTaps="never"

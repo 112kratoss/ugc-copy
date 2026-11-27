@@ -75,7 +75,13 @@ const mutationState = vi.hoisted(() => ({
     onError?: (error: unknown, visibility?: 'public' | 'unlisted' | 'private', context?: unknown) => void;
   },
 }));
-const queryClientState = vi.hoisted(() => ({ invalidateQueries: vi.fn(), setQueryData: vi.fn() }));
+const queryClientState = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(),
+  setQueryData: vi.fn(),
+  // The feed lanes a saved edit is taken to: none cached here.
+  getQueriesData: vi.fn((): Array<[readonly unknown[], unknown]> => []),
+  getQueryState: vi.fn(() => undefined),
+}));
 const queryOptionsState = vi.hoisted(() => ({ options: [] as Array<{ queryKey: string[]; enabled?: boolean; gcTime?: number }> }));
 const keyboardState = vi.hoisted(() => ({ dismiss: vi.fn() }));
 const scrollContentState = vi.hoisted(() => ({ content: { name: 'scroll content' } }));

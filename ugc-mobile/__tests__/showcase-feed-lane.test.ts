@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FEED_WINDOW_PAGE_LIMIT } from '../lib/feed-page-window';
 import { HOME_FEED_CHIPS } from '../lib/home-feed-view-model';
-import { QueryClient } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryClient } from '@tanstack/react-query';
 
 import {
   EXPLORE_READ_AHEAD_FILTERS,
@@ -101,6 +101,50 @@ describe('the lane query', () => {
     const recent = showcaseFeedLaneQueryOptions(api, { sort: 'recent' }, 'user-1');
     expect(recent).not.toHaveProperty('refetchOnWindowFocus');
     expect(recent).not.toHaveProperty('refetchOnMount');
+  });
+
+  // Owner, 2026-11-27: "some other media is there in the explore screen a few
+  // seconds ago". A filter or chip the reader came back to more than five
+  // minutes after its lane was read drew the lane as it was left, then read
+  // every loaded page again as a new ranked session and replaced them.
+  describe('a lane the reader comes back to, six minutes after it was read', () => {
+    const lanePage = (ids: string[]) => ({ success: true, items: ids.map((id) => ({ id })), feedSessionId: 'session-1' });
+    const SIX_MINUTES = 6 * 60_000;
+
+    async function comeBackTo(filters: ShowcaseFeedFilters, away: ShowcaseFeedFilters) {
+      const readAt = Date.now();
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(readAt + SIX_MINUTES);
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      const api = { getShowcaseFeed: vi.fn(async () => lanePage(['read-again'])) };
+      const lane = showcaseFeedLaneQueryOptions(api as never, filters, 'user-1');
+      const other = showcaseFeedLaneQueryOptions(api as never, away, 'user-1');
+      client.setQueryData(lane.queryKey, { pages: [lanePage(['a', 'b']), lanePage(['c'])], pageParams: [{ offset: 0 }, { offset: 12 }] }, { updatedAt: readAt });
+      client.setQueryData(other.queryKey, { pages: [lanePage(['x'])], pageParams: [{ offset: 0 }] }, { updatedAt: readAt + SIX_MINUTES });
+
+      // The screen's one reader, moved from the other lane back onto this one.
+      const observer = new InfiniteQueryObserver(client, other as never);
+      const unsubscribe = observer.subscribe(() => undefined);
+      observer.setOptions(lane as never);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      unsubscribe();
+      vi.useRealTimers();
+
+      const data = client.getQueryData<{ pages: Array<{ items: Array<{ id: string }> }> }>(lane.queryKey);
+      return { reads: api.getShowcaseFeed.mock.calls.length, ids: data?.pages.map((page) => page.items.map((item) => item.id)) };
+    }
+
+    it.each([
+      ['Explore All', { category: 'media' }, { category: 'media', unlock: 'free' }],
+      ['Home For You', {}, { category: 'text' }],
+    ] as Array<[string, ShowcaseFeedFilters, ShowcaseFeedFilters]>)('%s is drawn as it was left, and not read again', async (_lane, filters, away) => {
+      await expect(comeBackTo(filters, away)).resolves.toEqual({ reads: 0, ids: [['a', 'b'], ['c']] });
+    });
+
+    it("Home's Recent, a timeline, is read again", async () => {
+      const back = await comeBackTo({ sort: 'recent' }, {});
+      expect(back.reads).toBeGreaterThan(0);
+    });
   });
 
   // Review follow-up 2: a For you page one starts a ranked session, whose seen

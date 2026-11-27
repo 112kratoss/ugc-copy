@@ -32,6 +32,7 @@ import {
   refreshViewerMediaCaches,
   removeGenerationFromCaches,
 } from '@/lib/viewer-media-cache';
+import type { ShowcaseFeedLaneChange } from '@/lib/showcase-feed-lane-refresh';
 
 /**
  * What a screen hands the viewer's actions for one item: the parts of an action
@@ -204,8 +205,14 @@ export function useViewerActionHandlers({
     ...getViewerSafetyActions(item, viewerId),
   ];
 
-  const refreshMedia = async () => {
-    await refreshViewerMediaCaches(queryClient, viewerId);
+  // What the action changed in the feed lanes goes with it: the lanes are
+  // written to, never read again (`showcase-feed-lane-refresh.ts`).
+  const refreshMedia = async (feedChange?: ShowcaseFeedLaneChange) => {
+    if (feedChange) {
+      await refreshViewerMediaCaches(queryClient, viewerId, feedChange);
+    } else {
+      await refreshViewerMediaCaches(queryClient, viewerId);
+    }
     onSourceRefresh();
   };
 
@@ -241,7 +248,7 @@ export function useViewerActionHandlers({
     if (outcome !== 'done') return;
     removeDeletedPostFromCaches(item.id);
     adjustProfileStats(queryClient, viewerId, item.archivedAt ? { archivedPosts: -1 } : { posts: -1 });
-    await refreshMedia();
+    await refreshMedia({ removedPostId: item.id });
     onDeleted?.(item.id);
   };
 
@@ -267,7 +274,8 @@ export function useViewerActionHandlers({
   const updateVisibility = async (post: PostLifecyclePost, visibility: 'public' | 'unlisted' | 'private') => {
     const outcome = await changePostVisibility({ api, post, visibility });
     if (outcome === 'done') {
-      await refreshMedia();
+      // Public again, it is found by the next read the reader asks for.
+      await refreshMedia(visibility === 'public' ? undefined : { removedPostId: post.id });
     }
   };
 
@@ -298,14 +306,16 @@ export function useViewerActionHandlers({
       const saverFields = creatorSeesSaverFields(user?.id, shouldSave);
       void (async () => {
         try {
-          if (item.showcasePostId) {
-            await api.saveShowcasePost(item.showcasePostId, {
+          const saved = item.showcasePostId
+            ? await api.saveShowcasePost(item.showcasePostId, {
               shouldSave,
               sourceSurface: item.source === 'profile-saved' ? 'mobile-profile-saved' : 'mobile-viewer-actions',
               ...saverFields,
-            });
-          }
-          await refreshMedia();
+            })
+            : null;
+          await refreshMedia(item.showcasePostId && saved
+            ? { saveState: { postId: item.showcasePostId, isSaved: saved.isSaved, saveCount: saved.saveCount } }
+            : undefined);
         } catch {
           haptic.error();
           showMessageDialog({ title: 'Could not update media', message: 'Please try again.' });
@@ -318,7 +328,7 @@ export function useViewerActionHandlers({
         void runArchivePost({ api, post: lifecyclePost }).then(async (outcome) => {
           if (outcome !== 'done') return;
           adjustProfileStats(queryClient, viewerId, { posts: -1, archivedPosts: 1 });
-          await refreshMedia();
+          await refreshMedia({ removedPostId: item.id });
         });
         return;
       }
@@ -511,8 +521,9 @@ export function useViewerActionHandlers({
         queryClient.setQueryData(creatorFollowStateQueryKey(creatorId), { following: false });
         if (!onBlocked) {
           // A screen that takes no posts out itself (the text post page) still
-          // refreshes every cache that may show the creator.
-          await refreshMedia();
+          // refreshes every cache that may show the creator, and the feed
+          // lanes lose the creator's posts where they stand.
+          await refreshMedia({ blockedCreatorId: creatorId });
           return;
         }
         // The reel takes the creator's posts out of itself and the feed lanes
