@@ -12,10 +12,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 type MockProps = { children?: React.ReactNode } & Record<string, unknown>;
 
 const report = vi.hoisted(() => ({ reportClientError: vi.fn() }));
-const routing = vi.hoisted(() => ({ pathname: '/support', dismissTo: vi.fn() }));
+const routing = vi.hoisted(() => ({
+  pathname: '/support',
+  canDismiss: true,
+  calls: [] as string[],
+}));
 
 vi.mock('expo-router', () => ({
-  router: { dismissTo: routing.dismissTo },
+  router: {
+    canDismiss: () => routing.canDismiss,
+    dismissTo: (href: string) => { routing.calls.push(`dismissTo ${href}`); },
+    navigate: (href: string) => { routing.calls.push(`navigate ${href}`); },
+  },
   usePathname: () => routing.pathname,
 }));
 
@@ -50,6 +58,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   fails.now = true;
   routing.pathname = '/support';
+  routing.canDismiss = true;
+  routing.calls = [];
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 
@@ -106,11 +116,12 @@ describe("a screen's own error boundary", () => {
     expect(drawn(tree)).not.toContain('secret internal detail');
     expect(tree.root.findByType('primary-button' as never).props.label).toBe('Try again');
 
+    // A stack screen above the tabs: taken off the stack, then the tabs are told to show Home
+    // (another tab may be the one under it).
     const home = tree.root.findByType('secondary-button' as never);
     expect(home.props.label).toBe('Go to Home');
     act(() => { (home.props.onPress as () => void)(); });
-    expect(routing.dismissTo).toHaveBeenCalledTimes(1);
-    expect(routing.dismissTo).toHaveBeenCalledWith('/');
+    expect(routing.calls).toEqual(['dismissTo /', 'navigate /']);
     // Leaving does not draw the failed screen again: it stays the error page until Try again.
     expect(drawn(tree)).toContain('Something went wrong');
     expect(report.reportClientError).toHaveBeenCalledTimes(1);
@@ -118,6 +129,17 @@ describe("a screen's own error boundary", () => {
     fails.now = false;
     act(() => { (tree.root.findByType('primary-button' as never).props.onPress as () => void)(); });
     expect(drawn(tree)).toContain('All good');
+  });
+
+  it('leaves a failed tab for the Home tab, with nothing to take off the stack', () => {
+    // On the Pixel 9a emulator `dismissTo('/')` alone left a failed tab where it was.
+    routing.pathname = '/showcase';
+    routing.canDismiss = false;
+    let tree!: renderer.ReactTestRenderer;
+    act(() => { tree = renderer.create(screen(<Fragile />)); });
+
+    act(() => { (tree.root.findByType('secondary-button' as never).props.onPress as () => void)(); });
+    expect(routing.calls).toEqual(['navigate /']);
   });
 
   it('offers no way Home when Home is the screen that failed', () => {

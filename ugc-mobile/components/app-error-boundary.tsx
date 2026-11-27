@@ -35,9 +35,16 @@ export function AppErrorFallback({ onRetry, onHome }: { onRetry: () => void; onH
   );
 }
 
-/** Off the failed screen to Home: a stack screen above the tabs is taken off the stack on the way. */
+/**
+ * Off the failed screen to Home. A stack screen above the tabs is taken off the stack first, so it
+ * is not drawn again under Home; then the tabs are told to show Home, which is all there is to do
+ * for a tab that failed (on the Pixel 9a emulator `dismissTo('/')` alone left a failed tab where it
+ * was, there being nothing to dismiss) and what brings Home forward when another tab was under the
+ * stack screen.
+ */
 function leaveForHome() {
-  router.dismissTo('/');
+  if (router.canDismiss()) router.dismissTo('/');
+  router.navigate('/');
 }
 
 /**
