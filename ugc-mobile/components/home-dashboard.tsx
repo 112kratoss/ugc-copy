@@ -43,7 +43,7 @@ import {
   type HomeFeedCard,
   type HomeFeedChipId,
 } from '@/lib/home-feed-view-model';
-import { holdLaunchRefresh, isLaunchRefreshOut } from '@/lib/launch-feed-refresh';
+import { isLaunchRefreshOut, keepRestoredPage } from '@/lib/launch-feed-refresh';
 import { applyShowcaseFeedLaneChange } from '@/lib/showcase-feed-lane-refresh';
 import { takeOffHomeShelf } from '@/lib/home-shelf-cache';
 import { homeShelfGuestReturnTo, isHomeShelfInView, readHomeShelfItems } from '@/lib/home-shelf-view-model';
@@ -106,7 +106,6 @@ import {
   createShowcaseFeedViewerQueryKey,
   createShowcasePostQueryKey,
   flattenShowcaseFeedPages,
-  isLaneDataFromAnEarlierLaunch,
   getShowcaseFeedSessionContext,
 } from '@/lib/showcase-feed-query';
 import { runLaneRefresh, type LaneRefreshInFlight } from '@/lib/feed-fresh-ranking';
@@ -556,19 +555,12 @@ export function HomeDashboard() {
   // request. The interactive mark carries which, so the two can be told apart.
   const feedSource = isPersistedHomeFeedData(feedQuery.dataUpdatedAt) ? 'persisted' : 'network';
   // The read this launch owes the saved page replaces it only while nobody has
-  // touched Home. At the first touch it is let go, the saved page stays, and
-  // the "New posts" pill offers the refresh (`lib/launch-feed-refresh.ts`).
+  // touched Home. Once the reader has, the saved page's posts stay where they
+  // are and the new ranking lands under them (`lib/launch-feed-refresh.ts`).
   const launchRefreshOut = isLaunchRefreshOut(feedQuery);
-  const [launchRefreshHeld, setLaunchRefreshHeld] = useState(false);
-  const holdLaunchRefreshAtTouch = () => {
-    if (!launchRefreshOut) return;
-    setLaunchRefreshHeld(true);
-    void holdLaunchRefresh(queryClient, laneQueryOptions.queryKey);
+  const keepSavedPageAtTouch = () => {
+    if (launchRefreshOut) keepRestoredPage(queryKey);
   };
-  // Only while the lane still holds that saved page: any read since has renewed it.
-  const offersHeldLaunchRefresh = launchRefreshHeld
-    && isLaneDataFromAnEarlierLaunch(feedQuery.dataUpdatedAt)
-    && activeChipId === PERSISTED_HOME_FEED_CHIP_ID;
   useEffect(() => {
     // Held until auth settles. Before then the lane on screen is the signed-out
     // one, under StartupCoordinator's cover, and a returning member's own lane
@@ -1225,7 +1217,7 @@ export function HomeDashboard() {
     // Tiles on this screen are what the reel grows out of and returns to.
     <FeedVideoActivationContext.Provider value={activationStore}>
     <MediaZoomSurface>
-    <View style={{ flex: 1, backgroundColor: theme.colors.background }} onTouchStart={holdLaunchRefreshAtTouch}>
+    <View style={{ flex: 1, backgroundColor: theme.colors.background }} onTouchStart={keepSavedPageAtTouch}>
       <BookPullArea pull={pull}>
       <FlashList
         keyboardShouldPersistTaps="never"
@@ -1381,7 +1373,7 @@ export function HomeDashboard() {
       />
 
       <NewPostsPill
-        visible={newPosts.hasNewer || offersHeldLaunchRefresh}
+        visible={newPosts.hasNewer}
         onPress={showNewPosts}
         topOffset={newPostsPillTop}
       />

@@ -103,3 +103,25 @@ export function applyShowcaseFeedLaneChange(
     queryClient.setQueryData<LaneData>(queryKey, next, updatedAt ? { updatedAt } : undefined);
   }
 }
+
+/**
+ * A saved edit, taken to the lanes that hold the post as it was: one no longer
+ * public leaves them, and one still public is read once and brought up to date
+ * where it stands. Nothing is read for a post no lane holds.
+ */
+export async function applyEditedPostToShowcaseFeedLanes(
+  queryClient: Pick<QueryClient, 'getQueriesData' | 'getQueryState' | 'setQueryData'>,
+  api: { getShowcasePost: (postId: string) => Promise<{ item?: ShowcaseFeedItem | null } | null | undefined> },
+  postId: string,
+  visibility: string | null | undefined,
+) {
+  if (visibility !== 'public') {
+    applyShowcaseFeedLaneChange(queryClient, { removedPostId: postId });
+    return;
+  }
+  const held = queryClient.getQueriesData<LaneData>({ queryKey: SHOWCASE_FEED_QUERY_KEY })
+    .some(([, data]) => data?.pages?.some((page) => page.items.some((item) => item.id === postId)));
+  if (!held) return;
+  const response = await api.getShowcasePost(postId).catch(() => null);
+  if (response?.item) applyShowcaseFeedLaneChange(queryClient, { refreshedPost: response.item });
+}

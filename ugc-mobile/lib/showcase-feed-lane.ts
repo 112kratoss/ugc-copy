@@ -1,7 +1,10 @@
+import type { QueryClient } from '@tanstack/react-query';
+
 import type { MagicbookletApiClient } from './api-client';
 import { noteShowcaseFeedReadAheadSupport, takeExploreReadAheadToken } from './explore-read-ahead';
 import { isFreshRankingRequested, settleFreshRanking } from './feed-fresh-ranking';
 import { drainBeforeRankedFirstPage } from './feed-ranked-page-drain';
+import { firstPageUnderRestoredPage } from './launch-feed-refresh';
 import { FEED_WINDOW_PAGE_LIMIT, getPreviousFeedPageParam } from './feed-page-window';
 import type { PreviewViewerSource } from './immersive-preview-view-model';
 import {
@@ -72,10 +75,11 @@ export function showcaseFeedLaneQueryOptions(
   filters: ShowcaseFeedFilters,
   identityUserId: string | null | undefined,
 ) {
+  const queryKey = createShowcaseFeedQueryKey(filters, identityUserId);
   return {
-    queryKey: createShowcaseFeedQueryKey(filters, identityUserId),
+    queryKey,
     initialPageParam: { offset: 0 } as ShowcaseFeedPageParam,
-    queryFn: async ({ pageParam }: { pageParam: ShowcaseFeedPageParam }) => {
+    queryFn: async ({ pageParam, client }: { pageParam: ShowcaseFeedPageParam; client?: Pick<QueryClient, 'getQueryState'> }) => {
       const firstPage = !pageParam.cursor && !pageParam.offset;
       // A first page the reader asked for again (a pull, "New posts"): asked
       // on every try, so a retry of a failed read asks again, and spent once
@@ -109,7 +113,9 @@ export function showcaseFeedLaneQueryOptions(
       }));
       if (fresh) settleFreshRanking(filters, identityUserId);
       noteShowcaseFeedReadAheadSupport(filters, page);
-      return page;
+      // A page restored at launch that the reader has started on keeps its
+      // posts, with this answer under them (`launch-feed-refresh.ts`).
+      return firstPage ? firstPageUnderRestoredPage(client, queryKey, page, fresh) : page;
     },
     getNextPageParam: getNextShowcaseFeedPageParam,
     // A chronological lane keeps a window of pages and re-reads the ones it

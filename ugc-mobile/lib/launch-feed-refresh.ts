@@ -1,32 +1,81 @@
-import type { QueryClient, QueryKey } from '@tanstack/react-query';
+import type { InfiniteData, QueryClient, QueryKey } from '@tanstack/react-query';
 
 import { isLaneDataFromAnEarlierLaunch } from './showcase-feed-query';
+import type { ShowcaseFeedResponse } from './types';
 
 /**
- * The read a launch owes the page it restored, and what happens to it once the
- * reader has started on that page.
+ * The read a launch owes the page it restored, and what its answer does to a
+ * page the reader has already started on.
  *
  * A cold start draws Home's For You page as the last launch saved it and reads
  * the lane again behind it (`persisted-home-feed.ts`). The answer is a new
  * ranking, and it lands seconds later (about 7 s on a slow start): by then the
  * reader has scrolled, or opened a post and come back, and found other posts
- * where theirs were (owner, 2026-11-27). A feed that has been touched keeps its
- * posts and offers the new ones, as every lane does on a return to the app
- * (product decision D2). So the read replaces the page only while nobody has
- * touched it. At the first touch it is let go, the saved page stays, and the
- * "New posts" pill offers the refresh.
+ * where theirs were (owner, 2026-11-27). So the answer replaces the page only
+ * while nobody has touched it. Once the reader has, the posts they were shown
+ * stay where they are and the new ranking goes below them, as the web's Explore
+ * keeps the tiles it has drawn (`mergeShowcaseFeedKeepingVisibleItems`).
  *
- * Letting go drops the answer on the phone only: the server has ranked and
- * served a page nobody sees, as it has for a refresh the reader cancels by
- * leaving. The pill's refresh ranks afresh.
+ * The lane is the new session's from then on: its cursor pages on, and a kept
+ * post the new ranking also holds takes that copy, with its delivery. A kept
+ * post it does not hold keeps no delivery: its old one belongs to a session
+ * the lane has left, and the server refuses a foreign delivery's events.
  */
+
+const lanesToKeep = new Set<string>();
+
+function laneId(queryKey: QueryKey) {
+  return JSON.stringify(queryKey);
+}
 
 /** Whether the read a launch owes its restored page is still out. */
 export function isLaunchRefreshOut(lane: { dataUpdatedAt: number; isFetching: boolean; isFetchingNextPage: boolean }) {
   return lane.isFetching && !lane.isFetchingNextPage && isLaneDataFromAnEarlierLaunch(lane.dataUpdatedAt);
 }
 
-/** Lets the launch's read go, leaving the lane the page it restored. */
-export function holdLaunchRefresh(queryClient: Pick<QueryClient, 'cancelQueries'>, queryKey: QueryKey) {
-  return queryClient.cancelQueries({ queryKey, exact: true }, { revert: true });
+/** The reader has touched the restored page while its read is out: its posts stay. */
+export function keepRestoredPage(queryKey: QueryKey) {
+  lanesToKeep.add(laneId(queryKey));
+}
+
+/** The new ranking under the restored page's posts. */
+export function mergeUnderRestoredPage(restored: ShowcaseFeedResponse, fresh: ShowcaseFeedResponse): ShowcaseFeedResponse {
+  const freshById = new Map(fresh.items.map((item) => [item.id, item] as const));
+  const keptIds = new Set(restored.items.map((item) => item.id));
+  return {
+    ...fresh,
+    items: [
+      ...restored.items.map((item) => {
+        const again = freshById.get(item.id);
+        if (again) return again;
+        const { recommendation: _otherSession, ...kept } = item;
+        return kept;
+      }),
+      ...fresh.items.filter((item) => !keptIds.has(item.id)),
+    ],
+  };
+}
+
+/**
+ * What a lane's first-page read hands back: its answer, or its answer under the
+ * page the lane holds where the reader's touch asked for that page to be kept.
+ * The ask is spent by the first answer either way, and never applies to a
+ * refresh the reader asked for (a pull, the pill). Only a first-page answer
+ * renews the page, and each one spends the ask, so the page it finds is the one
+ * the reader touched. Its age is not asked again: a save or a hidden post in
+ * the seconds between the touch and the answer stamps the lane as written now.
+ */
+export function firstPageUnderRestoredPage(
+  client: Pick<QueryClient, 'getQueryState'> | undefined,
+  queryKey: QueryKey,
+  fresh: ShowcaseFeedResponse,
+  readerAskedForRefresh: boolean,
+): ShowcaseFeedResponse {
+  if (!lanesToKeep.delete(laneId(queryKey)) || readerAskedForRefresh || !client) return fresh;
+  const restored = client.getQueryState<InfiniteData<ShowcaseFeedResponse>>(queryKey)?.data?.pages[0];
+  return restored ? mergeUnderRestoredPage(restored, fresh) : fresh;
+}
+
+export function resetRestoredPageKeepsForTests() {
+  lanesToKeep.clear();
 }

@@ -16,7 +16,7 @@ import { KeyboardAvoidingArea } from '@/components/keyboard-aware';
 import { PublicIdentityCard } from '@/components/public-identity-card';
 import { Overlay } from '@/components/overlay-host';
 import { SheetBackdrop, SheetGrabber, SheetPanel, sheetMotion, useSheetDismissDrag, useSheetPresentation, type SheetDismissDrag } from '@/components/sheet-chrome';
-import { refreshShowcaseFeedTimelines } from '@/lib/showcase-feed-lane-refresh';
+import { applyEditedPostToShowcaseFeedLanes, refreshShowcaseFeedTimelines } from '@/lib/showcase-feed-lane-refresh';
 import { showConfirmDialog, showMessageDialog } from '@/lib/dialog';
 import { showActionSheet } from '@/lib/action-sheet';
 import { StableMediaImage } from '@/components/media-preview';
@@ -3047,6 +3047,14 @@ function NewPostComposer() {
       void invalidatePostCaches(queryClient, user?.id);
       if (isEditMode && targetPostId) {
         void invalidateEditedPostCaches(queryClient, user?.id, targetPostId);
+        // The feed lanes are not read again for an edit; their copy of this
+        // post is brought up to date, or leaves if it is no longer public.
+        void applyEditedPostToShowcaseFeedLanes(
+          queryClient,
+          api,
+          targetPostId,
+          response.visibility ?? context?.submittedDraft.visibility,
+        );
       }
       if (targetPostId) {
         setIsNavigationAllowed(true);

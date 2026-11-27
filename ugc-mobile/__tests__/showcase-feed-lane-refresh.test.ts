@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createShowcaseFeedQueryKey } from '../lib/showcase-feed-query';
 import {
+  applyEditedPostToShowcaseFeedLanes,
   applyShowcaseFeedLaneChange,
   refreshShowcaseFeedTimelines,
 } from '../lib/showcase-feed-lane-refresh';
@@ -159,5 +160,39 @@ describe('a change written into the lanes', () => {
     applyShowcaseFeedLaneChange(queryClient, { removedPostId: 'a' });
 
     expect(queryClient.getQueryData(RECENT)).toBe(before);
+  });
+});
+
+// The composer's edit used to end in a read of every lane. It ends in this.
+describe('a saved edit', () => {
+  it('brings the lanes\' copy of the post up to date with one read of the post, and no read of a lane', async () => {
+    const api = { getShowcasePost: vi.fn(async () => ({ item: post('b', 'creator-2', { title: 'Edited title' }) })) };
+
+    await applyEditedPostToShowcaseFeedLanes(queryClient, api, 'b', 'public');
+
+    expect(api.getShowcasePost).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData<InfiniteData<ShowcaseFeedResponse>>(FOR_YOU)?.pages[0].items[1]).toMatchObject({ id: 'b', title: 'Edited title' });
+    expect(laneIds(FOR_YOU)).toEqual([['a', 'b'], ['c', 'd']]);
+    expect(readRanked).not.toHaveBeenCalled();
+  });
+
+  it.each(['private', 'unlisted'])('takes a post made %s out of the lanes without a read', async (visibility) => {
+    const api = { getShowcasePost: vi.fn() };
+
+    await applyEditedPostToShowcaseFeedLanes(queryClient, api, 'b', visibility);
+
+    expect(laneIds(FOR_YOU)).toEqual([['a'], ['c', 'd']]);
+    expect(api.getShowcasePost).not.toHaveBeenCalled();
+    expect(readRanked).not.toHaveBeenCalled();
+  });
+
+  it('reads nothing for a post no lane holds, and leaves the lanes alone when the read fails', async () => {
+    const api = { getShowcasePost: vi.fn(async () => { throw new Error('Network request failed'); }) };
+
+    await applyEditedPostToShowcaseFeedLanes(queryClient, api, 'not-in-any-lane', 'public');
+    expect(api.getShowcasePost).not.toHaveBeenCalled();
+
+    await applyEditedPostToShowcaseFeedLanes(queryClient, api, 'b', 'public');
+    expect(laneIds(FOR_YOU)).toEqual([['a', 'b'], ['c', 'd']]);
   });
 });
