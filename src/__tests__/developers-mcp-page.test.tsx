@@ -132,8 +132,9 @@ describe('/developers/mcp', () => {
     expect(words).toContain('chatgpt-client-id');
     // The client id goes under Advanced OAuth settings, with no secret and token method none.
     expect(words).toMatch(/open Advanced OAuth settings and enter this\s+client ID\. Leave the client secret empty and the token endpoint auth method on none\./);
-    // ChatGPT ticks offline_access by default and Supabase's OAuth server refuses it (runbook, "Registered clients").
-    expect(words).toContain('untick offline_access');
+    // The app's own authorization server offers ChatGPT only the scope mcp, so there is no
+    // offline_access left to untick, as there was under Supabase's (runbook, "Registered clients").
+    expect(words).not.toContain('offline_access');
   });
 
   it('names a waiting app as coming in the header and the search snippet, never as connectable', () => {

@@ -174,6 +174,8 @@ Each step from 2 on is the owner's to approve. Steps 1 to 3 change nothing a cre
    URL and a client id, never an authorization server, and both are unchanged: nothing to
    republish. Reconnect once from the Claude connectors-directory listing (posting server) and
    from ChatGPT to confirm their held client id (and the directory's secret) still sign in.
+   ChatGPT could not reconnect: its plugin keeps the endpoints it discovered when it was made, so
+   on 2026-11-27 it was deleted and added again ("Registered clients").
 10. Follow-up PR: delete the `supabase` and `both` paths (the plan's last step). Done the same
     day: the flag, the code that read Supabase's tokens and the import are gone, and the
     `MCP_AUTHORIZATION_SERVER` variable left in Vercel is read by nothing.
@@ -218,7 +220,7 @@ connector form is one production has never heard of.
 |---|---|---|
 | Claude.ai, Claude Desktop, Claude mobile | `https://claude.ai/api/mcp/auth_callback` (exactly this) | Settings → Connectors → Add custom connector → URL `https://magicbooklet.com/api/mcp`; under Advanced ("Use your own OAuth client") the client id, no secret |
 | Claude Code | `http://localhost:8976/callback` (our documented port; the URI must match exactly, so the port is fixed) | `claude mcp add --transport http --scope user --client-id <id> --callback-port 8976 magicbooklet https://magicbooklet.com/api/mcp` (user scope: the default, `local`, ties the server to the folder the command ran in), then `/mcp` (or `claude mcp login magicbooklet`, which needs a terminal) |
-| ChatGPT (plugins, Apps SDK) | `https://chatgpt.com/connector/oauth/{callback_id}`, shown under Advanced OAuth settings in the Add custom MCP server form before anything is saved (the server sends no RFC 9207 `iss`, so ChatGPT's stable redirect does not apply). The owner's account shows `R0qoU77QhExz` for this server; whether another account gets the same id is not known ("Registered clients") | Plugins → Add → Add custom MCP server: the URL, OAuth, and under Advanced OAuth settings the client id, no secret, token method `none`, with `offline_access` unticked; works on the Free plan |
+| ChatGPT (plugins, Apps SDK) | `https://chatgpt.com/connector/oauth/{callback_id}`, shown under Advanced OAuth settings in the Add custom MCP server form before anything is saved (the server sends no RFC 9207 `iss`, so ChatGPT's stable redirect does not apply). The owner's account shows `R0qoU77QhExz` for this server, before and after the move to the app's own authorization server; whether another account gets the same id is not known ("Registered clients") | Plugins → Add → Add custom MCP server: the URL, OAuth, and under Advanced OAuth settings the client id, no secret, token method `none`, the one default scope offered (`mcp`) left as it is; works on the Free plan |
 | Codex CLI | `http://127.0.0.1:8977/callback/PPpoTd8EYBlz` (exactly this: Codex appends a callback ID derived from the server URL and inserts the pinned port; a `callback_url` without that ID is ignored, see "Distribution") | `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`, `callback_port = 8977` under `[mcp_servers.magicbooklet.oauth]` in `~/.codex/config.toml`, then `codex mcp login magicbooklet` |
 | Cursor | `http://localhost:8787/callback` (desktop) and `https://www.cursor.com/agents/mcp/oauth/callback` (web and Cursor Agents) | `auth: { CLIENT_ID: "<id>" }` on the server entry in `.cursor/mcp.json`, or the deeplink |
 
@@ -260,10 +262,25 @@ the form shows. If it is per account, another person's plugin would be refused a
 coming soon until one of two things happens. Either a second ChatGPT account shows the same id
 for `https://magicbooklet.com/api/mcp` (then the id goes into `MCP_CLIENT_IDS`), or the app is
 listed in ChatGPT's directory. Switching ChatGPT on then needs no new page text, because the setup
-page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, `offline_access`
-unticked). The id goes into `MCP_CLIENT_IDS` and the shared callback into
+page already carries ChatGPT's full steps (Advanced OAuth settings, no secret, token method
+`none`). The id goes into `MCP_CLIENT_IDS` and the shared callback into
 `MCP_CLIENT_REDIRECT_URIS.chatgpt`, and its comment and the test's `toEqual([])` change with it. A different callback id is added by an `update` of the client's `redirect_uris` on
 `public.agent_oauth_clients`, the existing URI kept (`ops:oauth-clients` has no update command).
+
+The move to the app's own authorization server on 2026-11-26 signed the plugin out, and its
+Reconnect could not sign it back in. A ChatGPT plugin keeps the authorize and token URLs it
+discovered when it was made, and has no setting to change them, so Reconnect opened Supabase's
+switched-off `/auth/v1/oauth/authorize` (404 `feature_disabled`). On 2026-11-27 the plugin was
+deleted (Plugin settings → Delete app, which cannot be undone) and added again, and checked
+with `list_models`. The new form discovered `https://magicbooklet.com/oauth/authorize` and
+`/oauth/token`, offered only the scope `mcp`, and showed the same `R0qoU77QhExz`, already
+registered. Any later change of authorization server needs the same delete and re-add, and an
+`offline_access` untick is no longer part of it: only Supabase's server refused that scope.
+The id survived a change of authorization server as well as of server URL, so a per-account id
+is the likelier reading, and a second account's check the likelier to fail. The other way to
+offer ChatGPT to everyone is RFC 9207: an authorization server that returns `iss` moves every
+account to ChatGPT's stable `https://chatgpt.com/connector_platform_oauth_redirect`. The app's
+server does not return it yet, and adding it changes which redirect Codex sends (below).
 
 Codex never sends the two `/callback/magicbooklet` URIs to this server. Production's metadata
 advertises no `authorization_response_iss_parameter_supported`, so Codex appends its callback ID
@@ -970,16 +987,18 @@ section 9) has the sources.
   would be missing from every other project. The redirect is `http://localhost:8976/callback`;
   the port must be free while the person signs in.
 - **ChatGPT**: Plugins → Add → Add custom MCP server: the URL under Connection, OAuth, and
-  under Advanced OAuth settings the client id (no secret, token method `none`). Untick the default
-  scope `offline_access` (Supabase's server refused any scope beyond `openid profile email phone`;
-  the app's grants `mcp` whatever is asked, so either way works). Then
+  under Advanced OAuth settings the client id (no secret, token method `none`). The default
+  scopes need nothing: the form offers only `mcp`, the metadata's `scopes_supported` (the first
+  plugin, made against Supabase's server, had to untick `offline_access`, which that server
+  refused). Then
   tick "I understand and want to continue" and choose Create as a plugin; Continue to Magic
   Booklet opens the consent page. It works on the Free plan, and workspace policies decide
   whether custom servers are allowed. The redirect is
   `https://chatgpt.com/connector/oauth/{callback_id}`, shown in that same section before
   anything is saved (the server sends no RFC 9207 `iss`, so ChatGPT's stable
   `https://chatgpt.com/connector_platform_oauth_redirect` does not apply). Register it before
-  creating the plugin.
+  creating the plugin. A plugin made before a change of authorization server is deleted and
+  added again: it keeps the endpoints it discovered, so Reconnect cannot follow the change.
 - **Codex**: `codex mcp add magicbooklet --url https://magicbooklet.com/api/mcp --oauth-client-id <id>`
   writes `[mcp_servers.magicbooklet]` with `url`, and `[mcp_servers.magicbooklet.oauth]` with
   `client_id` (a configured client id skips registration). Two things decide the redirect URI:
