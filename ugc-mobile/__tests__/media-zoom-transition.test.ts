@@ -45,6 +45,7 @@ import {
   type ZoomSourceHandle,
   subscribeToTileOpen,
   tileOpenHoldsTouchesUntil,
+  tileOpenSurface,
   TILE_OPEN_TOUCH_HOLD_MAX_MS,
 } from '../lib/media-zoom-transition';
 import type { ShowcaseMediaItem } from '../lib/types';
@@ -513,6 +514,16 @@ describe('how long the screen under an opening post leaves touches alone', () =>
     expect(tileOpenHoldsTouchesUntil(NOW + TILE_OPEN_TOUCH_HOLD_MAX_MS)).toBeNull();
     endTileOpen(open);
     expect(tileOpenHoldsTouchesUntil(NOW + 1500)).toBeNull();
+  });
+
+  it('names the surface the tapped tile is on, for as long as the open lasts', () => {
+    expect(tileOpenSurface()).toBeNull();
+    const open = beginTileOpen(NOW, 600, 'explore');
+    expect(tileOpenSurface()).toBe('explore');
+    claimTileOpen(NOW + 100);
+    expect(tileOpenSurface()).toBe('explore');
+    endTileOpen(open);
+    expect(tileOpenSurface()).toBeNull();
   });
 
   it('tells its listeners when an open begins, is taken over and ends, and no longer once they leave', () => {

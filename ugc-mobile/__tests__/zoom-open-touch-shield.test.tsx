@@ -42,7 +42,7 @@ vi.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 59, bottom: 34, left: 0, right: 0 }),
 }));
 
-import { MediaZoomSurface } from '@/components/media-zoom';
+import { MediaZoomSurface, useMediaZoomSurfaceId } from '@/components/media-zoom';
 import {
   beginTileOpen,
   claimTileOpen,
@@ -60,7 +60,15 @@ function shieldOf(view: renderer.ReactTestRenderer) {
 
 const takes = (view: renderer.ReactTestRenderer) => shieldOf(view).props.animatedProps.pointerEvents === 'auto';
 
-const surface = () => <MediaZoomSurface>{React.createElement('grid')}</MediaZoomSurface>;
+/** The id of the surface drawn last, as a tile on it knows it. */
+let surfaceId: string | null = null;
+
+function Tile() {
+  surfaceId = useMediaZoomSurfaceId();
+  return React.createElement('grid');
+}
+
+const surface = () => <MediaZoomSurface><Tile /></MediaZoomSurface>;
 
 function mountSurface() {
   let view!: renderer.ReactTestRenderer;
@@ -94,7 +102,7 @@ describe('the screen under an opening post', () => {
     expect(shield.props.onStartShouldSetResponder()).toBe(true);
 
     act(() => {
-      opened = beginTileOpen(Date.now(), 600);
+      opened = beginTileOpen(Date.now(), 600, surfaceId);
     });
     expect(takes(view)).toBe(true);
   });
@@ -102,7 +110,7 @@ describe('the screen under an opening post', () => {
   it('lets touches through again once the reel the open pushed can be touched', () => {
     const view = mountSurface();
     act(() => {
-      opened = beginTileOpen(Date.now(), 600);
+      opened = beginTileOpen(Date.now(), 600, surfaceId);
     });
     act(() => {
       claimTileOpen(Date.now());
@@ -120,7 +128,7 @@ describe('the screen under an opening post', () => {
   it('lets go by the clock when no reel takes the open over, or the reel never says it is up', () => {
     const view = mountSurface();
     act(() => {
-      opened = beginTileOpen(Date.now(), 600);
+      opened = beginTileOpen(Date.now(), 600, surfaceId);
     });
     act(() => {
       vi.advanceTimersByTime(599);
@@ -133,7 +141,7 @@ describe('the screen under an opening post', () => {
 
     act(() => {
       vi.setSystemTime(Date.now() + 10_000);
-      opened = beginTileOpen(Date.now(), 600);
+      opened = beginTileOpen(Date.now(), 600, surfaceId);
     });
     act(() => {
       claimTileOpen(Date.now());
@@ -145,10 +153,24 @@ describe('the screen under an opening post', () => {
     expect(takes(view)).toBe(false);
   });
 
-  it('covers a screen that mounts while an open is under way', () => {
+  it('covers the tapped tile\u2019s own screen only: not another surface, nor the one the open brings up', () => {
+    const tapped = mountSurface();
+    const tappedId = surfaceId;
+    const other = mountSurface();
     act(() => {
-      opened = beginTileOpen(Date.now(), 600);
+      opened = beginTileOpen(Date.now(), 600, tappedId);
     });
-    expect(takes(mountSurface())).toBe(true);
+    expect(takes(tapped)).toBe(true);
+    expect(takes(other)).toBe(false);
+    // The profile's card feed is a surface too, and mounts while the open is under way.
+    expect(takes(mountSurface())).toBe(false);
+  });
+
+  it('takes nothing for a tile on no surface', () => {
+    const view = mountSurface();
+    act(() => {
+      opened = beginTileOpen(Date.now(), 600, null);
+    });
+    expect(takes(view)).toBe(false);
   });
 });

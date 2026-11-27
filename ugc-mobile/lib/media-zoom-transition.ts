@@ -225,6 +225,8 @@ interface TileOpen {
   startedAt: number;
   holdMs: number;
   claimed: boolean;
+  /** The surface the tapped tile is on (`MediaZoomSurface`), when it is on one. */
+  surfaceId: string | null;
   /**
    * Back was pressed after the reel was pushed and before it could answer:
    * the reel closes as soon as it has taken the open over
@@ -278,7 +280,16 @@ export const TILE_OPEN_TOUCH_HOLD_MAX_MS = 5000;
  * seven opens each swiped about 0.25 s after the reel's screen was made;
  * on the Pixel 9a emulator the grid moved 2,100 px). The same hold as for a
  * second tap on a tile (`canOpenFromTile`), for every touch.
+ *
+ * Of the tapped tile's own screen only (`tileOpenSurface`): the screen the
+ * open brings up can itself be a surface (the profile's card feed), and is the
+ * one to be touched.
  */
+/** The surface whose tile is opening a post, or null: no open under way, or a tile on no surface. */
+export function tileOpenSurface(): string | null {
+  return tileOpen?.surfaceId ?? null;
+}
+
 export function tileOpenHoldsTouchesUntil(now: number): number | null {
   if (!tileOpen) return null;
   const until = tileOpen.startedAt + (tileOpen.claimed ? TILE_OPEN_TOUCH_HOLD_MAX_MS : tileOpen.holdMs);
@@ -297,10 +308,10 @@ export function canOpenFromTile(now: number): boolean {
  * way, and the tap is to be ignored. The hold defaults to the hand-off's own
  * lifetime: a reel mounting later than that would not grow out of the tile.
  */
-export function beginTileOpen(now: number, holdMs = ORIGIN_TTL_MS): number | null {
+export function beginTileOpen(now: number, holdMs = ORIGIN_TTL_MS, surfaceId: string | null = null): number | null {
   if (!canOpenFromTile(now)) return null;
   tileOpenSerial += 1;
-  setTileOpen({ serial: tileOpenSerial, startedAt: now, holdMs, claimed: false, closeRequested: false });
+  setTileOpen({ serial: tileOpenSerial, startedAt: now, holdMs, claimed: false, closeRequested: false, surfaceId });
   return tileOpenSerial;
 }
 
