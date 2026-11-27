@@ -19,13 +19,23 @@ import {
   type BackendModerationHealthStatus,
 } from '@/lib/backend-moderation-health';
 import {
+  collectGenerationOutputImportFailures,
+  generationOutputImportAlertFromStatus,
+  type GenerationOutputImportFailureStatus,
+} from '@/lib/generation-output-import-alert';
+import {
+  collectPaymentCaptureAnomalies,
+  paymentCaptureAlertFromStatus,
+  type PaymentCaptureAnomalyStatus,
+} from '@/lib/payment-capture-anomalies';
+import {
   collectKieBalanceStatus,
   kieBalanceAlertFromStatus,
   type KieBalanceStatus,
 } from '@/lib/kie-account-balance-alert';
 
 export type BackendAlertSeverity = 'warning' | 'degraded';
-export type BackendAlertSource = 'health' | 'costs' | 'moderation' | 'kie-balance';
+export type BackendAlertSource = 'health' | 'costs' | 'moderation' | 'kie-balance' | 'generation-imports' | 'payments';
 export type BackendAlertStatus = 'ok' | BackendAlertSeverity;
 
 export type BackendAlert = {
@@ -72,6 +82,10 @@ type BuildBackendAlertSummaryInput = {
   moderation: BackendModerationHealth;
   /** The Kie credit balance episode (kie-account-balance-alert.ts); no alert without one. */
   kieBalance?: KieBalanceStatus | null;
+  /** Finished renders whose file could not be stored (generation-output-import-alert.ts). */
+  outputImportFailures?: GenerationOutputImportFailureStatus | null;
+  /** Captured payments that credited nothing (payment-capture-anomalies.ts). */
+  paymentCaptureAnomalies?: PaymentCaptureAnomalyStatus | null;
   checkedAt?: string;
 };
 
@@ -84,6 +98,8 @@ type CollectBackendAlertsOptions = {
     now: Date,
   ) => Promise<BackendModerationHealth>;
   collectKieBalance?: (client: SupabaseClient) => Promise<KieBalanceStatus>;
+  collectOutputImportFailures?: (client: SupabaseClient, now: Date) => Promise<GenerationOutputImportFailureStatus>;
+  collectPaymentCaptureAnomalies?: (client: SupabaseClient, now: Date) => Promise<PaymentCaptureAnomalyStatus>;
   /**
    * False for the half-hourly alert push: the balance job pushes its own alert
    * once per episode, so the summary push must not re-send it every run.
@@ -126,6 +142,25 @@ function toKieBalanceAlerts(kieBalance: KieBalanceStatus | null | undefined): Ba
   return alert ? [{ source: 'kie-balance', severity: 'degraded', ...alert }] : [];
 }
 
+/**
+ * Two more alerts that are deliberately not health issues, for the same
+ * reason as the Kie balance: they are degraded here, so the watchdog mails the
+ * owner, and they never hold a release. A failing output import is bounded (it
+ * ends delivered or refunded within its window), and an unmatched payment is
+ * settled by hand in Razorpay.
+ */
+function toOperatorAlerts(
+  outputImportFailures: GenerationOutputImportFailureStatus | null | undefined,
+  paymentCaptureAnomalies: PaymentCaptureAnomalyStatus | null | undefined,
+): BackendAlert[] {
+  const alerts: BackendAlert[] = [];
+  const importAlert = outputImportFailures ? generationOutputImportAlertFromStatus(outputImportFailures) : null;
+  if (importAlert) alerts.push({ source: 'generation-imports', severity: 'degraded', ...importAlert });
+  const paymentAlert = paymentCaptureAnomalies ? paymentCaptureAlertFromStatus(paymentCaptureAnomalies) : null;
+  if (paymentAlert) alerts.push({ source: 'payments', severity: 'degraded', ...paymentAlert });
+  return alerts;
+}
+
 function buildDeliveryPayload(
   status: BackendAlertStatus,
   counts: BackendAlertSummary['counts'],
@@ -162,6 +197,8 @@ export function buildBackendAlertSummary({
   costs,
   moderation,
   kieBalance,
+  outputImportFailures,
+  paymentCaptureAnomalies,
   checkedAt = new Date().toISOString(),
 }: BuildBackendAlertSummaryInput): BackendAlertSummary {
   const alerts = [
@@ -169,6 +206,7 @@ export function buildBackendAlertSummary({
     ...toAlerts('costs', costs.issues),
     ...toAlerts('moderation', moderation.issues),
     ...toKieBalanceAlerts(kieBalance),
+    ...toOperatorAlerts(outputImportFailures, paymentCaptureAnomalies),
   ];
   const degraded = alerts.filter((alert) => alert.severity === 'degraded').length;
   const warning = alerts.filter((alert) => alert.severity === 'warning').length;
@@ -212,11 +250,15 @@ export async function collectBackendAlerts(
   const collectCosts = options.collectCosts ?? collectBackendCostReport;
   const collectModeration = options.collectModeration ?? collectBackendModerationHealth;
   const collectKieBalance = options.collectKieBalance ?? collectKieBalanceStatus;
-  const [health, costs, moderation, kieBalance] = await Promise.all([
+  const collectOutputImportFailures = options.collectOutputImportFailures ?? collectGenerationOutputImportFailures;
+  const collectPaymentAnomalies = options.collectPaymentCaptureAnomalies ?? collectPaymentCaptureAnomalies;
+  const [health, costs, moderation, kieBalance, outputImportFailures, paymentCaptureAnomalies] = await Promise.all([
     collectHealth(client, now),
     collectCosts(client, now),
     collectModeration(client, now),
     options.includeKieBalance === false ? null : collectKieBalance(client),
+    collectOutputImportFailures(client, now),
+    collectPaymentAnomalies(client, now),
   ]);
 
   return buildBackendAlertSummary({
@@ -224,6 +266,8 @@ export async function collectBackendAlerts(
     costs,
     moderation,
     kieBalance,
+    outputImportFailures,
+    paymentCaptureAnomalies,
     checkedAt: now.toISOString(),
   });
 }
