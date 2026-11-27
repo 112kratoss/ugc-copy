@@ -486,8 +486,35 @@ function getSubmissionError(
 
 const POST_CREATE_IN_PROGRESS_CODE = 'POST_CREATE_IN_PROGRESS';
 const IDEMPOTENCY_KEY_CONFLICT_CODE = 'IDEMPOTENCY_KEY_CONFLICT';
+const POST_SAVED_AS_DRAFT_CODE = 'POST_SAVED_AS_DRAFT';
+const POST_SAVED_AS_DRAFT_MESSAGE = 'It is private and could not be made public.';
 const POST_CREATE_IN_PROGRESS_MESSAGE = 'Your post is still publishing. Try again in a moment.';
 const UNCONFIRMED_SAVE_MESSAGE = 'We could not confirm your post was saved. Check your posts before trying again.';
+
+/**
+ * The draft a 409 POST_SAVED_AS_DRAFT carries: the post written private, read from the body as a
+ * created post is (or from its `post` field), or null when it names none. Always private, so the
+ * way to it is its editor.
+ */
+function readSavedDraft(
+  data: SaveResponseBody,
+  resourceAccessMode: PostResourceBundleAccessMode,
+): CreatedPostState | null {
+  const post = data.post && typeof data.post === 'object' ? data.post as Record<string, unknown> : data;
+  const postId = typeof post.postId === 'string' ? post.postId : typeof post.id === 'string' ? post.id : null;
+  if (!postId) return null;
+  return {
+    postId,
+    showcasePath: null,
+    ownerPath: typeof post.ownerPath === 'string' ? post.ownerPath : `/post/${postId}/edit`,
+    resourceBundlePath: typeof post.resourceBundlePath === 'string' ? post.resourceBundlePath : null,
+    visibility: 'private',
+    resourceAccessMode,
+    resourceBundleStatus: post.resourceBundleStatus === 'draft' || post.resourceBundleStatus === 'published'
+      ? post.resourceBundleStatus
+      : null,
+  };
+}
 
 /**
  * Whether a refused publish ends its Idempotency-Key (POST /api/posts). A key the server can no
@@ -1200,6 +1227,9 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
   const submitVisibilityRef = useRef<PostVisibility>(getComposerVisibility(initialPost?.visibility));
   // The Idempotency-Key of the post being composed (POST /api/posts), made at its first publish.
   const publishIdempotencyKeyRef = useRef<string | null>(null);
+  // A post the server wrote as a private draft and could not make public (409 POST_SAVED_AS_DRAFT):
+  // the composer's post from then on, edited in its own editor, never created again.
+  const savedDraftRef = useRef<CreatedPostState | null>(null);
   const priceInputRef = useRef<HTMLInputElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const postSectionRef = useRef<HTMLDivElement | null>(null);
@@ -3080,6 +3110,11 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
     removalAnswered?: boolean;
   } = {}) => {
     setError(null);
+    if (!isEditMode && savedDraftRef.current) {
+      // The post already exists as a draft: its editor saves it, so no second post is made.
+      leaveForPublishedPost(savedDraftRef.current);
+      return;
+    }
     setCreatedPost(null);
     const accessModeForSubmit: PostResourceBundleAccessMode = withoutRecipe ? 'none' : resourceAccessMode;
 
@@ -3495,6 +3530,22 @@ export default function NewPostClient({ initialPost = null, initialPublicIdentit
       }
       if (!response.ok) {
         const code = typeof data.code === 'string' ? data.code : null;
+        const draft = response.status === 409 && code === POST_SAVED_AS_DRAFT_CODE
+          ? readSavedDraft(data, accessModeForSubmit)
+          : null;
+        if (draft) {
+          // Written, as a private draft: this key is spent, and the draft is the composer's post.
+          // The person is told why and taken to its editor, where a save updates it.
+          publishIdempotencyKeyRef.current = null;
+          savedDraftRef.current = draft;
+          // As the app's composer says it: "Saved as a draft", then the server's words.
+          pushToast({
+            tone: 'info',
+            message: `Saved as a draft. ${typeof data.error === 'string' && data.error.trim() ? data.error.trim() : POST_SAVED_AS_DRAFT_MESSAGE}`,
+          });
+          leaveForPublishedPost(draft);
+          return;
+        }
         if (response.status === 409 && code === POST_CREATE_IN_PROGRESS_CODE) {
           // An earlier attempt with this key is still running: the key stays, so the next press
           // answers that same post.

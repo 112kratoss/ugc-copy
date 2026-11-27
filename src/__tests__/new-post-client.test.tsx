@@ -7188,6 +7188,41 @@ describe('NewPostClient', () => {
         expect(second).toBe(first);
       });
 
+      // The post was written as a private draft and could not be made public (409
+      // POST_SAVED_AS_DRAFT, the post in the body). Another press must not create another post:
+      // the draft is this composer's post from then on, and the person is taken to its editor.
+      it('takes a post saved as a draft on as its own and creates no other', async () => {
+        loadOwnProfileMock.mockResolvedValue({ ...placeholderProfile, username: 'maya-k', displayName: 'Maya K' });
+        enqueueResponse({
+          ok: false,
+          status: 409,
+          json: async () => ({
+            code: 'POST_SAVED_AS_DRAFT',
+            error: 'Your post was saved as a private draft. It could not be made public.',
+            postId: 'post-draft-1',
+            showcasePath: null,
+            ownerPath: '/post/post-draft-1/edit',
+            visibility: 'private',
+            resourceBundleStatus: null,
+          }),
+        });
+        enqueueResponse(createdPost);
+        render(<NewPostClient />);
+        writeTextPost();
+        await waitFor(() => expect(loadOwnProfileMock).toHaveBeenCalled());
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+        await waitFor(() => expect(postsCalls()).toHaveLength(1));
+        await waitFor(() => expect(readFeedbackSnapshot().toasts.map((toast) => toast.message))
+          .toContain('Saved as a draft. Your post was saved as a private draft. It could not be made public.'));
+        // Left the way a private save leaves: for the draft's editor, with no offer to share a public post.
+        expect(screen.queryByRole('button', { name: /share/i })).not.toBeInTheDocument();
+        await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith(expect.stringMatching(/^\/post\/post-draft-1\/edit/)));
+
+        fireEvent.click(screen.getAllByRole('button', { name: /publish public/i })[0]);
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        expect(postsCalls()).toHaveLength(1);
+      });
+
       it('keeps the key when the server is throttling', async () => {
         await publishTwice({ status: 429, body: { error: 'Too many posts. Try again shortly.' } });
         const [first, second] = keysSent();
