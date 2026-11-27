@@ -769,6 +769,11 @@ export default function PostResourceBundlePanel({
         }
         throw new Error(orderData.error || 'Failed to start checkout.');
       }
+      // A 200 with no order in it (a page the platform put in its place) would open the sheet
+      // with no order and no amount.
+      if (!orderData.alreadyPurchased && !orderData.orderId) {
+        throw new Error('Failed to start checkout.');
+      }
 
       if (orderData.alreadyPurchased) {
         clearRazorpayCheckoutIntentKey(checkoutIntentScope);
