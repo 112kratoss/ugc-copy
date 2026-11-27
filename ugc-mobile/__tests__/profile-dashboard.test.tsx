@@ -428,6 +428,7 @@ vi.mock('@tanstack/react-query', () => ({
 
 import { ProfileDashboard } from '../components/profile-dashboard';
 import { Reveal } from '../components/reveal';
+import { haptic } from '../lib/haptics';
 import { resetMediaZoomTransitions } from '../lib/media-zoom-transition';
 import { DEFAULT_PROFILE_MEDIA_TAB, PROFILE_MEDIA_TABS } from '../lib/profile-view-model';
 import { PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS, PROFILE_MEDIA_MIN_FILL_COUNT } from '../lib/profile-media-query';
@@ -1021,6 +1022,31 @@ describe('ProfileDashboard media tiles routing', () => {
         initialId: 'saved-1',
       },
     });
+  });
+
+  // Owner, 2026-11-27: opening media plays no haptic; on the S24 every tile
+  // open buzzed for 110 ms (archive/ux-feel-audit-2026-11-27).
+  it('opens a tile without a haptic', async () => {
+    const plays = (['select', 'light', 'soft', 'medium', 'success', 'error'] as const)
+      .map((kind) => vi.spyOn(haptic, kind));
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Saved" />);
+    });
+    const tile = tree!.root.findByProps({ accessibilityLabel: 'Saved, Saved Title, 5 likes' });
+
+    try {
+      await renderer.act(async () => {
+        tile.props.onPress();
+        await Promise.resolve();
+      });
+
+      expect(routerState.push).toHaveBeenCalledTimes(1);
+      for (const play of plays) expect(play).not.toHaveBeenCalled();
+    } finally {
+      plays.forEach((play) => play.mockRestore());
+      renderer.act(() => tree!.unmount());
+    }
   });
 
   it('opens a saved text-only post in the same dedicated viewer as Home', () => {

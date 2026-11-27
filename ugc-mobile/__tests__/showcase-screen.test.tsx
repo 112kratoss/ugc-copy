@@ -1433,6 +1433,34 @@ describe('Showcase screen', () => {
     renderer.act(() => tile.unmount());
   });
 
+  // Owner, 2026-11-27: opening media plays no haptic; the zoom out of the tile
+  // is the feedback (archive/ux-feel-audit-2026-11-27).
+  it('opens a tile without a haptic', () => {
+    queryState.pages = [{ items: [{ ...feedItem(), body: '' }], pageInfo: { hasMore: false, nextOffset: null } }];
+    vi.mocked(router.push).mockClear();
+    const plays = (['select', 'light', 'soft', 'medium', 'success', 'error'] as const)
+      .map((kind) => vi.spyOn(haptic, kind));
+    const list = flashListProps();
+    const tile = renderAlone(
+      <FeedVideoActivationContext.Provider value={createFeedVideoActivationStore()}>
+        {list.renderItem({ item: list.data[0], index: 0, target: 'Cell' })}
+      </FeedVideoActivationContext.Provider>
+    );
+    const open = tile.root.find((node) => (
+      String(node.type) === 'pressable' && node.props.accessibilityHint === 'Opens this post in the full-screen viewer'
+    ));
+
+    try {
+      renderer.act(() => open.props.onPress());
+
+      expect(router.push).toHaveBeenCalledTimes(1);
+      for (const play of plays) expect(play).not.toHaveBeenCalled();
+    } finally {
+      plays.forEach((play) => play.mockRestore());
+      renderer.act(() => tile.unmount());
+    }
+  });
+
   it('keeps the play badge on an elected tile that Never holds on its poster', () => {
     const base = feedItem();
     queryState.pages = [{

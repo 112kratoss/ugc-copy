@@ -712,8 +712,8 @@ export default function ShowcaseScreen() {
     setListHeaderScrolledOff(scrolledOff);
   };
 
+  // No haptic: the tile's press and the zoom answer the tap (owner, 2026-11-27).
   const openPost = useCallback((item: ShowcaseFeedItem, zoom: AppleZoomOpen | null = null) => {
-    haptic.light();
     recordFeedEvent(item, 'open');
     queryClient.setQueryData<ShowcasePostResponse>(createShowcasePostQueryKey(item.id, user?.id), {
       success: true,

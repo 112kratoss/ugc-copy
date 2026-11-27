@@ -1732,8 +1732,8 @@ function ProfileMediaTile({
       }}
       onPressOut={motion.onPressOut}
       onPress={() => {
-        haptic.light();
-        // Saved media is for looking at, so it opens the reel. Creations and Posts
+        // No haptic: the press and the open's own motion answer the tap (owner,
+        // 2026-11-27). Saved media is for looking at, so it opens the reel. Creations and Posts
         // are for managing, so they open the card feed with their controls inline.
         // The reel's href carries the zoom the tile hands the push on iOS 18
         // (lib/apple-zoom.ts); the card feed and the reading screen take none.
