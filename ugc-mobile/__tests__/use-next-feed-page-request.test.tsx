@@ -4,7 +4,7 @@ import React from 'react';
 import renderer from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useNextFeedPageRequest } from '../lib/use-next-feed-page-request';
+import { useAskAgainAfterCooldown, useNextFeedPageRequest } from '../lib/use-next-feed-page-request';
 
 type Options = Parameters<typeof useNextFeedPageRequest>[0];
 type Requests = ReturnType<typeof useNextFeedPageRequest>;
@@ -93,5 +93,62 @@ describe('useNextFeedPageRequest', () => {
     await settle(() => latest.current!.requestNextPage());
 
     expect(fetchNextPage).toHaveBeenCalledTimes(2);
+  });
+});
+
+// For the screens that keep the gate's refs themselves (Home, Explore, the
+// creator page): a request the gate put off is asked again once, as its wait
+// ends, through the request the latest render pointed the ref at.
+describe('useAskAgainAfterCooldown', () => {
+  const askAgain: { current: ReturnType<typeof useAskAgainAfterCooldown> | null } = { current: null };
+  function AskProbe({ ask }: { ask: () => void }) {
+    const askRef = React.useRef(ask);
+    React.useEffect(() => {
+      askRef.current = ask;
+    });
+    askAgain.current = useAskAgainAfterCooldown(askRef);
+    return null;
+  }
+  const mount = (ask: () => void) => settle(() => {
+    const element = <AskProbe ask={ask} />;
+    if (tree) tree.update(element);
+    else tree = renderer.create(element);
+  });
+
+  it('asks once as the wait ends, through the latest request', async () => {
+    const first = vi.fn();
+    const latestAsk = vi.fn();
+    await mount(first);
+    await settle(() => askAgain.current!.askAgainIn(500));
+    await mount(latestAsk);
+    await settle(() => { vi.advanceTimersByTime(499); });
+    expect(latestAsk).not.toHaveBeenCalled();
+    await settle(() => { vi.advanceTimersByTime(1); });
+    expect(first).not.toHaveBeenCalled();
+    expect(latestAsk).toHaveBeenCalledTimes(1);
+    await settle(() => { vi.advanceTimersByTime(COOLDOWN * 4); });
+    expect(latestAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps one ask pending, and none once cancelled or unmounted', async () => {
+    const ask = vi.fn();
+    await mount(ask);
+    await settle(() => {
+      askAgain.current!.askAgainIn(300);
+      askAgain.current!.askAgainIn(600);
+    });
+    await settle(() => { vi.advanceTimersByTime(600); });
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    await settle(() => askAgain.current!.askAgainIn(300));
+    await settle(() => askAgain.current!.cancel());
+    await settle(() => { vi.advanceTimersByTime(300); });
+    expect(ask).toHaveBeenCalledTimes(1);
+
+    await settle(() => askAgain.current!.askAgainIn(300));
+    renderer.act(() => { tree?.unmount(); });
+    tree = null;
+    await settle(() => { vi.advanceTimersByTime(300); });
+    expect(ask).toHaveBeenCalledTimes(1);
   });
 });

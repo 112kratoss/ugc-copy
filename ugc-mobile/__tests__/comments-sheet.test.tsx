@@ -533,6 +533,49 @@ describe('comments sheet', () => {
       .toBe('Add a comment…');
   });
 
+  // Feel audit 2026-11-27: a post known to have no comments showed the
+  // skeleton for about 250 ms before "No comments yet". The thread is still
+  // read, and a comment that arrives takes the empty state's place.
+  it('says "No comments yet" at once for a post known to have none, while the thread is read', () => {
+    pages = undefined;
+    queryState = { isLoading: true };
+    const tree = renderSheet({ commentCount: 0 });
+    const loading = () => tree.root.findAll((node) => node.props.accessibilityLabel === 'Loading comments');
+
+    expect(texts(tree.root)).toContain('No comments yet');
+    expect(loading()).toHaveLength(0);
+    expect(mocks.queryOptions).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: true }));
+
+    pages = [page([comment()])];
+    queryState = {};
+    renderer.act(() => tree.update(sheetElement({ commentCount: 0 })));
+    expect(texts(tree.root)).not.toContain('No comments yet');
+    expect(texts(tree.root)).toContain('This prompt is unreal.');
+  });
+
+  it('keeps the skeleton while a thread known to have comments is read', () => {
+    pages = undefined;
+    queryState = { isLoading: true };
+    const tree = renderSheet({ commentCount: 3 });
+
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Loading comments')).not.toHaveLength(0);
+    expect(texts(tree.root)).not.toContain('No comments yet');
+  });
+
+  // The count the server last gave outranks the caller's: a thread found to
+  // hold comments keeps the skeleton while another order of it is read.
+  it('keeps the skeleton for another order of a thread the server said has comments', () => {
+    pages = [page([comment()], 4)];
+    const tree = renderSheet({ commentCount: 0 });
+    expect(texts(tree.root)).toContain('This prompt is unreal.');
+
+    pages = undefined;
+    queryState = { isLoading: true };
+    renderer.act(() => tree.update(sheetElement({ commentCount: 0 })));
+    expect(tree.root.findAll((node) => node.props.accessibilityLabel === 'Loading comments')).not.toHaveLength(0);
+    expect(texts(tree.root)).not.toContain('No comments yet');
+  });
+
   it('renders the count, with comment actions drawn 32pt tall that reach 44pt', () => {
     pages = [page([comment()])];
     const root = renderSheet().root;

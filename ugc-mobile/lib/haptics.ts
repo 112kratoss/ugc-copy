@@ -12,10 +12,20 @@ import { Platform } from 'react-native';
  *
  * The split mirrors what the feedback means, not how strong it is:
  * - `select`  a discrete choice changed: tabs, chips, toggles, segments.
- * - `light`   something opened or arrived: cards, tiles, pull-to-refresh.
- * - `soft`    a page snapped into place while browsing; quiet enough to repeat.
+ * - `light`   a press that acts: like and save, a primary or toggle button,
+ *             a menu or sheet row chosen, pull-to-refresh and "New posts".
+ * - `soft`    a tick timed to motion the app plays on its own (the first-open
+ *             intro's letters).
  * - `medium`  a primary commitment: the create button, publish, send.
  * - `success` / `error`  the outcome of something the user waited for.
+ *
+ * Browsing plays nothing: opening a post, a tile's media or the reel, and
+ * swiping from one post to the next, are answered by their own motion (owner,
+ * 2026-11-27: "having haptic on opening the media and swiping to other is not
+ * needed"). On a Samsung phone every kind above is the same 110 ms buzz at the
+ * phone's touch strength, so a tick on every open or page read as noise
+ * (archive/ux-feel-audit-2026-11-27). `hig-vocabulary.test.ts` fails a handler
+ * that opens media and plays one.
  */
 export type HapticKind = 'select' | 'light' | 'soft' | 'medium' | 'success' | 'error';
 

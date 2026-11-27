@@ -5,7 +5,6 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import type { NativeMenuTrigger } from '@/components/native-menu';
 import { CreatorAvatar } from '@/components/ui';
 import type { CreatorProfilePress } from '@/lib/creator-profile-opening';
-import { haptic } from '@/lib/haptics';
 import { FEED_CARD_MEDIA_INSET } from '@/lib/feed-card-geometry';
 import { MotionView, usePressMotion } from '@/lib/motion';
 import { appTheme } from '@/lib/theme';
@@ -132,10 +131,9 @@ export function FeedCardShell({
   // card, and that is what should move. Native zoom needs that source to stay
   // at its measured size; UIKit supplies the motion for those media opens.
   const openMotion = usePressMotion(!onOpen || nativeZoom, { scale: appTheme.motion.scale.pressedCard });
-  const open = onOpen ? () => {
-    haptic.light();
-    onOpen();
-  } : undefined;
+  // No haptic: the press and the open's own motion answer the tap (owner,
+  // 2026-11-27, `hig-vocabulary.test.ts`).
+  const open = onOpen ? () => onOpen() : undefined;
   const headline = (
     <Text
       numberOfLines={media ? 2 : 3}

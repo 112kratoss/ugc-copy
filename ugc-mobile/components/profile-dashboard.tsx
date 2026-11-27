@@ -30,6 +30,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PostViewCountChip, withSpokenViewCount } from '@/components/post-view-count';
 import { StableMediaImage } from '@/components/media-preview';
+import { useSketchesStillWhileScrolling } from '@/components/media-sketch';
 import { ReturnedVideoPreview } from '@/components/returned-video-preview';
 import { isAppleZoomAvailable } from '@/lib/apple-zoom-available';
 import { getShowcasePlaybackUrl } from '@/lib/showcase-media';
@@ -90,10 +91,12 @@ import {
   refreshProfileFailedCreationsHead,
   refreshProfileLibraryHead,
 } from '@/lib/profile-library-head';
+import { FEED_NEXT_PAGE_RUNWAY_SCREENS } from '@/lib/feed-pagination';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import {
   PROFILE_MEDIA_LOAD_MORE_COOLDOWN_MS,
   PROFILE_MEDIA_MIN_FILL_COUNT,
+  PROFILE_MEDIA_PAGE_SIZE,
   PROFILE_RENDERING_REFRESH_INTERVAL_MS,
   flattenProfileGenerationPages,
   flattenProfileOwnerPostPages,
@@ -488,6 +491,28 @@ export function ProfileDashboard({
       stop?.();
     };
   }, [accessToken, pageWidth, scale, switchImagesKey, switchWarmReady]);
+  // The shown tab's tiles past its first page's worth, which the grid mounts
+  // only as a scroll nears them: their previews go into the disk cache under
+  // the tiles' own keys as each page lands, one at a time and each once a
+  // launch (`warmImages`), while Profile is in view. The next page is asked for
+  // two screens ahead, so by the time a fling reaches its tiles they read their
+  // previews from the disk rather than the network: they draw within a frame or
+  // two of mounting instead of over the scroll, and fewer wait the 350 ms that
+  // brings up the loading sketch (feel audit 2026-11-27: the first pass over
+  // pictures not cached janked, 12.6% of frames against 2.2% once cached).
+  // At once, not after the switch warm-up's wait: the reader is on the way.
+  // Previews only, as for a switch, and decoded no larger than a tile.
+  const laterPageImages = tabCards
+    .slice(PROFILE_MEDIA_PAGE_SIZE)
+    .flatMap((card) => profileTilePreview(card) ?? []);
+  const laterPageImagesKey = JSON.stringify(laterPageImages);
+  const laterPageWarmReady = isFocused && !isMediaLoading && laterPageImages.length > 0;
+  useEffect(() => {
+    if (!laterPageWarmReady) return undefined;
+    const images = JSON.parse(laterPageImagesKey) as WarmImage[];
+    const tileWidth = (pageWidth / PROFILE_GALLERY_COLUMNS) * scale;
+    return warmImages(images, accessToken, { width: tileWidth, height: tileWidth / PROFILE_GALLERY_ASPECT_RATIO });
+  }, [accessToken, laterPageImagesKey, laterPageWarmReady, pageWidth, scale]);
   const activeTabPaging = activeTab === 'Saved'
     ? savedQuery
     : activeTab === 'Creations'
@@ -877,6 +902,9 @@ function ProfileMediaList({
     listRef.current = list;
     attachPullScroll(list?.getNativeScrollRef?.());
   }, [attachPullScroll]);
+  // The tiles' loading sketches hold still while the grid moves: on Android each
+  // frame of one costs a bitmap and its upload, on the frames of the fling.
+  const sketchesStill = useSketchesStillWhileScrolling();
 
   return (
     // Saved tiles here are what the reel grows out of and returns to.
@@ -888,6 +916,10 @@ function ProfileMediaList({
         ref={attachList}
         data={isLoading ? [] : cards}
         viewabilityConfigCallbackPairs={viewabilityConfigCallbackPairs}
+        onScrollBeginDrag={sketchesStill.onScrollBeginDrag}
+        onScrollEndDrag={sketchesStill.onScrollEndDrag}
+        onMomentumScrollBegin={sketchesStill.onMomentumScrollBegin}
+        onMomentumScrollEnd={sketchesStill.onMomentumScrollEnd}
         drawDistance={400}
         extraData={`${activeTab}:${isFocused}`}
         getItemType={(item) => (item.runFailed ? 'failed' : item.mediaKind ?? item.previewKind)}
@@ -937,7 +969,12 @@ function ProfileMediaList({
         numColumns={PROFILE_GALLERY_COLUMNS}
         onContentSizeChange={keepScrollWithinContent}
         onEndReached={onEndReached}
-        onEndReachedThreshold={0.32}
+        // Two screens of runway: at a third of one, a fling on the S24 ran past
+        // the loaded rows into the spinner for half a second (feel audit
+        // 2026-11-27). A page is 24 tiles, under two screens, so the first page
+        // asks for the second at once, and a page landing inside the cooldown is
+        // asked for again as it ends (useNextFeedPageRequest).
+        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
         refreshControl={pull.refreshControl}
         removeClippedSubviews={false}
         renderItem={({ item, index }) => (
@@ -1732,8 +1769,8 @@ function ProfileMediaTile({
       }}
       onPressOut={motion.onPressOut}
       onPress={() => {
-        haptic.light();
-        // Saved media is for looking at, so it opens the reel. Creations and Posts
+        // No haptic: the press and the open's own motion answer the tap (owner,
+        // 2026-11-27). Saved media is for looking at, so it opens the reel. Creations and Posts
         // are for managing, so they open the card feed with their controls inline.
         // The reel's href carries the zoom the tile hands the push on iOS 18
         // (lib/apple-zoom.ts); the card feed and the reading screen take none.

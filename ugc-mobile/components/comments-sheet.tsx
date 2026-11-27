@@ -359,6 +359,19 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
   ]);
 
   const serverCommentCount = commentsQuery.data?.pages?.[0]?.commentCount ?? commentCount;
+  // What the thread is known to hold while a page of it is read: the count the
+  // server last gave for this post, which outlives a switch of order (another
+  // query), else the caller's. A thread known to hold none says so at once
+  // instead of drawing the skeleton (feel audit 2026-11-27), and is still read.
+  const firstPageCommentCount = commentsQuery.data?.pages?.[0]?.commentCount;
+  const [lastServerCount, setLastServerCount] = useState<{ postId: string; count: number } | null>(null);
+  if (
+    typeof firstPageCommentCount === 'number'
+    && (lastServerCount?.postId !== postId || lastServerCount.count !== firstPageCommentCount)
+  ) {
+    setLastServerCount({ postId, count: firstPageCommentCount });
+  }
+  const knownCommentCount = lastServerCount?.postId === postId ? lastServerCount.count : commentCount;
   const resolvedPostCreatorId = commentsQuery.data?.pages?.[0]?.postCreatorId ?? postCreatorId;
   const commentsUnavailable = commentsQuery.isError && !commentsQuery.data?.pages?.length;
   const loadError = commentsUnavailable ? getCommentsLoadErrorCopy(commentsQuery.error) : null;
@@ -1051,7 +1064,7 @@ export const PostComments = forwardRef<PostCommentsHandle, PostCommentsProps>(fu
         {unavailableMessage}
       </Text>
     </View>
-  ) : commentsUnavailable ? loadErrorState : commentsQuery.isLoading ? (
+  ) : commentsUnavailable ? loadErrorState : commentsQuery.isLoading && knownCommentCount > 0 ? (
     <View style={{ paddingHorizontal: appTheme.spacing.panel, paddingVertical: appTheme.spacing.card }}>
       <CommentListSkeleton />
     </View>

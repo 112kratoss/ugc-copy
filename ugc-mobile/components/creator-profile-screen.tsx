@@ -19,7 +19,7 @@ import { NativeMenu } from '@/components/native-menu';
 import { AppText, IconButton, iconButtonMenuTrigger, PrimaryButton, SecondaryButton, SegmentedControl, StatusBlock, ToggleButton } from '@/components/ui';
 import { showActionSheet } from '@/lib/action-sheet';
 import { mergeRefreshedFirstPage, type ProfilePageAdapter } from '@/lib/profile-media-refresh';
-import { canRequestNextFeedPage } from '@/lib/feed-pagination';
+import { FEED_NEXT_PAGE_RUNWAY_SCREENS, nextFeedPageRequestDelay } from '@/lib/feed-pagination';
 import { actionSheetFromMenu, menuAction, type NativeMenuModel } from '@/lib/native-menu';
 import { showConfirmDialog, showErrorDialog, showMessageDialog } from '@/lib/dialog';
 import { haptic } from '@/lib/haptics';
@@ -47,6 +47,7 @@ import type { ImmersiveSourceData } from '@/lib/immersive-preview-source-data';
 import { invalidateProfileStats } from '@/lib/profile-stats';
 import { removeShowcaseFeedItems, removeShowcaseFeedItemsFromInfiniteData } from '@/lib/showcase-feed-events';
 import { creatorFollowStateQueryKey } from '@/lib/use-creator-follow';
+import { useAskAgainAfterCooldown } from '@/lib/use-next-feed-page-request';
 import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
 import { env } from '@/lib/env';
 import { formatCompactCount } from '@/lib/home-view-model';
@@ -139,6 +140,10 @@ export function CreatorProfileScreen({
   const loadingMoreRef = useRef(false);
   const lastLoadMoreAtRef = useRef(0);
   const lastLoadMorePageCountRef = useRef<number | null>(null);
+  // The latest render's request, which a request the gate put off asks with
+  // as its cooldown ends (`requestNextPage`).
+  const requestNextPageRef = useRef<() => void>(() => undefined);
+  const { askAgainIn, cancel: cancelAskAgain } = useAskAgainAfterCooldown(requestNextPageRef);
   const bottomInset = resolvedBottomInset(insets.bottom);
   const contentWidth = Math.min(width, 430);
   const horizontalPadding = contentWidth < 390 ? 14 : 16;
@@ -213,7 +218,8 @@ export function CreatorProfileScreen({
     loadingMoreRef.current = false;
     lastLoadMoreAtRef.current = 0;
     lastLoadMorePageCountRef.current = null;
-  }, [activeTab, username]);
+    cancelAskAgain();
+  }, [activeTab, cancelAskAgain, username]);
 
   const followMutation = useMutation({
     mutationFn: (following: boolean) => api.setCreatorFollowing(data?.profile.id ?? '', following),
@@ -448,9 +454,15 @@ export function CreatorProfileScreen({
     }) as never);
   };
 
+  // Asked two screens from the end (`FEED_NEXT_PAGE_RUNWAY_SCREENS`), so a page
+  // can land inside the gate's cooldown with the grid still that near its end:
+  // FlashList asks as it lands, is refused, and asks no more until its data
+  // changes. A request refused only for the cooldown is asked again as it ends.
   const requestNextPage = useCallback(() => {
+    cancelAskAgain();
+    if (activeTab === 'tools') return;
     const now = Date.now();
-    if (activeTab === 'tools' || !canRequestNextFeedPage({
+    const wait = nextFeedPageRequestDelay({
       cooldownMs: LOAD_MORE_COOLDOWN_MS,
       hasNextPage: profileQuery.hasNextPage,
       isBusy: profileQuery.isFetching,
@@ -459,7 +471,12 @@ export function CreatorProfileScreen({
       lastRequestedPageCount: lastLoadMorePageCountRef.current,
       now,
       pageCount: profilePageCount,
-    })) return;
+    });
+    if (wait === null) return;
+    if (wait > 0) {
+      askAgainIn(wait);
+      return;
+    }
 
     loadingMoreRef.current = true;
     lastLoadMoreAtRef.current = now;
@@ -467,7 +484,10 @@ export function CreatorProfileScreen({
     void profileQuery.fetchNextPage().finally(() => {
       loadingMoreRef.current = false;
     });
-  }, [activeTab, profilePageCount, profileQuery]);
+  }, [activeTab, askAgainIn, cancelAskAgain, profilePageCount, profileQuery]);
+  useEffect(() => {
+    requestNextPageRef.current = requestNextPage;
+  }, [requestNextPage]);
 
   const retryNextPage = useCallback(() => {
     lastLoadMorePageCountRef.current = null;
@@ -484,6 +504,7 @@ export function CreatorProfileScreen({
     setPullRefreshing(true);
     lastLoadMorePageCountRef.current = null;
     lastLoadMoreAtRef.current = 0;
+    cancelAskAgain();
     queryClient.setQueryData<InfiniteData<CreatorProfileResponse>>(queryKey, (current) => {
       if (!current?.pages.length) return current;
       return { pages: current.pages.slice(0, 1), pageParams: current.pageParams.slice(0, 1) };
@@ -636,7 +657,9 @@ export function CreatorProfileScreen({
         numColumns={2}
         onContentSizeChange={keepScrollWithinContent}
         onEndReached={requestNextPage}
-        onEndReachedThreshold={0.35}
+        // Two screens of runway: a third of one ran out under a fling on the
+        // profile grid (feel audit 2026-11-27).
+        onEndReachedThreshold={FEED_NEXT_PAGE_RUNWAY_SCREENS}
         onRefresh={handleRefresh}
         onViewableItemsChanged={onViewableItemsChanged}
         overrideItemLayout={(layout, item) => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
 
 import { nextFeedPageRequestDelay } from './feed-pagination';
 
@@ -6,6 +6,30 @@ import { nextFeedPageRequestDelay } from './feed-pagination';
 function cancelAskAgain(timer: { current: ReturnType<typeof setTimeout> | null }) {
   if (timer.current) clearTimeout(timer.current);
   timer.current = null;
+}
+
+/**
+ * The ask again of `useNextFeedPageRequest`, for a screen that keeps the gate's
+ * refs itself (Home, Explore and the creator page share theirs with a refresh,
+ * a lane switch and Home's previous page). When the gate answers a request with
+ * a wait (`nextFeedPageRequestDelay` above 0), `askAgainIn(wait)` asks once more
+ * as it ends, through `ask`: a ref the screen points at its latest request after
+ * each render, so the ask reads that render's pages and not the refused one's.
+ * One ask is pending at a time; `cancel` drops it (a new ask, a lane cut back or
+ * left), and so does unmounting.
+ */
+export function useAskAgainAfterCooldown(ask: RefObject<() => void>) {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancel = useCallback(() => cancelAskAgain(timerRef), []);
+  const askAgainIn = useCallback((waitMs: number) => {
+    cancelAskAgain(timerRef);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      ask.current();
+    }, waitMs);
+  }, [ask]);
+  useEffect(() => () => cancelAskAgain(timerRef), []);
+  return { askAgainIn, cancel };
 }
 
 /**
