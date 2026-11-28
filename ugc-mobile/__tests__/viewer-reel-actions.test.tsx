@@ -281,6 +281,9 @@ vi.mock('@/lib/media-zoom-transition', () => ({
   mediaRectInScreen: () => ({ x: 0, y: 0, width: 390, height: 844 }),
   showcaseMediaZoomPreview: () => null,
   showcaseViewerMediaPicture: () => null,
+  zoomCloseItemId: (originItemId: string | null | undefined, activeItemId: string | null, originTileThere: boolean) => (
+    originItemId && originTileThere ? originItemId : activeItemId
+  ),
 }));
 vi.mock('@/lib/viewer-playback-handoff', () => ({
   createViewerPlaybackHandoff: () => ({ handoff: vi.fn(), playerFor: vi.fn(), setAutoplayAllowed: vi.fn() }),

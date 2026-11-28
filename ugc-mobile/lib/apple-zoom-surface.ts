@@ -38,8 +38,9 @@ export function forgetAppleZoomSurface(surfaceId: string) {
 // ---------------------------------------------------------------------------
 
 /**
- * UIKit's zoom shrinks a closing reel into a view beside the tile of the post
- * the reader is on, crossfading the reel's page into whatever that view draws
+ * UIKit's zoom shrinks a closing reel into a view beside the tile it closes
+ * into (the one the reader tapped, `zoomCloseItemId` in
+ * lib/media-zoom-transition.ts), crossfading the reel's page into whatever that view draws
  * (lib/apple-zoom.ts). Empty, as the view is while nothing is closing into it,
  * the page faded to nothing well before it reached the tile, at about
  * two-thirds of its size: a picture's close read as a fade, with the tile's
@@ -50,7 +51,9 @@ export function forgetAppleZoomSurface(surfaceId: string) {
  *
  * So the reel asks the tile it would close into to hold its picture in that
  * view (`holdAppleZoomReturnPicture`) for as long as it shows that picture,
- * and the tile hides what it draws itself under it: UIKit takes the view out
+ * or, on another post than the tile's, for as long as it is there (the page
+ * then crossfades into the tile's own picture, app/viewer.tsx), and the tile
+ * hides what it draws itself under it: UIKit takes the view out
  * of the page while it flies, and the tile's own picture would show in its
  * place beside the one coming home. The picture is let go once the close has
  * put it in the tile (`releaseAppleZoomReturnPicture`), and the tile draws

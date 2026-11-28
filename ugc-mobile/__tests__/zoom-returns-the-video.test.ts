@@ -46,7 +46,7 @@ describe('a video post closing into its tile', () => {
     // stood frozen over that tile for 0.3–0.4 s and then cut to the first frame,
     // which on a moving clip read as the picture jumping.
     const zoom = read('components/media-zoom.tsx');
-    expect(zoom).toContain('const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();');
+    expect(zoom).toContain('const dissolves = live && (intoAnotherPost || (Boolean(activeVideoUrlRef.current) && !returnableVideo()));');
     expect(zoom).toContain(
       'stageOpacity.value * interpolate(flightTime.value, [0, CLOSE_DISSOLVE_FROM], [0, 1], Extrapolation.CLAMP)'
     );

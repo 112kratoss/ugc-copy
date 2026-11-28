@@ -142,7 +142,7 @@ export function AppleZoomReturnLandingCue({
   itemId,
   touches,
 }: {
-  /** The surface of the tile the reel closes into, and the post the reader is on. */
+  /** The surface of the tile the reel closes into, and that tile's post (`zoomCloseItemId`). */
   surfaceId: string | null;
   itemId: string | null;
   touches: ReelTouches;

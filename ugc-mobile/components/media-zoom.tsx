@@ -64,6 +64,7 @@ import {
   subscribeToHeldZoomPicture,
   subscribeToZoomFlights,
   UNCOVERED,
+  zoomCloseItemId,
   type ZoomFlight,
   type ZoomGeometry,
   type ZoomOrigin,
@@ -1548,7 +1549,11 @@ export function useMediaZoomStage({
   screen: ZoomSize;
   /** The post the reel was opened on, which is what a hand-off is keyed to. */
   initialItemId: string;
-  /** The post the reader is on now — the tile a close returns to. */
+  /**
+   * The post the reader is on now. A close returns to the tile the reel was
+   * opened from, and to this post's tile only once that one has gone
+   * (`zoomCloseItemId`).
+   */
   activeItemId: string | null;
   /** width / height of the media the reel is drawing, so the flight lands on it. */
   aspectRatio: number | null;
@@ -1806,9 +1811,14 @@ export function useMediaZoomStage({
    */
   const returnableVideo = useCallback((): (ZoomVideo & { tileKey: string }) | null => {
     const adopted = adoptedVideoRef.current;
-    // iOS can also return a player created in the reel to a poster-only tile.
-    if (nativeZoom && origin && activeVideoUrlRef.current) {
-      const itemId = activeItemRef.current;
+    // iOS can also return a player created in the reel to a poster-only tile:
+    // the tile the close lands in, when that is the post on screen
+    // (`zoomCloseItemId`). Another post's tile is somewhere the reel is not going.
+    const itemId = activeItemRef.current;
+    if (
+      nativeZoom && origin && activeVideoUrlRef.current
+      && zoomCloseItemId(origin.itemId, itemId, Boolean(getZoomSource(origin.surfaceId, origin.itemId))) === itemId
+    ) {
       const url = activeVideoUrlRef.current;
       const tileKey = zoomTileKey(origin.surfaceId, itemId);
       const player = playerForRef.current?.(itemId, url);
@@ -2213,20 +2223,33 @@ export function useMediaZoomStage({
     armCloseBackstop();
     // The screen beneath is drawn again from the close's first frame.
     setZoomUnderlayHidden(false);
+    // Into the tile the reader tapped, whatever post they have moved to since,
+    // as Instagram's close goes (`zoomCloseItemId`); into the tile of the post
+    // on screen only once that one has gone.
+    const closeItemId = zoomCloseItemId(
+      origin?.itemId,
+      activeItemRef.current,
+      Boolean(origin && getZoomSource(origin.surfaceId, origin.itemId))
+    ) ?? activeItemRef.current;
+    // That tile shows another post than the reel: the reel shrinks into it
+    // whole and dissolves into it as it lands (`closeDissolves`), the way
+    // Instagram's page crossfades into the tile it was opened from. Its own
+    // picture flown alone would land on another post's tile and cut to it.
+    const intoAnotherPost = closeItemId !== activeItemRef.current;
     // A picture closes alone (`ZoomGeometry.pictureOnly`): the layer carries it
     // from where it sits down into its tile, and the reel goes from under it at
     // once. A video keeps its own close for now: its poster in the layer would
     // stand in for the frame it was showing.
-    const pictureOnly = closesPictureAlone({
+    const pictureOnly = !intoAnotherPost && closesPictureAlone({
       picture: pictureRef.current,
       videoUrl: activeVideoUrlRef.current,
       reducedMotion,
       fromTile: Boolean(origin),
     });
     // iOS: anything else, and any close the picture cannot fly, is UIKit's
-    // zoom: it shrinks the reel into the tile registered for the post on
-    // screen, and the pop is all the reel does (handing a lent player back as
-    // it begins).
+    // zoom: it shrinks the reel into the tile the reel points it at (the one
+    // tapped, `useAppleZoomRetarget` in app/viewer.tsx), and the pop is all the
+    // reel does (handing a lent player back as it begins).
     // On iOS 18 the picture does not fly on its own (`IOS_BACK_FLIES_PICTURE`).
     if (nativeZoom && (!IOS_BACK_FLIES_PICTURE || !pictureOnly)) {
       leave();
@@ -2248,7 +2271,7 @@ export function useMediaZoomStage({
       // and kept so that the one switch brings the picture-only Back back.
       // Both of the tile's views: the reel closes into the tile's own view once
       // it has landed, and into the page-shaped view it grew out of until then.
-      const tileSourceId = appleZoomSourceId(origin.surfaceId, activeItemRef.current);
+      const tileSourceId = appleZoomSourceId(origin.surfaceId, closeItemId);
       const restoreTileSource = withholdAppleZoomSource(tileSourceId);
       const restoreOpenSource = withholdAppleZoomSource(appleZoomOpenSourceId(tileSourceId));
       restoreZoomSourceRef.current = () => {
@@ -2268,7 +2291,7 @@ export function useMediaZoomStage({
     // Closed before the layer's picture was ever handed over: that picture is
     // still up, so it simply turns round, whatever the platform.
     const beforeHandoff = !openedRef.current;
-    const handle = getZoomSource(origin.surfaceId, activeItemRef.current);
+    const handle = getZoomSource(origin.surfaceId, closeItemId);
     if (!handle) {
       cannotFly();
       return;
@@ -2311,7 +2334,7 @@ export function useMediaZoomStage({
       // sits and need not contain the tile, which would show beside the copy
       // flying into it. That tile stays hidden until the picture lands.
       if (alone) {
-        hideZoomSourceUntilLanding(origin.surfaceId, activeItemRef.current);
+        hideZoomSourceUntilLanding(origin.surfaceId, closeItemId);
         setTimeout(showZoomSourceAtLanding, ZOOM_SOURCE_WITHHELD_MS);
       }
       // Both platforms keep the origin mounted beneath the viewer. Once the
@@ -2330,10 +2353,10 @@ export function useMediaZoomStage({
       // `closeOnArrivalRef`) may not hold its post yet, and the picture would
       // lose its rail and caption at the close's first frame.
       const post = live || alone ? null : getHeldZoomPicture()?.post ?? postRef.current;
-      // A video the tile will not take back is not what the tile goes on to
-      // show, so the reel dissolves into the tile as it lands rather than
-      // standing over it until it lets go.
-      const dissolves = live && Boolean(activeVideoUrlRef.current) && !returnableVideo();
+      // A video the tile will not take back, or another post than the tile's,
+      // is not what the tile goes on to show, so the reel dissolves into the
+      // tile as it lands rather than standing over it until it lets go.
+      const dissolves = live && (intoAnotherPost || (Boolean(activeVideoUrlRef.current) && !returnableVideo()));
       closeDissolves.set(dissolves);
       // Android: every close leaves the reel standing, out of sight, until it
       // has landed: a live close until its hand-back (`leaveIntoTile`), a
