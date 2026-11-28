@@ -17,8 +17,9 @@ const FAILURE = Symbol('database error');
  */
 const COLUMN_DEFAULTS: Record<string, Row> = {
   // 20261105152921: the post's own "Allow remixes", on for every post; 20261123070740: its
-  // lifetime views, none until counted.
-  posts: { remixes_allowed: true, view_count: 0 },
+  // lifetime views, none until counted; 20260429120000 and 20260801100000: what review made of
+  // the post, visible until it rules otherwise, and when it was tombstoned, never until it is.
+  posts: { remixes_allowed: true, view_count: 0, review_status: 'visible', tombstoned_at: null },
   // A run's source creation: null for a run that remixed or re-ran nothing. 20261127060200: when
   // the stalled-generation reaper last tried the row, never until it does.
   generations: { source_generation_id: null, provider_sync_attempted_at: null },

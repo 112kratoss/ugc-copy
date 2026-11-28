@@ -313,6 +313,50 @@ describe('profile view model media cards', () => {
     }).outputCount).toBeNull();
   });
 
+  // A creation's views are its linked post's (post view counts): the Creations
+  // tile draws them where the post's own tile does, from the count the owner
+  // creations read carries, and the shared rule decides the rest.
+  it("reads a creation's views off its linked post, and shows none where the post shows none", () => {
+    const base: GenerationListItem = {
+      id: 'posted',
+      output_url: 'https://cdn.example.com/posted.jpg',
+      status: 'succeeded',
+      created_at: '2026-11-20T10:00:00.000Z',
+      model: 'nano-banana-2',
+      category: 'image',
+      title: 'Peeling off a fake mask',
+      linked_post_id: 'post-1',
+      linked_post_visibility: 'public',
+      linked_post_view_count: 1234,
+    };
+
+    expect(generationToProfileMediaCard(base).viewLabels).toMatchObject({
+      count: 1234,
+      compact: '1.2K',
+      spoken: '1,234 views',
+    });
+    // Not public: no number at all, not even to the creator who made it.
+    expect(generationToProfileMediaCard({ ...base, linked_post_visibility: 'private' }).viewLabels).toBeNull();
+    expect(generationToProfileMediaCard({ ...base, linked_post_visibility: 'unlisted' }).viewLabels).toBeNull();
+    // Taken off the showcase, whatever its visibility still says.
+    expect(generationToProfileMediaCard({
+      ...base,
+      linked_post_archived_at: '2026-11-21T00:00:00.000Z',
+    }).viewLabels).toBeNull();
+    // Moderation withholds the count, and a tombstoned post carries none.
+    expect(generationToProfileMediaCard({ ...base, linked_post_view_count: null }).viewLabels).toBeNull();
+    // Nobody has opened it yet: never "0 views".
+    expect(generationToProfileMediaCard({ ...base, linked_post_view_count: 0 }).viewLabels).toBeNull();
+    // Never posted, so there is no post whose views these could be.
+    expect(generationToProfileMediaCard({
+      ...base,
+      id: 'unposted',
+      linked_post_id: null,
+      linked_post_visibility: null,
+      linked_post_view_count: null,
+    }).viewLabels).toBeNull();
+  });
+
   it('marks owner posts without usable preview content as not grid-ready', () => {
     const base: OwnerPostListItem = {
       id: 'post-base',

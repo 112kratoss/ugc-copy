@@ -535,6 +535,50 @@ describe('immersive preview view model', () => {
     });
   });
 
+  // The slide a Creations tile opens carries the rail, and the rail draws the
+  // views (post view counts). A creation's are its linked post's, so its slide
+  // says what the post's own slide says -- and the count sits after the
+  // linked-post visibility chip, where an owned post's sits after its own.
+  it("carries a creation's views from its linked post, after the visibility chip", () => {
+    const [item] = buildImmersiveGenerationItems('profile-creations', [
+      generation({
+        id: 'seen-gen',
+        linked_post_id: 'post-seen',
+        linked_post_visibility: 'public',
+        linked_post_view_count: 1234,
+      }),
+    ], { creatorLabel: '@batman' });
+
+    expect(item.viewLabels).toMatchObject({ compact: '1.2K', spoken: '1,234 views' });
+    const slots = getViewerActionSlots(item).map((slot) => slot.id);
+    expect(slots[0]).toBe('visibility');
+
+    // The loaded post outranks the count the creations read carried, as every
+    // other linked-post field does.
+    const [fresher] = buildImmersiveGenerationItems('profile-creations', [
+      generation({ id: 'seen-gen', linked_post_id: 'post-seen', linked_post_visibility: 'public', linked_post_view_count: 1234 }),
+    ], { creatorLabel: '@batman' }, [
+      ownerPost({ id: 'post-seen', generationId: 'seen-gen', visibility: 'public', viewCount: 2000 }),
+    ]);
+    expect(fresher.viewLabels?.compact).toBe('2K');
+  });
+
+  it("shows no views for a creation whose post is not public, is archived, or was never made", () => {
+    const labelsFor = (overrides: Partial<GenerationListItem>) => buildImmersiveGenerationItems(
+      'profile-creations',
+      [generation({ id: 'gen-views', linked_post_id: 'post-views', linked_post_visibility: 'public', linked_post_view_count: 42, ...overrides })],
+      { creatorLabel: '@batman' },
+    )[0].viewLabels;
+
+    expect(labelsFor({ linked_post_visibility: 'private' })).toBeNull();
+    expect(labelsFor({ linked_post_visibility: 'unlisted' })).toBeNull();
+    expect(labelsFor({ linked_post_archived_at: '2026-11-21T00:00:00.000Z' })).toBeNull();
+    // Withheld by moderation, and never opened: no number either way.
+    expect(labelsFor({ linked_post_view_count: null })).toBeNull();
+    expect(labelsFor({ linked_post_view_count: 0 })).toBeNull();
+    expect(labelsFor({ linked_post_id: null, linked_post_visibility: null, linked_post_view_count: null })).toBeNull();
+  });
+
   it('treats ugc-ad generations as video viewer items', () => {
     const [item] = buildImmersiveGenerationItems('profile-creations', [
       generation({

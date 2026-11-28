@@ -546,6 +546,17 @@ export function generationToProfileMediaCard(item: GenerationListItem): ProfileM
           : 'Linked post'
       : 'Not posted',
     countLabel: '0',
+    // A creation's views are its linked post's (post view counts): the owner
+    // creations read sends that post's total, and the shared rule decides the
+    // rest -- nothing for a creation that was never posted (no count travels
+    // with one), nothing for a private, unlisted or archived post, nothing at
+    // 0, and nothing where moderation withheld the count. So the tile needs no
+    // condition of its own beyond having labels, exactly as a Post tile does.
+    viewLabels: postViewCountLabels({
+      viewCount: item.linked_post_view_count,
+      visibility: item.linked_post_visibility,
+      archived: Boolean(item.linked_post_archived_at),
+    }),
     viewerSource: 'profile-creations',
     sourceId: item.id,
     artVariant: kind === 'text' ? 'tree' : kind === 'motion' ? 'runner' : kind === 'video' ? 'city' : 'kingdom',

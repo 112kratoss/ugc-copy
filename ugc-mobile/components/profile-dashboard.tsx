@@ -1739,7 +1739,8 @@ function ProfileMediaTile({
   // badge draws, from the one place that decides it.
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
-    // A Post tile says its views too, as its chip draws them (post view counts).
+    // A tile with views says them too, as its chip draws them (post view
+    // counts): a Post's own, and a Creation's, which are its linked post's.
     : withSpokenViewCount(`${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`, item.viewLabels);
   // UIKit captures this view at its laid-out size. A simultaneous press scale
   // shifts the zoom source.
@@ -2014,8 +2015,11 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           glyph carries the state and the tile's accessibility label says it in
           words -- the same pairing the card feed already uses for these posts
           through `ProfileStateChip`. */}
-      {/* The state, then a Post's views beside it (post view counts): bottom
-          left, over the tile's shade, as the creator page's tiles draw them. */}
+      {/* The state, then the views beside it (post view counts): bottom left,
+          over the tile's shade, as the creator page's tiles draw them. Every
+          tile that has a count draws it -- a Post's own, and a Creation's,
+          which are its linked post's (`generationToProfileMediaCard`). The
+          chip draws nothing without labels, so no tile needs a condition. */}
       <View style={{ position: 'absolute', bottom: 8, left: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
         <View
           testID="profile-tile-state-badge"
@@ -2032,19 +2036,28 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
         >
           <StateGlyph size={appTheme.icon.xs} color={state.color} />
         </View>
-        {item.label === 'Post' ? <PostViewCountChip labels={item.viewLabels} /> : null}
+        <PostViewCountChip labels={item.viewLabels} />
       </View>
 
       {/* The library sends a run's first file only, so a run that made
           several says how many; the details slide lists them. A count beside
           a glyph, not the card's "3 outputs": the words do not fit beside the
-          state badge on a 104pt tile at the 11pt floor. */}
+          state badge on a 104pt tile at the 11pt floor.
+          It rides at the top, opposite the kind mark, since views joined the
+          foot: state, chip and badge together measure ~125pt against the ~102pt
+          a three-column tile leaves, so the two would have overlapped at the
+          bottom right. The top row now says what the creation is and how many
+          files it made; the foot says where it stands and how it is doing.
+          `top` centres it on the 28pt kind mark — except on a clip's tile,
+          where the play badge already holds that corner (#965's review: the
+          pill painted over the play glyph, since this overlay is drawn after
+          it). There it sits one badge lower, clear of both. */}
       {item.outputCount ? (
         <View
           testID="profile-tile-outputs-badge"
           style={{
             position: 'absolute',
-            bottom: 8,
+            top: item.mediaKind === 'video' ? 8 + 28 + 4 : 8 + (28 - 22) / 2,
             right: 8,
             minHeight: 22,
             flexDirection: 'row',

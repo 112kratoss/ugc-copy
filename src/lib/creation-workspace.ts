@@ -39,6 +39,12 @@ export interface CreationWorkspaceGeneration {
    * without it a post that sells a recipe read "No recipe" / "Add recipe".
    */
   linked_post_bundle?: CreationWorkspacePost['bundle'];
+  /**
+   * The linked post's lifetime views, sent for the same reason as the recipe
+   * above: Studio holds only the newest page of posts, so for an older post
+   * this is the only copy of the count. Null where no count may be shown.
+   */
+  linked_post_view_count?: number | null;
 }
 
 export interface CreationWorkspacePost {
@@ -50,6 +56,8 @@ export interface CreationWorkspacePost {
   publicPath: string | null;
   ownerPath: string;
   canShare: boolean;
+  /** Lifetime views, left out by a read that carries none. */
+  viewCount?: number | null;
   bundle: {
     accessMode: 'free' | 'paid';
     status: 'draft' | 'published';
@@ -66,6 +74,12 @@ interface CreationWorkspaceResolvedPost {
   ownerPath: string;
   canShare: boolean;
   bundle: CreationWorkspacePost['bundle'];
+  /**
+   * Lifetime views, null where none may be drawn. Studio hands it to the
+   * shared rule in `ugc-mobile/lib/view-count/`, which draws nothing for 0 or
+   * for a post that is not public, so the visibility above decides the rest.
+   */
+  viewCount: number | null;
 }
 
 interface CreationWorkspaceActionLink {
@@ -187,6 +201,9 @@ function resolveLinkedPost(
       ownerPath: matchedPost.ownerPath,
       canShare: matchedPost.canShare,
       bundle: matchedPost.bundle,
+      // The loaded post is the fresher of the two: its count was read with the
+      // posts list, the generation's with the creations list.
+      viewCount: matchedPost.viewCount ?? generation.linked_post_view_count ?? null,
     };
   }
 
@@ -206,6 +223,7 @@ function resolveLinkedPost(
     ownerPath: `/post/${generation.linked_post_id}/edit`,
     canShare: canShareLinkedPost(visibility, archivedAt),
     bundle: generation.linked_post_bundle ?? null,
+    viewCount: generation.linked_post_view_count ?? null,
   };
 }
 

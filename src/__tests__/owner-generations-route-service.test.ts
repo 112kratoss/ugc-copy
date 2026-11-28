@@ -877,6 +877,59 @@ describe('listOwnerGenerationsForRoute', () => {
     ]);
   });
 
+  // Studio and the app's Creations tab draw a creation's views from its linked
+  // post, and Studio holds only the newest page of posts, so the creations read
+  // carries the count itself.
+  it('sends the linked post\'s views, and none for a post under moderation or tombstoned', async () => {
+    const post = (id: string, generationId: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      user_id: OWNER,
+      generation_id: generationId,
+      title: id,
+      visibility: 'public',
+      archived_at: null,
+      view_count: 1284,
+      review_status: 'visible',
+      tombstoned_at: null,
+      ...extra,
+    });
+    const { generations, reads } = await listStoredLibrary({
+      generations: [
+        libraryRow({ id: 'seen' }),
+        libraryRow({ id: 'unseen' }),
+        libraryRow({ id: 'hidden' }),
+        libraryRow({ id: 'flagged' }),
+        libraryRow({ id: 'tombstoned' }),
+        libraryRow({ id: 'unposted' }),
+      ],
+      posts: [
+        post('post-seen', 'seen'),
+        post('post-unseen', 'unseen', { view_count: 0 }),
+        post('post-hidden', 'hidden', { review_status: 'hidden' }),
+        post('post-flagged', 'flagged', { review_status: 'flagged' }),
+        post('post-tombstoned', 'tombstoned', { tombstoned_at: '2026-11-02T00:00:00.000Z' }),
+      ],
+      post_resource_bundles: [],
+    }, 'detail=summary');
+
+    expect(generations.map(({ id, linked_post_view_count }) => ({ id, linked_post_view_count }))).toEqual([
+      { id: 'seen', linked_post_view_count: 1284 },
+      // 0 travels as 0; the shared rule draws nothing for it.
+      { id: 'unseen', linked_post_view_count: 0 },
+      { id: 'hidden', linked_post_view_count: null },
+      { id: 'flagged', linked_post_view_count: null },
+      { id: 'tombstoned', linked_post_view_count: null },
+      { id: 'unposted', linked_post_view_count: null },
+    ]);
+    // The count rides on the linked-post read the page already makes.
+    expect(reads.filter((read) => read.table === 'posts')).toEqual([
+      {
+        table: 'posts',
+        columns: ['id', 'generation_id', 'title', 'visibility', 'archived_at', 'view_count', 'review_status', 'tombstoned_at'],
+      },
+    ]);
+  });
+
   it('carries the same fields on the full read', async () => {
     const rows: Record<string, unknown[]> = {
       profiles: [],
@@ -931,7 +984,7 @@ describe('listOwnerGenerationsForRoute', () => {
   });
 
   it('sends each field the shared contract documents for a creation', async () => {
-    const added = ['refunded', 'error_message', 'moderation_removed_at', 'linked_post_bundle'];
+    const added = ['refunded', 'error_message', 'moderation_removed_at', 'linked_post_bundle', 'linked_post_view_count'];
     for (const example of mobileApiContract.endpoints.listGenerations.response.generations) {
       for (const key of added) expect(example, `contract example ${example.id} lacks "${key}"`).toHaveProperty(key);
     }

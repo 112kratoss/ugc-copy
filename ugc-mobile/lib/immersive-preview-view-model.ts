@@ -886,6 +886,16 @@ function generationToImmersiveItem(
     saveCount: 0,
     commentLabel: '0',
     commentCount: 0,
+    // A creation's views are its linked post's, so its slide's rail draws them
+    // where an owned post's slide does (post view counts). The loaded post is
+    // preferred over the count the creations read carried, as every other
+    // linked field above is; the shared rule gives none for a creation that
+    // was never posted, none off a public post and none at 0.
+    viewLabels: postViewCountLabels({
+      viewCount: linkedPost?.viewCount ?? item.linked_post_view_count,
+      visibility: linkedPostVisibility,
+      archived: Boolean(linkedPostArchivedAt),
+    }),
     canComment: false,
     isSaved: true,
     canSave: false,

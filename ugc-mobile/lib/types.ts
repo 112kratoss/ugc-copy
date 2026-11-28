@@ -441,6 +441,13 @@ export interface GenerationListItem {
   linked_post_title?: string | null;
   linked_post_visibility?: string | null;
   linked_post_archived_at?: string | null;
+  /**
+   * The linked post's lifetime views, so a creation can show the count its post
+   * earned. Null where no count may be shown: no post, one under moderation, a
+   * tombstoned one, or an older server. The shared rule in `lib/view-count/`
+   * then draws nothing for 0 or for a post that is not public.
+   */
+  linked_post_view_count?: number | null;
   /** The recipe the linked post sells, read with the page, for posts older than the first page of owner posts. */
   linked_post_bundle?: {
     accessMode: 'free' | 'paid';

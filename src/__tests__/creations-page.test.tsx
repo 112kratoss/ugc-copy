@@ -3924,4 +3924,202 @@ describe('CreationsPage', () => {
     const menu = await screen.findByRole('menu', { name: 'More actions for Product spin' });
     expect(within(menu).queryByRole('menuitem', { name: 'Report AI output' })).not.toBeInTheDocument();
   });
+
+  // Recreate was in the card's overflow menu from the start and in the app
+  // everywhere, but the details offered it only for a failed run ("Try again"),
+  // so making another of a finished creation meant closing the details first.
+  describe("Recreate in a creation's details", () => {
+    const openDetails = async (generation: { id: string } & Record<string, unknown>, title: string) => {
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL || url === generationDetailUrl(generation.id)
+          ? Promise.resolve(jsonResponse({ generations: [generation] }))
+          : null
+      ));
+      render(<CreationsPage />);
+      fireEvent.click(
+        within(await screen.findByTestId(`creation-card-${generation.id}`)).getByRole('button', { name: 'Details' }),
+      );
+      return screen.findByRole('dialog', { name: title });
+    };
+
+    it("reopens the creator on a finished creation, in the card menu's words", async () => {
+      const dialog = await openDetails(
+        makeGeneration({ id: 'gen-fresh', title: 'Fresh portrait' }),
+        'Fresh portrait',
+      );
+
+      expect(within(dialog).getByRole('link', { name: 'Recreate' }))
+        .toHaveAttribute('href', '/create-image?remix=gen-fresh');
+      // "Try again" is the failed run's wording and stays its own.
+      expect(within(dialog).queryByRole('link', { name: 'Try again' })).not.toBeInTheDocument();
+    });
+
+    // canRecreate: neither has a creator to reopen on its settings.
+    it('offers none for a template result', async () => {
+      const dialog = await openDetails(
+        makeGeneration({
+          id: 'gen-from-template',
+          title: 'Product spin',
+          origin: 'template',
+          template: { runId: 'run-1', templateId: 'tpl-1', templateTitle: 'Product spin', runStatus: 'succeeded' },
+        }),
+        'Product spin',
+      );
+
+      expect(within(dialog).queryByRole('link', { name: 'Recreate' })).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('link', { name: 'Open template run' })).toBeInTheDocument();
+    });
+
+    it('offers none for an audio creation', async () => {
+      const dialog = await openDetails(
+        makeGeneration({
+          id: 'gen-voice',
+          title: 'Voice over',
+          category: 'audio',
+          model: 'text-to-speech-turbo-2-5',
+          output_url: 'https://example.com/output.mp3',
+        }),
+        'Voice over',
+      );
+
+      expect(within(dialog).queryByRole('link', { name: 'Recreate' })).not.toBeInTheDocument();
+    });
+
+    // #965's review: the gate asked the static model-id list, while the card's
+    // own Recreate asks the creation's kind. Production reads its catalog from
+    // the database, so an audio model onboarded since that list was written
+    // split the two — and `recreateHref` would have sent the run to the image
+    // creator, through `resolveRemixTool`'s default.
+    it('offers none for an audio creation whose model the static list never learned', async () => {
+      const dialog = await openDetails(
+        makeGeneration({
+          id: 'gen-new-voice',
+          title: 'Newer voice',
+          category: 'audio',
+          model: 'some-voice-model-published-later',
+          output_url: 'https://example.com/output.mp3',
+        }),
+        'Newer voice',
+      );
+
+      expect(within(dialog).queryByRole('link', { name: 'Recreate' })).not.toBeInTheDocument();
+    });
+
+    // A failed card carries no Details button, so its alert's address opens it.
+    it('keeps "Try again" on a failed run', async () => {
+      const burnt = makeGeneration({
+        id: 'gen-burnt',
+        title: 'Burnt run',
+        status: 'failed',
+        output_url: null,
+        category: 'video',
+        model: 'veo-3-1',
+        error_message: 'The provider gave up.',
+      });
+      navigationState.searchParams = new URLSearchParams('generation=gen-burnt');
+      stubStudioFetch((url) => (
+        url === GENERATIONS_PAGE_URL || url === generationDetailUrl('gen-burnt')
+          ? Promise.resolve(jsonResponse({ generations: [burnt] }))
+          : null
+      ));
+      render(<CreationsPage />);
+
+      const dialog = await screen.findByRole('dialog', { name: 'Burnt run' });
+      expect(within(dialog).getByRole('link', { name: 'Try again' }))
+        .toHaveAttribute('href', '/create-video?remix=gen-burnt');
+      expect(within(dialog).queryByRole('link', { name: 'Recreate' })).not.toBeInTheDocument();
+    });
+  });
+
+  // Studio drew no view count anywhere, while the post page, the reel, Home's
+  // cards, the profile tiles and the creator header all did. The rule is the
+  // shared one (ugc-mobile/lib/view-count/): nothing at 0, nothing for a post
+  // that is not public, so an unposted or private creation shows none at all.
+  describe('view counts across Studio', () => {
+    const publishedCreation = (overrides: Record<string, unknown> = {}) => makeGeneration({
+      id: 'gen-seen',
+      title: 'Seen portrait',
+      linked_post_id: 'post-seen',
+      linked_post_title: 'Seen portrait',
+      linked_post_visibility: 'public',
+      linked_post_archived_at: null,
+      linked_post_view_count: 1234,
+      ...overrides,
+    });
+
+    const stubCreation = (generation: { id: string } & Record<string, unknown>) => stubStudioFetch((url) => (
+      url === GENERATIONS_PAGE_URL || url === generationDetailUrl(generation.id)
+        ? Promise.resolve(jsonResponse({ generations: [generation] }))
+        : null
+    ));
+
+    it("draws a public post's count on the creation card and in its details", async () => {
+      stubCreation(publishedCreation());
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-seen');
+      // The compact figure beside the eye, and the whole number for a screen reader.
+      expect(within(card).getByText('1.2K')).toBeInTheDocument();
+      expect(within(card).getByText('1,234 views')).toBeInTheDocument();
+      expect(within(card).getByText('Views')).toBeInTheDocument();
+
+      fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Seen portrait' });
+      expect(within(dialog).getByText('1.2K')).toBeInTheDocument();
+      expect(within(dialog).getByText('1,234 views')).toBeInTheDocument();
+    });
+
+    it('draws none for a creation whose post is private', async () => {
+      stubCreation(publishedCreation({ linked_post_visibility: 'private' }));
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-seen');
+      expect(within(card).queryByText('Views')).not.toBeInTheDocument();
+      expect(within(card).queryByText('1,234 views')).not.toBeInTheDocument();
+
+      fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Seen portrait' });
+      expect(within(dialog).queryByText('1,234 views')).not.toBeInTheDocument();
+    });
+
+    it('draws none for a creation with no post', async () => {
+      stubCreation(makeGeneration({ id: 'gen-quiet', title: 'Quiet portrait' }));
+      render(<CreationsPage />);
+
+      const card = await screen.findByTestId('creation-card-gen-quiet');
+      expect(within(card).getByText('Not published')).toBeInTheDocument();
+      expect(within(card).queryByText('Views')).not.toBeInTheDocument();
+
+      fireEvent.click(within(card).getByRole('button', { name: 'Details' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Quiet portrait' });
+      expect(within(dialog).queryByText(/views$/)).not.toBeInTheDocument();
+    });
+
+    it("draws a Post Library card's own count, and none for a private post", async () => {
+      navigationState.searchParams = new URLSearchParams('view=posts');
+      stubStudioFetch((url) => {
+        if (url.startsWith('/api/generations')) {
+          return Promise.resolve(jsonResponse({ generations: [] }));
+        }
+        if (url === '/api/posts?scope=owner&includeArchived=true&limit=36&offset=0') {
+          return Promise.resolve(jsonResponse({
+            posts: [
+              { ...makePost('seen', 'public'), title: 'Seen note', viewCount: 1234 },
+              { ...makePost('hidden', 'private'), title: 'Hidden note', viewCount: 99 },
+            ],
+          }));
+        }
+        return null;
+      });
+      render(<CreationsPage />);
+
+      const seen = await screen.findByTestId('post-card-seen');
+      expect(within(seen).getByText('1.2K')).toBeInTheDocument();
+      expect(within(seen).getByText('1,234 views')).toBeInTheDocument();
+
+      const hidden = screen.getByTestId('post-card-hidden');
+      expect(within(hidden).queryByText('Views')).not.toBeInTheDocument();
+      expect(within(hidden).queryByText('99 views')).not.toBeInTheDocument();
+    });
+  });
 });
