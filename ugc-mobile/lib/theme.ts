@@ -201,6 +201,9 @@ export const mediaColors = {
   mediaGround: '#000000',
   // A small glass chip sitting on a picture: a creator, a state glyph.
   mediaChip: 'rgba(3,4,13,0.62)',
+  // The unplayed part of the reel's progress line, over the caption's shade
+  // (components/reel-progress-bar.tsx); the played part is coral.
+  mediaTrack: 'rgba(255,255,255,0.3)',
   // The logo's colours, sampled from assets/images/icon.png, for the three
   // sparkles on a black screen while a clip or a post is on its way
   // (components/media-loading-sparkle.tsx): the sparkle, which runs from its

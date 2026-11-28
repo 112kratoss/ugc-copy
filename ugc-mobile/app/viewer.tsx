@@ -57,6 +57,16 @@ import { TopScrim } from '@/components/top-scrim';
 import { ViewerTopControl } from '@/components/viewer-top-control';
 import { IconShadow, ReelSlideChrome } from '@/components/reel-chrome';
 import { ReelNotesSlide } from '@/components/reel-notes-slide';
+import {
+  REEL_SEEK_LOAD_WINDOW_MS,
+  ReelProgressBar,
+  ReelScrubChromeFade,
+  ReelScrubberContext,
+  useReelResuming,
+  useReelScrubberStore,
+  useReelScrubbing,
+} from '@/components/reel-progress-bar';
+import { createReelWatchReach } from '@/lib/reel-progress-view-model';
 import { ZoomPostChrome } from '@/components/zoom-post-chrome';
 import {
   getImmersiveInitialIndex,
@@ -2454,6 +2464,9 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
   onHorizontalScrollToggle?: (scrolling: boolean) => void;
 }) {
   const ground = useContext(ViewerGroundContext);
+  // Joins the progress bar in this slide's chrome to the video playing on one
+  // of its media pages (components/reel-progress-bar.tsx).
+  const scrubber = useReelScrubberStore();
   const horizontalRef = useRef<FlatList<ImmersiveSlidePage>>(null);
   // The chrome and the pages take closures over this item; they are made once
   // per item here, so the memoised slide hands its children stable functions.
@@ -2630,7 +2643,13 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         importantForAccessibility={currentPageIsDetails ? 'no-hide-descendants' : 'auto'}
         style={{ position: 'absolute', inset: 0, transform: [{ translateX: chromeShift ?? 0 }] }}
       >
-        {renderOverlays()}
+        {/* The rail and caption step aside while the progress bar is dragged. */}
+        <ReelScrubChromeFade store={scrubber}>{renderOverlays()}</ReelScrubChromeFade>
+        {/* Over the caption's shade, so it stays while the rest fades. It has
+            nothing to draw until a video on this slide plays. */}
+        <MediaZoomChrome>
+          <ReelProgressBar store={scrubber} bottomInset={bottomInset} />
+        </MediaZoomChrome>
       </Animated.View>
       <DoubleTapSaveHeart
         opacity={doubleTapHeart.opacity}
@@ -2690,6 +2709,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
 
   if (pages.length <= 1) {
     return (
+      <ReelScrubberContext.Provider value={scrubber}>
       <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height }}>
         <MediaSlidePage
           active={videoPlaybackActive}
@@ -2713,10 +2733,12 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
         />
         {renderChrome()}
       </View>
+      </ReelScrubberContext.Provider>
     );
   }
 
   return (
+    <ReelScrubberContext.Provider value={scrubber}>
     <View collapsable={false} onLayout={onLayoutAsNeighbour} accessibilityElementsHidden={!active} importantForAccessibility={active ? 'auto' : 'no-hide-descendants'} style={{ width, height, backgroundColor: ground }}>
       <Animated.FlatList
         ref={horizontalRef}
@@ -2783,6 +2805,7 @@ const ImmersiveSlide = memo(function ImmersiveSlide({
       />
       {renderChrome()}
     </View>
+    </ReelScrubberContext.Provider>
   );
 });
 
@@ -3394,6 +3417,11 @@ function ActiveVideoAttempt({
   const [status, setStatus] = useState<VideoPlayerStatus>(player.status);
   const timedOut = useVideoLoadDeadline(player, status);
   const playbackFailed = hasError || timedOut;
+  // The slide's progress bar draws and scrubs this player while it plays
+  // (components/reel-progress-bar.tsx).
+  const scrubber = useContext(ReelScrubberContext);
+  const scrubbing = useReelScrubbing(scrubber);
+  const resuming = useReelResuming(scrubber);
 
   // Silent as soon as the reel starts to leave. A back swipe or a zoom's drag
   // removes the reel only once its transition is over, and until then this
@@ -3415,6 +3443,13 @@ function ActiveVideoAttempt({
   useEffect(() => (
     awaitingLentPlayer ? undefined : playbackHandoff?.register(postId, player, url)
   ), [awaitingLentPlayer, playbackHandoff, player, postId, url]);
+
+  // Handed to the progress bar while this is the video playing on the slide,
+  // and only once the reel holds it: a lent player is the zoom's picture until then.
+  useEffect(() => {
+    if (!scrubber || !active || playbackFailed || awaitingLentPlayer) return;
+    return scrubber.attach(player);
+  }, [active, awaitingLentPlayer, playbackFailed, player, scrubber]);
 
   // A post the reader scrolled away from starts over when they come back, as
   // it does in Instagram and TikTok. Rewind on leaving rather than on return,
@@ -3542,6 +3577,11 @@ function ActiveVideoAttempt({
     const subscription = player.addListener('playingChange', (event) => {
       // Handed back to a feed tile, it plays or pauses as that tile says.
       if (isVideoPlayerHandedBack(player)) return;
+      // The progress bar pauses the clip for the length of a scrub and plays it
+      // again where the finger lets go, once it has loaded there; that pause is
+      // not the reader's, so the Play mark does not flash in as the scrub ends.
+      const scrub = scrubber?.getSnapshot();
+      if (!event.isPlaying && (scrub?.scrubbing || scrub?.resuming)) return;
       // The gate polices the active slide only: the reel's scroll handoff
       // starts a neighbour before its active prop flips, and activation
       // re-arms a gate that neighbour may still hold from a background trip.
@@ -3556,7 +3596,20 @@ function ActiveVideoAttempt({
     return () => {
       subscription.remove();
     };
-  }, [active, metricsKey, playbackAllowed, player]);
+  }, [active, metricsKey, playbackAllowed, player, scrubber]);
+
+  // A clip that did not play again within the scrub's grace says what it is
+  // doing now: the "not playing" ignored meanwhile reported no change.
+  const wasResumingRef = useRef(false);
+  useEffect(() => {
+    if (resuming) {
+      wasResumingRef.current = true;
+      return;
+    }
+    if (!wasResumingRef.current) return;
+    wasResumingRef.current = false;
+    setIsPlaying(player.playing);
+  }, [player, resuming]);
 
   useEffect(() => {
     // A cached/native failure can arrive before this effect subscribes.
@@ -3565,32 +3618,48 @@ function ActiveVideoAttempt({
     const subscription = player.addListener('statusChange', (event) => {
       setHasError(event.status === 'error');
       setStatus(event.status);
-      // Loading again after motion, on the active slide, is a stall.
-      if (event.status === 'loading' && wasActiveRef.current && hasFrameRef.current) beginPlaybackStall(metricsKey);
-      else if (event.status !== 'loading') endPlaybackStall(metricsKey);
+      // Loading again after motion, on the active slide, is a stall, unless the
+      // reader just moved the clip with the progress bar.
+      if (event.status === 'loading' && wasActiveRef.current && hasFrameRef.current) {
+        if (!scrubber?.seekedWithin(Date.now(), REEL_SEEK_LOAD_WINDOW_MS)) beginPlaybackStall(metricsKey);
+      } else if (event.status !== 'loading') endPlaybackStall(metricsKey);
     });
     return () => {
       subscription.remove();
     };
-  }, [metricsKey, player]);
+  }, [metricsKey, player, scrubber]);
 
   useEffect(() => {
     if (!active) return;
+    // Watch progress is what was played: a place the reader dragged or tapped
+    // the progress bar to is not watched (lib/reel-progress-view-model.ts).
+    const reach = createReelWatchReach();
+    let seeks = scrubber?.seekGeneration() ?? 0;
     const subscription = player.addListener('timeUpdate', (event) => {
       const durationSeconds = player.duration;
       if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return;
-      reportShowcaseMediaProgress(event.currentTime / durationSeconds, durationSeconds * 1000);
+      if (scrubber) {
+        if (scrubber.getSnapshot().scrubbing) return;
+        const generation = scrubber.seekGeneration();
+        if (generation !== seeks) {
+          seeks = generation;
+          reach.noteSeek();
+        }
+      }
+      reportShowcaseMediaProgress(reach.sample(event.currentTime) / durationSeconds, durationSeconds * 1000);
     });
     return () => {
       subscription.remove();
     };
-  }, [active, player]);
+  }, [active, player, scrubber]);
 
   const togglePlayback = () => {
     // A tap that lands while the reel is leaving — a dismissal gesture has
     // begun, or Back was pressed — must not pause the clip the tile is about
     // to carry on with, nor start one that is going away.
     if (!active || leaving) return;
+    // A tap ends a scrub's wait for the clip to play again: what it does next is the reader's.
+    scrubber?.setResuming(false);
     if (player.playing) {
       playbackAllowed.current = false;
       player.pause();
@@ -3653,11 +3722,13 @@ function ActiveVideoAttempt({
             />
           </Animated.View>
         ) : null}
-        {active && !isPlaying && hasFrame && !playbackFailed ? <ViewerPlayBadge /> : null}
+        {/* Not while the progress bar is dragged: the scrub pauses the clip, and a Play mark would read as stopped. */}
+        {active && !isPlaying && hasFrame && !playbackFailed && !scrubbing && !resuming ? <ViewerPlayBadge /> : null}
       </DoubleTapPressable>
       {/* The logo's three sparkles until the clip can play, fading as it does (owner, 2026-11-23). */}
       <MediaLoadingSparkle
-        state={mediaSparkleStateFor(status, { shown: zoomLanded, failed: playbackFailed })}
+        // Not for the loads a scrub causes: the frame under the finger is already there.
+        state={mediaSparkleStateFor(status, { shown: zoomLanded && !scrubbing && !resuming, failed: playbackFailed })}
         label="Loading video"
         handoff={VIEWER_SPARKLE_HANDOFF}
       />
