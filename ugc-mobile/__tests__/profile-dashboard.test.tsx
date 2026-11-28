@@ -1770,6 +1770,96 @@ describe('ProfileDashboard media tiles routing', () => {
       .map((node) => node.props.children)).toContain('1.2K');
   });
 
+  // A creation's views are its linked post's: the Creations tile draws the same
+  // chip beside its state and says the same number, and shows nothing for a
+  // creation whose post nobody else can see or that was never posted at all.
+  it("draws a Creation tile's views from its linked post, and says them", () => {
+    queryState.generations = [
+      {
+        id: 'gen-seen',
+        status: 'succeeded',
+        output_url: 'seen.jpg',
+        preview_url: 'seen.preview.webp',
+        previewUrl: 'seen.preview.webp',
+        category: 'image',
+        title: 'Seen run',
+        prompt: 'Prompt',
+        linked_post_id: 'post-1',
+        linked_post_visibility: 'public',
+        linked_post_view_count: 1234,
+      },
+      {
+        id: 'gen-private',
+        status: 'succeeded',
+        output_url: 'private.jpg',
+        preview_url: 'private.preview.webp',
+        previewUrl: 'private.preview.webp',
+        category: 'image',
+        title: 'Private run',
+        prompt: 'Prompt',
+        linked_post_id: 'post-2',
+        linked_post_visibility: 'private',
+        linked_post_view_count: 99,
+      },
+      {
+        id: 'gen-unposted',
+        status: 'succeeded',
+        output_url: 'unposted.jpg',
+        preview_url: 'unposted.preview.webp',
+        previewUrl: 'unposted.preview.webp',
+        category: 'image',
+        title: 'Unposted run',
+        prompt: 'Prompt',
+      },
+    ];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Seen run, Public post, 1,234 views' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Private run, Private post' })).toBeTruthy();
+    expect(tree!.root.findByProps({ accessibilityLabel: 'Creation, Unposted run, Not posted' })).toBeTruthy();
+    const chips = findViewByTestId(tree!.root, 'post-view-count-chip');
+    expect(chips).toHaveLength(1);
+    expect(chips[0].findAll((node) => String(node.type) === 'Text' || String(node.type) === 'text')
+      .map((node) => node.props.children)).toContain('1.2K');
+  });
+
+  // The state badge, the views chip and the outputs badge do not fit across the
+  // foot of a three-column tile (~125pt of chips against ~102pt), so a run of
+  // several files wears its count at the top, opposite the kind mark, and the
+  // two never sit on top of each other.
+  it("keeps a posted run's outputs badge clear of its views", () => {
+    queryState.generations = [
+      {
+        id: 'gen-both',
+        status: 'succeeded',
+        output_url: 'both.jpg',
+        preview_url: 'both.preview.webp',
+        previewUrl: 'both.preview.webp',
+        output_count: 4,
+        category: 'image',
+        title: 'Four seen takes',
+        prompt: 'Prompt',
+        linked_post_id: 'post-1',
+        linked_post_visibility: 'public',
+        linked_post_view_count: 1234,
+      },
+    ];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const tile = tree!.root.findByProps({ accessibilityLabel: 'Creation, Four seen takes, Public post, 4 outputs, 1,234 views' });
+    expect(findViewByTestId(tile, 'post-view-count-chip')).toHaveLength(1);
+    const [outputs] = findViewByTestId(tile, 'profile-tile-outputs-badge');
+    expect(outputs.props.style).toMatchObject({ right: 8 });
+    expect(typeof outputs.props.style.top).toBe('number');
+    expect(outputs.props.style.bottom).toBeUndefined();
+  });
+
   it('highlights the newly created post tile on the Posts tab', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
