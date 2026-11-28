@@ -241,8 +241,7 @@ export function HomeDashboard() {
   }, [playbackController]);
   // Synchronous on Fabric: a rest handler measures first, so the election at
   // rest already has the right candidates. A shelf measured at no size is out
-  // of layout, not off screen (under a reel on Android the tabs are taken out
-  // of layout), so that answer changes nothing.
+  // of layout, not off screen, so that answer changes nothing.
   const measureShelf = useCallback(() => {
     shelfRef.current?.measureInWindow((_x, top, _width, height) => {
       if (!(height > 0)) return;

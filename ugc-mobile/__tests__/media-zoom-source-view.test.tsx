@@ -88,10 +88,10 @@ function wrapperStyles(element: React.ReactElement) {
 }
 
 describe('the view a tile hands to the reel', () => {
-  // The screen beneath a reel at rest is out of layout (lib/zoom-underlay.ts)
-  // and comes back a frame after a close asks for it, so its tile can measure at
-  // nothing on the first ask. Found on the emulator: every reel open longer than
-  // ~0.5 s closed with a plain fade instead of shrinking into its tile.
+  // A tile can measure at nothing on the first ask. Found on the emulator while
+  // the screen beneath a reel at rest was out of layout (it no longer is,
+  // lib/zoom-underlay.ts): every reel open longer than ~0.5 s closed with a
+  // plain fade instead of shrinking into its tile.
   function closeWithAnswers(answers: ({ x: number; y: number; width: number; height: number } | null)[]) {
     vi.useFakeTimers();
     vi.stubGlobal('requestAnimationFrame', (run: () => void) => setTimeout(run, 16));

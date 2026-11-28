@@ -284,9 +284,11 @@ const DISMISS_SAFETY_MS = CLOSE_MS + 220;
  */
 const RETURN_DRAWN_DEADLINE_MS = 250;
 /**
- * How many frames a close asks again for a tile that measured at nothing. The
- * screen beneath a reel at rest is out of layout (lib/zoom-underlay.ts), and it
- * comes back a frame after a close asks for it, on the UI thread.
+ * How many frames a close asks again for a tile that measured at nothing.
+ * Written for a screen that was out of layout beneath a resting reel and came
+ * back a frame after the close asked for it. It stays in layout since
+ * 2026-11-28 (lib/zoom-underlay.ts); the second ask is kept for a tile that
+ * has no size yet for any other reason.
  */
 const TILE_REMEASURE_FRAMES = 4;
 /**
@@ -2271,11 +2273,9 @@ export function useMediaZoomStage({
       cannotFly();
       return;
     }
-    // The screen beneath comes back into layout on the UI thread, a frame after
-    // `setZoomUnderlayHidden(false)` asks for it. Measured in that same moment
-    // a tile on it had no size, and every reel that had been up long enough to
-    // take that screen out of layout closed with a plain fade instead of
-    // shrinking. A tile that measures at nothing is asked again, a frame later.
+    // A tile that measures at nothing is asked again, a frame later
+    // (`TILE_REMEASURE_FRAMES`): answered at once, every such close was a
+    // plain fade instead of a shrink into the tile.
     const measureTile = (framesLeft: number) => handle.measure((rect) => {
       // Recovery may already have popped this viewer while measurement waited.
       if (leftRef.current) return;

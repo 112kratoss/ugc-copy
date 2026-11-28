@@ -8,7 +8,7 @@ import { MagicTabBar } from '@/components/magic-tab-bar';
 import { useReducedMotion } from '@/lib/motion';
 import { createSideMenuStore, SideMenuHostContext } from '@/lib/side-menu-host';
 import { useAppTheme } from '@/lib/theme-context';
-import { zoomUnderlayDetached, zoomUnderlayHidden } from '@/lib/zoom-underlay';
+import { zoomUnderlayHidden } from '@/lib/zoom-underlay';
 
 export default function TabLayout() {
   const theme = useAppTheme();
@@ -18,8 +18,8 @@ export default function TabLayout() {
   // draw: hosted by the bar, the menu outlives the tab it was opened from
   // (lib/side-menu-host.ts).
   const [sideMenu] = useState(createSideMenuStore);
-  // Skipped by the renderer while a settled reel covers it (see zoom-underlay),
-  // but only the tabs the reel is covering. Tabs opened on top of a reel — a
+  // Not drawn while a settled reel covers it (see zoom-underlay), but only the
+  // tabs the reel is covering. Tabs opened on top of a reel — a
   // tab route pushed from a screen the reel led to — are the focused screen,
   // and hiding them too would leave that screen blank.
   const covered = useSharedValue(navigation.isFocused() ? 0 : 1);
@@ -31,10 +31,10 @@ export default function TabLayout() {
       offBlur();
     };
   }, [covered, navigation]);
+  // Opacity and nothing else: taken out of layout as well (`display`), a list
+  // on these tabs came back from the reel at another offset (zoom-underlay).
   const underlayStyle = useAnimatedStyle(() => ({
     opacity: 1 - zoomUnderlayHidden.value * covered.value,
-    // Out of layout as well once the reel rests, so the renderer stops walking it.
-    display: zoomUnderlayDetached.value * covered.value ? ('none' as const) : ('flex' as const),
   }));
 
   return (
