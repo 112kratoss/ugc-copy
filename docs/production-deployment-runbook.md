@@ -367,16 +367,22 @@ What it is made of:
 Checks. None needs a token, and nothing signs in:
 
 - `npm run ops:external-gates -- --probe-google-sign-in`: Supabase sends
-  Continue with Google back to that callback, and Google takes it there for the
-  client. A return URL nobody registered is refused first, so a pass means the
-  probe can see a refusal.
-- `npm run ops:external-gates -- --probe-apple-web-sign-in`: the same redirect
-  check for Apple ("Sign in with Apple on the web", step 4).
+  Continue with Google back to that callback, Google takes it there for the
+  client, and the callback's host answers for the project. That last check also
+  covers the DNS records and the certificate. The same request with a return URL
+  nobody registered goes first and must be refused, so a pass means the probe
+  can see a refusal.
+- `npm run ops:external-gates -- --probe-apple-web-sign-in`: Supabase sends
+  Continue with Apple to the Services ID and back to that callback, and the
+  callback's host answers ("Sign in with Apple on the web", step 4). The monthly
+  Apple workflow runs it. It does not ask Apple whether it takes the callback;
+  the next probe does.
 - `npm run ops:external-gates -- --probe-auth-callback-registrations`: whether
   Google and Apple both take `SUPABASE_AUTH_CALLBACK_URL` for Supabase's clients,
   whatever Supabase sends them today. Run it before `supabase domains activate`
   and before `delete`, with the variable set to the callback that will take over.
-  Activation sends every sign-in to the new callback at once.
+  Activation sends every sign-in to the new callback at once. It does not ask the
+  callback's host, which answers only once its domain is active.
 
 What did not change, and why (checked on 2026-11-28):
 
@@ -429,7 +435,10 @@ project's own callback:
 3. With the same variable, `--probe-google-sign-in` and
    `--probe-apple-web-sign-in` must pass.
 4. In the same sitting, set the repository variable `SUPABASE_AUTH_CALLBACK_URL`
-   to that callback: the monthly Apple workflow's probe reads it.
+   to that callback: the monthly Apple workflow's probe reads it. Then, in a PR,
+   put the same callback back as the default in
+   `scripts/ops/production-external-gates.mjs`; until it merges, give local
+   runs the variable.
 5. Remove the add-on (Project Settings → Add-ons): it is billed by the hour
    until then.
 6. Only after that, and only if wanted, take `auth.magicbooklet.com` out of the
@@ -574,7 +583,8 @@ Apple's invalid_client page.
    `npm run ops:external-gates -- --probe-apple-web-sign-in` reads where
    Supabase sends a press of Continue with Apple, with no token, and fails
    unless it is Apple's authorize page for a client other than the bundle id,
-   returning to the custom domain's callback. That callback is
+   returning to the custom domain's callback, and the callback's host answers
+   for the project. That callback is
    `https://auth.magicbooklet.com/auth/v1/callback`, the script's default and
    the value of the repository variable `SUPABASE_AUTH_CALLBACK_URL`, which the
    monthly workflow passes. After a rollback, set the variable to the project's

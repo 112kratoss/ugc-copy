@@ -19,7 +19,7 @@ const UNREGISTERED_RETURN_PATH = '/external-gates-unregistered-return';
 // callback since 2026-11-28 (the runbook's "Custom auth domain"). Set
 // SUPABASE_AUTH_CALLBACK_URL to check another, as `https://<ref>.supabase.co/auth/v1/callback`
 // after `supabase domains delete`, or a new domain's before `supabase domains activate`.
-const SUPABASE_AUTH_CALLBACK_URL = process.env.SUPABASE_AUTH_CALLBACK_URL
+const SUPABASE_AUTH_CALLBACK_URL = process.env.SUPABASE_AUTH_CALLBACK_URL?.trim()
   || 'https://auth.magicbooklet.com/auth/v1/callback';
 const TARGET_LINTS = new Set([
   'auth_leaked_password_protection',
@@ -306,11 +306,12 @@ function assertAppleClientIdsKeepNative({ config, webClientId, bundleId = IOS_BU
 
 /**
  * Supabase's answer to a press of Continue with <provider> on the website,
- * asked at the project's own address (which every client still calls): the
- * redirect to the provider, unread.
+ * asked at the project's own address (which every client still calls) unless
+ * another origin is given: the redirect to the provider, unread. With no PKCE
+ * challenge Supabase writes nothing for it.
  */
-async function fetchSupabaseAuthorizeRedirect(provider) {
-  const url = new URL(`https://${PROJECT_REF}.supabase.co/auth/v1/authorize`);
+async function fetchSupabaseAuthorizeRedirect(provider, origin = `https://${PROJECT_REF}.supabase.co`) {
+  const url = new URL('/auth/v1/authorize', origin);
   url.searchParams.set('provider', provider);
   url.searchParams.set('redirect_to', SITE_AUTH_CALLBACK_URL);
   const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(30_000) });
@@ -319,15 +320,49 @@ async function fetchSupabaseAuthorizeRedirect(provider) {
   return { status: response.status, location, body };
 }
 
+/**
+ * Every sign-in comes back through the callback's host, so a provider that
+ * takes the callback is no help while that host does not answer for the
+ * project: its DNS records gone, its certificate lapsed (Node's fetch checks
+ * it), or Supabase not serving the domain. Asked the same question at its
+ * authorize route, the host must answer as the project's address does.
+ * Returns the host's origin.
+ */
+async function assertCallbackHostAnswers({ provider, clientId, assertRedirect, label }) {
+  const origin = new URL(SUPABASE_AUTH_CALLBACK_URL).origin;
+  try {
+    const hostClientId = assertRedirect(await fetchSupabaseAuthorizeRedirect(provider, origin));
+    if (hostClientId !== clientId) {
+      throw new Error(`it names the client ${hostClientId}, not ${clientId}`);
+    }
+  } catch (error) {
+    const reason = error?.cause?.code || error?.cause?.message
+      || String(error instanceof Error ? error.message : error).replace(/^.*? probe failed: /, '');
+    throw new Error(`${label} probe failed: the callback's host ${origin} does not answer as the project's address does (${reason}). The runbook's "Custom auth domain" lists its DNS records.`);
+  }
+  return origin;
+}
+
 /** Where Supabase sends the website's Continue with Apple: Apple's authorize address and its client id. */
 async function readSupabaseAppleRedirect() {
   const answer = await fetchSupabaseAuthorizeRedirect('apple');
   return { clientId: assertAppleWebAuthorizeRedirect(answer), location: answer.location };
 }
 
-async function probeAppleWebSignIn() {
+/**
+ * Where Supabase sends the website's Continue with Apple, and that the
+ * callback's host answers. It does not ask Apple whether it takes the
+ * callback: --probe-auth-callback-registrations does.
+ */
+export async function probeAppleWebSignIn() {
   const { clientId } = await readSupabaseAppleRedirect();
-  console.log(`Apple web sign-in probe: Supabase sends Continue with Apple to Apple as ${clientId}`);
+  const host = await assertCallbackHostAnswers({
+    provider: 'apple',
+    clientId,
+    assertRedirect: assertAppleWebAuthorizeRedirect,
+    label: 'Apple web sign-in',
+  });
+  console.log(`Apple web sign-in probe: Supabase sends Continue with Apple to Apple as ${clientId}, back to ${SUPABASE_AUTH_CALLBACK_URL}, and ${host} answers for the project`);
 
   const token = process.env.SUPABASE_MANAGEMENT_API_TOKEN || process.env.SUPABASE_ACCESS_TOKEN;
   if (!token) {
@@ -479,7 +514,7 @@ function readGoogleAuthorizeAnswer({ status, location }) {
     const target = new URL(location, 'https://accounts.google.com');
     if (target.origin === 'https://accounts.google.com') {
       if (target.pathname.startsWith('/signin/oauth/error')) return { refused: true };
-      if (/^\/(v3\/signin\/|ServiceLogin)/.test(target.pathname)) return { refused: false };
+      if (/^\/(v3\/signin\/(?!rejected)|ServiceLogin)/.test(target.pathname)) return { refused: false };
     }
   }
   throw new Error(`Google's authorize page (HTTP ${status}${location ? `, to ${String(location).split('?')[0]}` : ''}) says neither that it takes the request nor that it refuses it.`);
@@ -532,11 +567,17 @@ function withRedirectUri(authorizeUrl, returnUrl) {
  * and Google takes it for the client. The same request with a return URL
  * nobody registered on the same host goes first and must be refused, so a pass
  * means the probe can see a refusal. Google's answer is read without a Google
- * session, so nothing signs in.
+ * session, so nothing signs in. The callback's host must answer too.
  */
-async function probeGoogleWebSignIn() {
+export async function probeGoogleWebSignIn() {
   const answer = await fetchSupabaseAuthorizeRedirect('google');
   const clientId = assertGoogleWebAuthorizeRedirect(answer);
+  const host = await assertCallbackHostAnswers({
+    provider: 'google',
+    clientId,
+    assertRedirect: assertGoogleWebAuthorizeRedirect,
+    label: 'Google sign-in',
+  });
   const unregisteredUrl = new URL(UNREGISTERED_RETURN_PATH, SUPABASE_AUTH_CALLBACK_URL).toString();
   if (!(await fetchGoogleAuthorizeAnswer(withRedirectUri(answer.location, unregisteredUrl))).refused) {
     throw new Error(`Google sign-in probe failed: Google took ${unregisteredUrl}, which nobody registered, so this probe cannot see its refusals.`);
@@ -544,7 +585,7 @@ async function probeGoogleWebSignIn() {
   if ((await fetchGoogleAuthorizeAnswer(answer.location)).refused) {
     throw new Error(`Google sign-in probe failed: Google refuses ${SUPABASE_AUTH_CALLBACK_URL} for ${clientId}. Add it to the OAuth client's Authorized redirect URIs (Google Cloud project magicbooklet).`);
   }
-  console.log(`Google sign-in probe: Supabase sends Continue with Google to Google as ${clientId}, back to ${SUPABASE_AUTH_CALLBACK_URL}, and Google takes it`);
+  console.log(`Google sign-in probe: Supabase sends Continue with Google to Google as ${clientId}, back to ${SUPABASE_AUTH_CALLBACK_URL}, Google takes it, and ${host} answers for the project`);
 }
 
 /**
@@ -552,9 +593,10 @@ async function probeGoogleWebSignIn() {
  * already take SUPABASE_AUTH_CALLBACK_URL, the callback Supabase will send them
  * to, for the clients Supabase uses today. Activation sends every sign-in
  * there at once, so a provider that refuses it would fail them all. A return
- * URL nobody registered on the same host must be refused by each first.
+ * URL nobody registered on the same host must be refused by each first. It
+ * does not ask the callback's host, which answers only once its domain is active.
  */
-async function probeAuthCallbackRegistrations() {
+export async function probeAuthCallbackRegistrations() {
   const callback = SUPABASE_AUTH_CALLBACK_URL;
   const unregisteredUrl = new URL(UNREGISTERED_RETURN_PATH, callback).toString();
   const clientOf = async (provider) => {
@@ -796,6 +838,13 @@ function selfTest() {
   assert.throws(() => readGoogleAuthorizeAnswer({ status: 302, location: 'https://example.com/v3/signin/identifier' }), /says neither/);
   // Another of Google's pages (a refusal of the caller, say) is neither, not a pass.
   assert.throws(() => readGoogleAuthorizeAnswer({ status: 302, location: 'https://accounts.google.com/signin/rejected?rrk=1' }), /says neither/);
+  assert.throws(() => readGoogleAuthorizeAnswer({ status: 302, location: 'https://accounts.google.com/v3/signin/rejected?rrk=1' }), /says neither/);
+  // A Location relative to Google's own host, and the older sign-in page.
+  assert.deepEqual(readGoogleAuthorizeAnswer({ status: 302, location: '/v3/signin/identifier?opparams=x' }), { refused: false });
+  assert.deepEqual(readGoogleAuthorizeAnswer({ status: 302, location: '/signin/oauth/error?authError=x' }), { refused: true });
+  assert.deepEqual(readGoogleAuthorizeAnswer({ status: 302, location: 'https://accounts.google.com/ServiceLogin?continue=x' }), { refused: false });
+  // A look-alike host is neither.
+  assert.throws(() => readGoogleAuthorizeAnswer({ status: 302, location: 'https://accounts.google.com.example/v3/signin/identifier' }), /says neither/);
   assert.deepEqual(
     Object.fromEntries(new URL(buildGoogleAuthorizeUrl('123-abc.apps.googleusercontent.com', 'https://auth.example.com/auth/v1/callback')).searchParams),
     {
