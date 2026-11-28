@@ -155,6 +155,17 @@ Rolling back means making the previous version active again.
   npm run ops:feed-algorithm -- activate --key for-you-rules --version 1 --apply
   ```
 
+## Repeats: what a reader who has seen the catalog is shown
+
+The seen tier is hard: no post the viewer saw in the last `seen_lookback_days` is placed above one they have not. Since 2026-11-28 the tier's own order is by last impression, the post seen longest ago first, with the score only between posts seen at the same moment (`compareSeenTier` in `src/lib/showcase-feed-ranking.ts`). Before that it was by score, and a reader who had seen a whole small catalog got the same page in the same order at every refresh (owner's report: 47 of the 49 posts in his Explore lane were repeats). What follows:
+
+- A refresh the reader asks for (`fresh=1`) and any other new first page lead with the repeats seen longest ago; what was just on screen goes to the end, and the catalog goes round once before a post returns. A post counts as seen once its impression is recorded (half the card on screen for a second). The app sends its queued impressions before it reads a ranked first page, a refresh included; the one first page it does not send them for is Explore's ranking read ahead from Home, ranked before it is shown.
+- Among repeats the greedy pass's rules (at most three of a creator or a cluster in 20, no creator twice in a row, the paid share, the exploration quota) choose only among the twelve seen longest ago (`REPEAT_FATIGUE_REACH`). Left to search the whole tier they brought the same few posts of the smaller creators to the first screen each time. One consequence: with nothing but paid repeats in reach, one is placed past `max_paid_share`.
+- An offset page (`offset > 0`, ranked again for each request) keeps the old order, repeats by score with the whole tier searched. It continues a list cut from another ranking: the signed-out web's page one is the shared ranking, which knows no reader, and its "Load more" page is ranked for the guest. Ordered by last seen, that page would be cut from a different list.
+- A post that reaches the ranking through the recent top-up, not the candidate RPC (a near-duplicate the RPC holds back, or everything when the RPC fails), has its impressions read for the same lookback (`loadTopUpLastSeen`: an indexed read of `feed_events`, again for the posts a full 1,000-row read found nothing of, never under the first RPC, which reports no seen state), so one the viewer has seen is a repeat like any other. Such a post used to rank as unseen in every session.
+
+`score_components.ranking.seenPenalty` and `final_score` are written as before; the order among repeats no longer follows them. `score_components.last_seen_at` is what ordered a repeat (stored from 2026-11-28; a session item loses its components once served, and `feed_delivery_facts.score_components` keeps them). `seen_lookback_days` at `0` switches all of it off with the tier.
+
 ## Kill switches
 
 Each v3 mechanism has a key in the version's JSON that switches it off. No CLI command edits them today: a change is a SQL update of the row, and it reaches feed sessions started after it, within a minute (the per-instance cache above).
