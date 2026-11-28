@@ -11,6 +11,7 @@ import MediaDetailsPreviewModal, {
     type MediaDetailsStatusNote,
     type MediaDetailsType,
 } from '@/components/MediaDetailsPreviewModal';
+import PostViewCount from '@/components/PostViewCount';
 import PostVisibilityMenu from '@/components/PostVisibilityMenu';
 import StudioOverflowMenu, { type StudioOverflowMenuItem } from '@/components/StudioOverflowMenu';
 import {
@@ -38,6 +39,7 @@ import StudioCard, {
     StudioKindBadge,
     studioActionClass,
     type StudioChipTone,
+    type StudioMetaItem,
 } from '@/app/creations/StudioCard';
 import {
     buildCreationComposerPath,
@@ -88,6 +90,8 @@ import { withSharersInvite } from '@/lib/share-client';
 import { uploadMediaToTemporaryStorage } from '@/lib/temporary-media-upload';
 import UnavailableMediaNote from '@/components/UnavailableMediaNote';
 import IntentLink from '@/components/IntentLink';
+
+import { postViewCountLabels, type ViewCountLabels } from '../../../ugc-mobile/lib/view-count/view-count';
 
 interface Generation {
     id: string;
@@ -396,6 +400,43 @@ function recreateHref(generation: Generation): string {
 /** Audio and template results have no creator to reopen in. */
 function canRecreate(generation: Generation): boolean {
     return generation.origin !== 'template' && !isAudioModel(generation.model);
+}
+
+/**
+ * The views of the post a creation is published as, by the shared rule
+ * (`ugc-mobile/lib/view-count/`): null for 0 and for a post that is not
+ * public, so an unposted, private, unlisted or archived creation draws
+ * nothing at all rather than "0 views".
+ */
+function getLinkedPostViewLabels(
+    linkedPost: CreationWorkspaceCardState['linkedPost'],
+): ViewCountLabels | null {
+    if (!linkedPost) return null;
+    return postViewCountLabels({
+        viewCount: linkedPost.viewCount,
+        visibility: linkedPost.visibility,
+        archived: Boolean(linkedPost.archivedAt),
+    });
+}
+
+/**
+ * The Views fact in a Studio card's quiet line, beside Created and Credits,
+ * drawn like them (a small icon and the figure). An empty list where the rule
+ * draws nothing, so the card keeps a line of facts that are all there: a
+ * `null` item would reach `StudioMeta`, which filters on a value, not an item.
+ */
+function studioViewsMeta(labels: ViewCountLabels | null): StudioMetaItem[] {
+    if (!labels) return [];
+    return [{
+        label: 'Views',
+        value: (
+            <PostViewCount
+                labels={labels}
+                figureClassName="inline-flex items-center gap-1"
+                iconClassName="h-3 w-3 shrink-0 text-zinc-500"
+            />
+        ),
+    }];
 }
 
 /** "40 credits returned" when settling a failed run gave its cost back; null when it kept it. */
@@ -1982,6 +2023,27 @@ export default function CreationsPage() {
         ].filter((item): item is { label: string; value: string } => Boolean(item));
     };
 
+    /**
+     * The views of this creation's post, at the end of the chips row: a count,
+     * not a state, so it is drawn bare beside the pills rather than made one
+     * of them, as every other surface draws it. Nothing where the shared rule
+     * draws nothing (unposted, private, unlisted or archived).
+     */
+    const getPreviewViewCount = (generation: Generation) => {
+        const labels = getLinkedPostViewLabels(
+            resolveCreationWorkspaceCardState(generation, posts).linkedPost,
+        );
+        if (!labels) return null;
+        return (
+            <PostViewCount
+                labels={labels}
+                className="inline-flex items-center text-xs font-medium text-zinc-300"
+                figureClassName="inline-flex items-center gap-1.5"
+                iconClassName="h-3.5 w-3.5 shrink-0 text-zinc-500"
+            />
+        );
+    };
+
     // In place of the media for a run that has none: an alert opens failed and
     // rendering runs here, and the modal used to show nothing for them.
     const getPreviewStatusNote = (generation: Generation): MediaDetailsStatusNote | null => {
@@ -2134,6 +2196,17 @@ export default function CreationsPage() {
                     <Link href={getLinkedPostOpenHref(workspaceState) ?? workspaceState.secondaryAction.href} className={secondaryClass}>
                         <ExternalLink className="h-4 w-4" />
                         Open post
+                    </Link>
+                ) : null}
+
+                {/* The card's menu has always carried it, and the app offers it
+                    everywhere: the details reopen the creator on this creation's
+                    settings, in the card menu's words. A template result and an
+                    audio run have no creator to reopen (`canRecreate`). */}
+                {canRecreate(generation) ? (
+                    <Link href={recreateHref(generation)} className={secondaryClass}>
+                        <RotateCcw className="h-4 w-4" />
+                        Recreate
                     </Link>
                 ) : null}
 
@@ -2863,6 +2936,9 @@ export default function CreationsPage() {
                                                     </>
                                                 ),
                                             },
+                                            // What the creation's post has been watched: nothing
+                                            // until it is public and has a view.
+                                            ...studioViewsMeta(getLinkedPostViewLabels(workspaceState.linkedPost)),
                                         ]}
                                         detail={workspaceState.linkedPost ? (
                                             <StudioDetail
@@ -3257,6 +3333,11 @@ export default function CreationsPage() {
                                         )}
                                         subtitle={`${post.sourceLabel} · Updated ${updatedLabel}`}
                                         summary={postSummary}
+                                        meta={studioViewsMeta(postViewCountLabels({
+                                            viewCount: post.viewCount,
+                                            visibility: post.visibility,
+                                            archived: Boolean(post.archivedAt),
+                                        }))}
                                         detail={post.bundle ? (
                                             <StudioDetail
                                                 label="Recipe"
@@ -3369,6 +3450,7 @@ export default function CreationsPage() {
                 inputMedia={previewGen?.input_media ?? []}
                 additionalMedia={previewGen ? getAdditionalPreviewMedia(previewGen) : []}
                 metadata={previewGen ? getPreviewMetadata(previewGen) : []}
+                metaTrailing={previewGen ? getPreviewViewCount(previewGen) : null}
                 actions={previewGen ? renderPreviewActions(previewGen) : null}
                 statusNote={previewGen ? getPreviewStatusNote(previewGen) : null}
             />

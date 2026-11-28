@@ -57,6 +57,13 @@ interface MediaDetailsPreviewModalProps {
     label: string;
     value: string;
   }>;
+  /**
+   * The end of the meta row, after the chips: a fact that is drawn rather than
+   * said in words, so it cannot be one of the `metadata` strings above —
+   * Studio's view count, which carries Lucide's `Eye` and its own spoken
+   * label. Left out, the row is the chips alone.
+   */
+  metaTrailing?: ReactNode;
   actions?: ReactNode;
   /** Shown in place of the media when `src` is null. */
   statusNote?: MediaDetailsStatusNote | null;
@@ -75,6 +82,7 @@ export default function MediaDetailsPreviewModal({
   additionalMedia,
   creator,
   metadata,
+  metaTrailing,
   actions,
   statusNote,
 }: MediaDetailsPreviewModalProps) {
@@ -96,6 +104,7 @@ export default function MediaDetailsPreviewModal({
       additionalMedia={additionalMedia}
       creator={creator}
       metadata={metadata}
+      metaTrailing={metaTrailing}
       actions={actions}
       statusNote={statusNote}
     />
@@ -140,6 +149,7 @@ function MediaDetailsPreviewDialog({
   additionalMedia,
   creator,
   metadata,
+  metaTrailing,
   actions,
   statusNote,
 }: Omit<MediaDetailsPreviewModalProps, 'isOpen'>) {
@@ -440,8 +450,8 @@ function MediaDetailsPreviewDialog({
           <h2 id={titleId} className="text-lg font-bold tracking-tight text-white sm:text-xl">
             {title}
           </h2>
-          {visibleMetadata.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-2">
+          {visibleMetadata.length > 0 || metaTrailing ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               {visibleMetadata.map((item) => (
                 <span
                   key={`${item.label}:${item.value}`}
@@ -451,6 +461,7 @@ function MediaDetailsPreviewDialog({
                   {item.value}
                 </span>
               ))}
+              {metaTrailing}
             </div>
           ) : null}
           {creator ? (
