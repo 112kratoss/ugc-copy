@@ -397,9 +397,16 @@ function recreateHref(generation: Generation): string {
     return `/create-${tool}?remix=${encodeURIComponent(generation.id)}`;
 }
 
-/** Audio and template results have no creator to reopen in. */
+/**
+ * Audio and template results have no creator to reopen in. The audio half asks
+ * the creation's kind, as the card's own Recreate does and as the app does
+ * (`getGenerationKind`), not the model id list: that list is static, while
+ * production reads its catalog from the database, so a newly onboarded audio
+ * model is not in it — and `recreateHref` would then send an audio creation to
+ * the image creator, through `resolveRemixTool`'s default.
+ */
 function canRecreate(generation: Generation): boolean {
-    return generation.origin !== 'template' && !isAudioModel(generation.model);
+    return generation.origin !== 'template' && getMediaKind(generation) !== 'audio';
 }
 
 /**
@@ -429,6 +436,12 @@ function studioViewsMeta(labels: ViewCountLabels | null): StudioMetaItem[] {
     if (!labels) return [];
     return [{
         label: 'Views',
+        // `PostViewCount` keeps its own spoken "1,234 views", so a screen
+        // reader hears this line as "Views, 1,234 views" (#965's review). The
+        // small stutter is the price of the exact figure: dropping the spoken
+        // label would leave a screen reader the compact "1.2K" alone, where
+        // Created and Credits both read exactly. The glyph matches them too —
+        // Credits carries its own `Zap`.
         value: (
             <PostViewCount
                 labels={labels}

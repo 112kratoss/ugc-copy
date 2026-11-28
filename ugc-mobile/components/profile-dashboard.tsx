@@ -1739,7 +1739,8 @@ function ProfileMediaTile({
   // badge draws, from the one place that decides it.
   const accessibilityLabel = isSavedTile
     ? `${item.label}, ${item.title}, ${countLabel} likes`
-    // A Post tile says its views too, as its chip draws them (post view counts).
+    // A tile with views says them too, as its chip draws them (post view
+    // counts): a Post's own, and a Creation's, which are its linked post's.
     : withSpokenViewCount(`${item.label}, ${item.title}, ${getProfileTileState(item).label}${outputsLabel ? `, ${outputsLabel}` : ''}`, item.viewLabels);
   // UIKit captures this view at its laid-out size. A simultaneous press scale
   // shifts the zoom source.
@@ -2047,13 +2048,16 @@ function ProfileMinimalMediaOverlay({ item }: { item: ProfileMediaCard }) {
           a three-column tile leaves, so the two would have overlapped at the
           bottom right. The top row now says what the creation is and how many
           files it made; the foot says where it stands and how it is doing.
-          `top` centres it on the 28pt kind mark. */}
+          `top` centres it on the 28pt kind mark — except on a clip's tile,
+          where the play badge already holds that corner (#965's review: the
+          pill painted over the play glyph, since this overlay is drawn after
+          it). There it sits one badge lower, clear of both. */}
       {item.outputCount ? (
         <View
           testID="profile-tile-outputs-badge"
           style={{
             position: 'absolute',
-            top: 8 + (28 - 22) / 2,
+            top: item.mediaKind === 'video' ? 8 + 28 + 4 : 8 + (28 - 22) / 2,
             right: 8,
             minHeight: 22,
             flexDirection: 'row',

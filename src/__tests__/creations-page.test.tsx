@@ -3985,6 +3985,26 @@ describe('CreationsPage', () => {
       expect(within(dialog).queryByRole('link', { name: 'Recreate' })).not.toBeInTheDocument();
     });
 
+    // #965's review: the gate asked the static model-id list, while the card's
+    // own Recreate asks the creation's kind. Production reads its catalog from
+    // the database, so an audio model onboarded since that list was written
+    // split the two — and `recreateHref` would have sent the run to the image
+    // creator, through `resolveRemixTool`'s default.
+    it('offers none for an audio creation whose model the static list never learned', async () => {
+      const dialog = await openDetails(
+        makeGeneration({
+          id: 'gen-new-voice',
+          title: 'Newer voice',
+          category: 'audio',
+          model: 'some-voice-model-published-later',
+          output_url: 'https://example.com/output.mp3',
+        }),
+        'Newer voice',
+      );
+
+      expect(within(dialog).queryByRole('link', { name: 'Recreate' })).not.toBeInTheDocument();
+    });
+
     // A failed card carries no Details button, so its alert's address opens it.
     it('keeps "Try again" on a failed run', async () => {
       const burnt = makeGeneration({

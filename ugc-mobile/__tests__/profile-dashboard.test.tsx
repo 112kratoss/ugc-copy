@@ -1860,6 +1860,39 @@ describe('ProfileDashboard media tiles routing', () => {
     expect(outputs.props.style.bottom).toBeUndefined();
   });
 
+  // #965's review: a clip's tile already draws a 28pt play badge at top right,
+  // and this overlay is drawn after it, so an outputs pill in that corner
+  // painted over the play glyph.
+  it("keeps a clip's outputs badge clear of its play badge", () => {
+    queryState.generations = [
+      {
+        id: 'gen-clip',
+        status: 'succeeded',
+        output_url: 'clip.mp4',
+        preview_url: 'clip.preview.webp',
+        previewUrl: 'clip.preview.webp',
+        output_count: 3,
+        category: 'video',
+        title: 'Three takes',
+        prompt: 'Prompt',
+        linked_post_id: 'post-2',
+        linked_post_visibility: 'public',
+        linked_post_view_count: 1234,
+      },
+    ];
+    let tree: renderer.ReactTestRenderer | undefined;
+    renderer.act(() => {
+      tree = renderer.create(<ProfileDashboard initialTab="Creations" />);
+    });
+
+    const tile = tree!.root.findByProps({ accessibilityLabel: 'Creation, Three takes, Public post, 3 outputs, 1,234 views' });
+    const [outputs] = findViewByTestId(tile, 'profile-tile-outputs-badge');
+    // Below the play badge's 8pt inset and its own 28pt, never over it.
+    expect(outputs.props.style.top).toBeGreaterThanOrEqual(8 + 28);
+    expect(outputs.props.style.right).toBe(8);
+    expect(findViewByTestId(tile, 'post-view-count-chip')).toHaveLength(1);
+  });
+
   it('highlights the newly created post tile on the Posts tab', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
