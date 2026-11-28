@@ -28,6 +28,7 @@ import {
   SHOWCASE_FEED_FALLBACK_ALGORITHM_VERSION,
   buildFallbackRankedFeedFeatures,
   buildRecommendationContext,
+  compareSeenTier,
   decodeRankedFeedCursor,
   encodeRankedFeedCursor,
   explainRankedFeedScore,
@@ -428,6 +429,65 @@ async function loadCreatorNegativeFeedbackRates({
   } catch (error) {
     logBackendError('error_loading_feed_creator_negative_feedback_rates', { error });
     return null;
+  }
+}
+
+/** The most impression rows one top-up seen read takes (PostgREST's own cap). */
+const TOP_UP_SEEN_ROW_LIMIT = 1000;
+
+/**
+ * When the viewer last saw each of `postIds`, for the posts a ranking takes
+ * from the recent top-up. The candidate RPC reports `seen_recently` only for
+ * the posts it returns, and a top-up post is one it did not return: a
+ * near-duplicate or another post it holds back, or everything when the RPC
+ * fails. Ranked as unseen, such a post stood above every known repeat in every
+ * ranking, however often the viewer had seen it (owner's report, 2026-11-28:
+ * two near-duplicates led his Explore lane each time, 22 impressions each).
+ *
+ * The same impressions over the same lookback as the RPC's own `seen` read,
+ * through the (viewer, post, occurred_at) impression indexes. Newest first, so
+ * the row cap cuts the oldest; each post keeps its latest. Empty when there is
+ * nothing to ask, and when the read fails: the posts then rank as unseen, as
+ * before.
+ */
+async function loadTopUpLastSeen({
+  anonymousKeyHash,
+  lookbackDays,
+  postIds,
+  serviceClient,
+  viewerUserId,
+}: {
+  anonymousKeyHash: string | null;
+  lookbackDays: number;
+  postIds: string[];
+  serviceClient: SupabaseClient;
+  viewerUserId: string | null;
+}): Promise<Map<string, string>> {
+  const lastSeen = new Map<string, string>();
+  if (postIds.length === 0 || lookbackDays <= 0 || (!viewerUserId && !anonymousKeyHash)) return lastSeen;
+
+  try {
+    const query = serviceClient
+      .from('feed_events')
+      .select('post_id, occurred_at')
+      .eq('event_type', 'impression')
+      .in('post_id', postIds)
+      .gte('occurred_at', new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString());
+    const { data, error } = await (viewerUserId
+      ? query.eq('viewer_user_id', viewerUserId)
+      : query.is('viewer_user_id', null).eq('anonymous_key_hash', anonymousKeyHash as string))
+      .order('occurred_at', { ascending: false })
+      .limit(TOP_UP_SEEN_ROW_LIMIT);
+    if (error) throw error;
+    for (const row of (data ?? []) as Array<{ post_id: unknown; occurred_at: unknown }>) {
+      if (typeof row.post_id !== 'string' || typeof row.occurred_at !== 'string') continue;
+      const known = lastSeen.get(row.post_id);
+      if (!known || Date.parse(row.occurred_at) > Date.parse(known)) lastSeen.set(row.post_id, row.occurred_at);
+    }
+    return lastSeen;
+  } catch (error) {
+    logBackendError('error_loading_feed_top_up_seen', { error });
+    return new Map();
   }
 }
 
@@ -1421,9 +1481,11 @@ async function rankFreshCandidates({
   // Hydration is budgeted, so the pre-sort must already respect the seen tier;
   // otherwise repeats consume the budget and never reach the reranker as the
   // last resort they are meant to be.
+  // The ranker's own order inside the tier (`compareSeenTier`), so the repeats
+  // that reach it past the budget are the ones it would lead with.
   const sortedFeatureRows = featureRows
     ? [...featureRows].sort((left, right) => (
-      Number(left.seenRecently) - Number(right.seenRecently)
+      compareSeenTier(left, right)
       || scoreRankedFeedFeatures(right, algorithm.scoreWeights)
       - scoreRankedFeedFeatures(left, algorithm.scoreWeights)
     ))
@@ -1460,7 +1522,7 @@ async function rankFreshCandidates({
     (configuredFeatureRows ?? []).map((row) => [row.postId, row]),
   );
   const { visibilityThresholds } = algorithm.retrieval;
-  const [relations, creatorNegativeFeedbackRates, authorLabels] = await timed('feedback', () => Promise.all([
+  const [relations, creatorNegativeFeedbackRates, authorLabels, topUpLastSeen] = await timed('feedback', () => Promise.all([
     loadViewerRelations({
       followingCreatorIds: followedCreatorIds(
         mergedCandidateItems,
@@ -1481,6 +1543,13 @@ async function rankFreshCandidates({
       items: mergedCandidateItems,
       serviceClient,
     }),
+    loadTopUpLastSeen({
+      anonymousKeyHash: viewerUserId ? null : anonymousKeyHash,
+      lookbackDays: algorithm.retrieval.seenLookbackDays,
+      postIds: mergedCandidateItems.filter((item) => !featureRowsByPostId.has(item.id)).map((item) => item.id),
+      serviceClient,
+      viewerUserId,
+    }),
   ]));
   // The visibility stage runs before scoring, so a blocked, hidden or
   // reported post never takes a session slot or a delivery fact. If any
@@ -1500,13 +1569,18 @@ async function rankFreshCandidates({
   const now = new Date();
   // Recent top-up posts arrive outside ranked retrieval. They are scored from
   // the same synthetic features as before; `sources` records the pool they
-  // actually came from.
+  // actually came from, and one the viewer has seen is the repeat it is
+  // (`loadTopUpLastSeen`).
   const topUpFeatureRows = candidateItems
     .filter((item) => !featureRowsByPostId.has(item.id))
-    .map((item): RankedFeedFeatureRow => ({
-      ...buildFallbackRankedFeedFeatures(item, now),
-      sources: ['fresh'],
-    }));
+    .map((item): RankedFeedFeatureRow => {
+      const lastSeenAt = topUpLastSeen.get(item.id);
+      return {
+        ...buildFallbackRankedFeedFeatures(item, now),
+        ...(lastSeenAt ? { seenRecently: true, lastSeenAt } : {}),
+        sources: ['fresh'],
+      };
+    });
   // Drawn before ranking and persisted with the session: the cold-start slot's
   // Thompson draws replay exactly from it.
   const seed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset, seedBucket });

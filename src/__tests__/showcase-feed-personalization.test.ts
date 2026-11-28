@@ -1106,7 +1106,9 @@ describe('for-you-rules v3 wiring', () => {
           operator === 'eq' ? row[field] === value
             : operator === 'neq' ? row[field] !== value
               : operator === 'in' ? (value as unknown[]).includes(row[field])
-                : Number(row[field]) >= Number(value)
+                // A timestamp is compared as the ISO text it is sent as.
+                : typeof value === 'string' && Number.isNaN(Number(value)) ? String(row[field]) >= value
+                  : Number(row[field]) >= Number(value)
         )));
         return Promise.resolve(table === failingTable
           ? { data: null, error: { message: `${table} is unavailable` } }
@@ -1528,6 +1530,109 @@ describe('for-you-rules v3 wiring', () => {
       score_components: { sources: ['fresh'] },
     });
     expect(byPost.get('ranked')?.score_components.sources).toEqual(['affinity']);
+  });
+
+  // Owner's report, 2026-11-28: the same two posts led every Explore ranking.
+  // Both are near-duplicates the candidate RPC holds back, so they arrived by
+  // the recent top-up, which knew nothing of the 22 impressions he had made on
+  // each and ranked them as unseen, above the 47 posts known to be repeats.
+  describe('a top-up post the viewer has already seen', () => {
+    const impression = (postId: string, occurredAt: string, viewer: Record<string, unknown> = { viewer_user_id: 'viewer-1' }) => ({
+      event_type: 'impression',
+      post_id: postId,
+      occurred_at: occurredAt,
+      viewer_user_id: null,
+      anonymous_key_hash: null,
+      ...viewer,
+    });
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+
+    it('ranks as the repeat it is, below every unseen post', async () => {
+      const seenAt = hoursAgo(1);
+      const { client, persisted } = v3Client({
+        candidates: [
+          v3Candidate('ranked-unseen'),
+          v3Candidate('ranked-seen', { seen_recently: true, last_seen_at: hoursAgo(30) }),
+        ],
+        rows: {
+          feed_events: [
+            impression('top-up-seen', hoursAgo(50)),
+            impression('top-up-seen', seenAt),
+            // Somebody else's impression, an event that is not one, and one past the lookback.
+            impression('top-up-new', hoursAgo(1), { viewer_user_id: 'viewer-2' }),
+            { ...impression('top-up-new', hoursAgo(1)), event_type: 'open' },
+            impression('top-up-new', hoursAgo(24 * 40)),
+          ],
+        },
+      });
+
+      await forYouPage(client, { fallback: [item('top-up-seen'), item('top-up-new')] });
+
+      const order = persisted[0].p_items.map((entry) => entry.post_id);
+      expect(order.slice(0, 2).sort()).toEqual(['ranked-unseen', 'top-up-new']);
+      // Among the repeats, the one seen longest ago first.
+      expect(order.slice(2)).toEqual(['ranked-seen', 'top-up-seen']);
+      const topUp = persisted[0].p_items.find((entry) => entry.post_id === 'top-up-seen');
+      expect(topUp?.score_components).toMatchObject({
+        seen_recently: true,
+        sources: ['fresh'],
+        ranking: { seenPenalty: FOR_YOU_RULES_V3_RETRIEVAL_CONFIG.seen_penalty },
+      });
+      expect(persisted[0].p_items.find((entry) => entry.post_id === 'top-up-new')?.score_components)
+        .toMatchObject({ seen_recently: false });
+    });
+
+    it('reads a guest\'s impressions by the guest\'s key', async () => {
+      const { client, persisted, reads } = v3Client({
+        candidates: [v3Candidate('ranked-unseen')],
+        rows: {
+          feed_events: [
+            impression('top-up-seen', hoursAgo(2), { anonymous_key_hash: 'guest-hash' }),
+            impression('top-up-new', hoursAgo(2), { anonymous_key_hash: 'another-guest' }),
+          ],
+        },
+      });
+
+      await forYouPage(client, {
+        anonymousKeyHash: 'guest-hash',
+        fallback: [item('top-up-seen'), item('top-up-new')],
+        viewerUserId: null,
+      });
+
+      expect(persisted[0].p_items.at(-1)?.post_id).toBe('top-up-seen');
+      const read = reads.find((entry) => entry.table === 'feed_events');
+      expect(read?.filters).toContainEqual(['eq', 'anonymous_key_hash', 'guest-hash']);
+      expect(read?.filters).toContainEqual(['in', 'post_id', ['top-up-seen', 'top-up-new']]);
+    });
+
+    it('makes no read when there is no top-up post, no identity, or no lookback', async () => {
+      const ranked = v3Client({ candidates: Array.from({ length: 60 }, (_, index) => v3Candidate(`ranked-${index}`)) });
+      await forYouPage(ranked.client, { fallback: [item('top-up')] });
+      expect(ranked.reads.some((entry) => entry.table === 'feed_events')).toBe(false);
+
+      const identityless = v3Client({ candidates: [v3Candidate('ranked')] });
+      await forYouPage(identityless.client, { fallback: [item('top-up')], viewerUserId: null });
+      expect(identityless.reads.some((entry) => entry.table === 'feed_events')).toBe(false);
+
+      const noLookback = v3Client({
+        candidates: [v3Candidate('ranked')],
+        retrievalConfig: { ...FOR_YOU_RULES_V3_RETRIEVAL_CONFIG, seen_lookback_days: 0 },
+      });
+      await forYouPage(noLookback.client, { fallback: [item('top-up')] });
+      expect(noLookback.reads.some((entry) => entry.table === 'feed_events')).toBe(false);
+    });
+
+    it('ranks the top-up as unseen, as before, when the impressions cannot be read', async () => {
+      const { client, persisted } = v3Client({
+        candidates: [v3Candidate('ranked-seen', { seen_recently: true, last_seen_at: hoursAgo(30) })],
+        failingTable: 'feed_events',
+        rows: { feed_events: [impression('top-up-seen', hoursAgo(1))] },
+      });
+
+      await forYouPage(client, { fallback: [item('top-up-seen')] });
+
+      expect(persisted[0].p_items.map((entry) => entry.post_id)).toEqual(['top-up-seen', 'ranked-seen']);
+    });
   });
 
   it('applies the negative-feedback rules only to creators the viewer does not follow', async () => {

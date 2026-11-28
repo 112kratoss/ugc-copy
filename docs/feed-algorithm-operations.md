@@ -155,6 +155,16 @@ Rolling back means making the previous version active again.
   npm run ops:feed-algorithm -- activate --key for-you-rules --version 1 --apply
   ```
 
+## Repeats: what a reader who has seen the catalog is shown
+
+The seen tier is hard: no post the viewer saw in the last `seen_lookback_days` is placed above one they have not. Since 2026-11-28 the tier's own order is by last impression, the post seen longest ago first, with the score only between posts seen at the same moment (`compareSeenTier` in `src/lib/showcase-feed-ranking.ts`). Before that it was by score, and a reader who had seen a whole small catalog got the same page in the same order at every refresh (owner's report: 47 of the 49 posts in his Explore lane were repeats). Three things follow:
+
+- A refresh the reader asks for (`fresh=1`) and any other new ranking lead with the repeats seen longest ago; what was just on screen goes to the end, and the catalog goes round once before a post returns. A post counts as seen once its impression is recorded (half the card on screen for a second), and the app sends its queued impressions before it reads a ranked first page.
+- Among repeats the fatigue rules (at most three of a creator or a cluster in 20, no creator twice in a row) choose only among the twelve seen longest ago. Left to search the whole tier they brought the same few posts of the smaller creators to the first screen each time.
+- A post that reaches the ranking through the recent top-up, not the candidate RPC (a near-duplicate the RPC holds back, or everything when the RPC fails), has its impressions read for the same lookback (`loadTopUpLastSeen`, one indexed read of `feed_events`), so one the viewer has seen is a repeat like any other. Such a post used to rank as unseen in every session.
+
+`score_components.ranking.seenPenalty` and `final_score` are written as before; the order among repeats no longer follows them. `seen_lookback_days` at `0` switches all of it off with the tier.
+
 ## Kill switches
 
 Each v3 mechanism has a key in the version's JSON that switches it off. No CLI command edits them today: a change is a SQL update of the row, and it reaches feed sessions started after it, within a minute (the per-instance cache above).

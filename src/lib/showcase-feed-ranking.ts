@@ -665,12 +665,54 @@ function mustSelectExploration(
   return diversityConfig.explorationPer10 - explorationCount >= slotsRemaining;
 }
 
+/** When a repeat was last seen, in ms. Seen with no time known reads as seen longest ago. */
+function lastSeenMs(features: Pick<RankedFeedFeatureRow, 'lastSeenAt'>) {
+  const at = features.lastSeenAt ? Date.parse(features.lastSeenAt) : Number.NaN;
+  return Number.isFinite(at) ? at : 0;
+}
+
+/**
+ * The seen tier, and the order inside it: every unseen post before every
+ * repeat, and among repeats the one seen longest ago first (0 between two
+ * unseen posts, and between repeats seen at the same moment, which the score
+ * then orders).
+ *
+ * Repeats were ordered by score until 2026-11-28. A reader who has seen the
+ * whole of a small catalog is ranked from this tier alone, and scores barely
+ * move between two rankings, so every refresh they asked for was the same page
+ * in the same order (owner's report: 47 of the 49 posts in his Explore lane
+ * were repeats). By last seen, what the reader has just looked at goes to the
+ * end and what they saw longest ago leads, so each refresh shows other posts
+ * and the catalog goes round once before a post returns. The price: among
+ * repeats a stronger post seen a minute ago waits behind a weaker one seen
+ * yesterday. A new post is unseen and still leads them all.
+ */
+export function compareSeenTier(
+  left: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt'>,
+  right: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt'>,
+) {
+  return (
+    Number(left.seenRecently) - Number(right.seenRecently)
+    || (left.seenRecently ? lastSeenMs(left) - lastSeenMs(right) : 0)
+  );
+}
+
+/**
+ * How far down the repeats the fatigue rules may look for a post that suits a
+ * place better: the twelve seen longest ago, a page of the app's feed. Without
+ * a bound they look through the whole tier, and where one creator or cluster
+ * holds most of a small catalog they find the same few other posts at every
+ * ranking, minutes after the reader saw them (the owner's lane: one creator
+ * held 36 of 49 posts, and a post alone in its cluster stood on the first
+ * screen of every simulated refresh). Unseen posts are searched in full, as
+ * before.
+ */
+const REPEAT_FATIGUE_REACH = 12;
+
 function compareRankedCandidates(left: RankedShowcaseItem, right: RankedShowcaseItem) {
   return (
-    Number(left.features.seenRecently) - Number(right.features.seenRecently)
+    compareSeenTier(left.features, right.features)
     || right.score - left.score
-    // Among repeats, the least recently seen is the least stale.
-    || (left.features.lastSeenAt ?? '').localeCompare(right.features.lastSeenAt ?? '')
     || right.item.createdAt.localeCompare(left.item.createdAt)
     || right.item.id.localeCompare(left.item.id)
   );
@@ -765,9 +807,11 @@ function drawColdStartPick(
  * Seen posts are handled as a hard tier rather than a soft penalty. A post the
  * viewer already saw is only ever selected once no unseen candidate remains at
  * all — diversity fatigue is not enough of a reason to serve a repeat — and its
- * score is multiplied by `seenPenalty` so the fallback ordering still reflects
- * how weak a choice it is. Repeats are the fastest way to make a small-catalog
- * feed feel dead, so the tier boundary is deliberately not negotiable.
+ * score is multiplied by `seenPenalty` so its stored score still reflects how
+ * weak a choice it is. Repeats are the fastest way to make a small-catalog
+ * feed feel dead, so the tier boundary is deliberately not negotiable. Inside
+ * the tier the repeat seen longest ago goes first (`compareSeenTier`), so a
+ * reader who has seen everything is shown other posts at each new ranking.
  *
  * v3 adds X's post-scoring adjustments before that greedy pass, in this order:
  * the net-negative offset (only when a multiplier is configured), the served
@@ -842,8 +886,11 @@ export function rankAndDiversifyShowcaseItems({
     const withinSeenTier = (candidate: RankedShowcaseItem) => (
       !unseenRemains || !candidate.features.seenRecently
     );
+    // Once only repeats are left, the fatigue rules choose among the few seen
+    // longest ago (`REPEAT_FATIGUE_REACH`), not the whole tier.
+    const reach = unseenRemains ? remaining.length : REPEAT_FATIGUE_REACH;
     const findCandidate = (predicate: (candidate: RankedShowcaseItem) => boolean) => (
-      remaining.findIndex((candidate) => withinSeenTier(candidate) && predicate(candidate))
+      remaining.findIndex((candidate, index) => index < reach && withinSeenTier(candidate) && predicate(candidate))
     );
 
     let nextIndex = requireExploration
