@@ -1549,7 +1549,11 @@ export function useMediaZoomStage({
   screen: ZoomSize;
   /** The post the reel was opened on, which is what a hand-off is keyed to. */
   initialItemId: string;
-  /** The post the reader is on now — the tile a close returns to. */
+  /**
+   * The post the reader is on now. A close returns to the tile the reel was
+   * opened from, and to this post's tile only once that one has gone
+   * (`zoomCloseItemId`).
+   */
   activeItemId: string | null;
   /** width / height of the media the reel is drawing, so the flight lands on it. */
   aspectRatio: number | null;

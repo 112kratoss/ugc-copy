@@ -51,8 +51,13 @@ describe('the tile a close lands in', () => {
     expect(viewer).toContain('const zoomCloseId = zoomCloseItemId(zoomOriginItemId, activeItem?.id ?? null, zoomOriginInReel);');
     expect(viewer).toContain('useAppleZoomRetarget(zoomCloseId, pictureReturns);');
     expect(viewer).not.toContain('useAppleZoomRetarget(activeItem?.id');
-    // The tile holds the reel's still picture only when the reel shows that tile's own post.
-    expect(viewer).toContain('const pictureReturns = zoomCloseId === (activeItem?.id ?? null) && !onEndSlide');
+    // The tapped tile holds its picture for the close: on its own post while the reel shows the same
+    // still picture, and on any other post, so UIKit crossfades the page into it all the way down
+    // rather than fading it out at two-thirds of its size (lib/apple-zoom-surface.ts).
+    expect(viewer).toContain('const onCloseTilesPost = zoomCloseId === (activeItem?.id ?? null);');
+    expect(viewer).toContain('const pictureReturns = !reducedMotion && Boolean(zoomCloseId) && (onCloseTilesPost ? !onEndSlide && activeMedia.cover && Boolean(activeMedia.picture) && !activeMedia.playbackUrl : true);');
+    // And the cue that lets that picture go at the landing follows the same tile.
+    expect(viewer).toContain('<AppleZoomReturnLandingCue surfaceId={zoomSurfaceId} itemId={zoomCloseId} touches={reelTouches} />');
   });
 
   it('is the only tile an iOS close hands a player back to', () => {

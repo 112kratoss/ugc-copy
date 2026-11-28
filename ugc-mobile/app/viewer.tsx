@@ -816,14 +816,20 @@ function ImmersivePreviewViewer({ closing }: { closing: ReelClosing }) {
   // The zoom's close lands in the tile the reader tapped, whatever post they
   // have moved to since, as Instagram's does (`zoomCloseItemId`), or in the
   // tile of the post on screen once the tapped post has left the reel (a hide
-  // or a block made from it). It lands on that tile's picture when the reel is
-  // showing the same still picture (components/apple-zoom.ios.tsx); on another
-  // post, UIKit crossfades the page into the tile's own view as it shrinks.
+  // or a block made from it).
   const [zoomOriginItemId] = useState(() => parseAppleZoomSourceId(nativeZoomSourceId)?.itemId ?? null);
   const zoomOriginInReel = Boolean(zoomOriginItemId) && items.some((item) => item.id === zoomOriginItemId);
   const zoomCloseId = zoomCloseItemId(zoomOriginItemId, activeItem?.id ?? null, zoomOriginInReel);
-  const pictureReturns = zoomCloseId === (activeItem?.id ?? null)
-    && !onEndSlide && !reducedMotion && activeMedia.cover && Boolean(activeMedia.picture) && !activeMedia.playbackUrl;
+  // That tile holds its own picture for the close to land on
+  // (components/apple-zoom.ios.tsx): on its own post while the reel shows the
+  // same still picture, and on any other post for as long as the reel is
+  // there, so UIKit crossfades the page into the tapped tile's picture all the
+  // way down, as Instagram's page crossfades into its card. With nothing held,
+  // the page faded out at about two-thirds of its size (lib/apple-zoom-surface.ts).
+  const onCloseTilesPost = zoomCloseId === (activeItem?.id ?? null);
+  const pictureReturns = !reducedMotion && Boolean(zoomCloseId) && (onCloseTilesPost
+    ? !onEndSlide && activeMedia.cover && Boolean(activeMedia.picture) && !activeMedia.playbackUrl
+    : true);
   useAppleZoomRetarget(zoomCloseId, pictureReturns);
   // The surface of the tile the reel came out of, and whether a finger is on
   // the reel: what tells when a close has landed (`AppleZoomReturnLandingCue`).
@@ -1813,7 +1819,7 @@ function ImmersivePreviewViewer({ closing }: { closing: ReelClosing }) {
     {/* The touch handlers only read whether a finger is on the reel, which a
         close UIKit's zoom is dragging tells nothing else (lib/reel-touches.ts). */}
     <View style={{ flex: 1, backgroundColor: ground }} {...reelTouches.handlers}>
-      {zoomSurfaceId ? <AppleZoomReturnLandingCue surfaceId={zoomSurfaceId} itemId={activeItem?.id ?? null} touches={reelTouches} /> : null}
+      {zoomSurfaceId ? <AppleZoomReturnLandingCue surfaceId={zoomSurfaceId} itemId={zoomCloseId} touches={reelTouches} /> : null}
       {/* iOS: a reel pushed out of a tile keeps the navigator's default
           animation, which is how react-native-screens leaves the pop to UIKit's
           zoom back into the tile (lib/apple-zoom.ts); its dismissal gestures go
