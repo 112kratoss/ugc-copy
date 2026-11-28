@@ -1,3 +1,6 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
 import { ImageResponse } from 'next/og';
 
 import { getSortedPostsData } from '@/lib/blog';
@@ -12,9 +15,19 @@ import { siteConfig } from '@/lib/seo';
  * download, nothing that can fail after deploy.
  *
  * Brand treatment is deliberately minimal and matches the product's own dark
- * surface. The wordmark is `siteConfig.name` so it cannot drift from the brand
- * spelling used everywhere else.
+ * surface: the brand's icon (the app icon, the file the site's BrandMark draws)
+ * beside the wordmark. The wordmark is `siteConfig.name` so it cannot drift from
+ * the brand spelling used everywhere else.
  */
+
+/**
+ * The icon as a data URL, read from disk once, as Next's docs read a local
+ * image for a card. A card whose icon cannot be read keeps the orange dot it
+ * had before, rather than failing.
+ */
+const brandIconSrc = await readFile(join(process.cwd(), 'src/components/brand/magic-booklet-icon.png'), 'base64')
+    .then((data) => `data:image/png;base64,${data}`)
+    .catch(() => null);
 
 export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
@@ -45,14 +58,20 @@ export default async function OpengraphImage({ params }: { params: Promise<{ slu
                 }}
             >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                    <div
-                        style={{
-                            width: 14,
-                            height: 14,
-                            borderRadius: 999,
-                            backgroundColor: '#ff7a59',
-                        }}
-                    />
+                    {brandIconSrc ? (
+                        // A card is an image drawn on the server: next/image has no place here.
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={brandIconSrc} width={48} height={48} alt="" style={{ borderRadius: 12 }} />
+                    ) : (
+                        <div
+                            style={{
+                                width: 14,
+                                height: 14,
+                                borderRadius: 999,
+                                backgroundColor: '#ff7a59',
+                            }}
+                        />
+                    )}
                     {/*
                         Rendered exactly as the brand is written — lowercase, one
                         word. No textTransform here: the wordmark is lowercase
