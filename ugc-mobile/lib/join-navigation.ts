@@ -57,27 +57,3 @@ export function providerSignInNext(
     href: { pathname: '/onboarding', params: inPlace ? { returnTo: route, inPlace: '1' } : { returnTo: route } },
   };
 }
-
-/**
- * The page a sign-in goes back to once the creator setup is done, when the sign-in's return is a
- * fresh setup (`/onboarding?returnTo=…`, the sign-up page's email return in `app/join.tsx`);
- * `null` for any other return, `/onboarding` itself included (a setup already open beneath the
- * sign-in, which takes the account back). The query is read as `join.tsx` writes it: one
- * `encodeURIComponent`.
- */
-export function creatorSetupReturn(href: string | string[] | undefined): string | null {
-  const value = Array.isArray(href) ? href[0] : href;
-  if (typeof value !== 'string') return null;
-  const queryStart = value.indexOf('?');
-  if (queryStart === -1 || value.slice(0, queryStart) !== '/onboarding') return null;
-  for (const pair of value.slice(queryStart + 1).split('&')) {
-    const separator = pair.indexOf('=');
-    if (separator === -1 || pair.slice(0, separator) !== 'returnTo') continue;
-    try {
-      return normalizeAuthReturnTo(decodeURIComponent(pair.slice(separator + 1))) ?? null;
-    } catch {
-      return null;
-    }
-  }
-  return null;
-}

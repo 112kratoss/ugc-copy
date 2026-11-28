@@ -766,23 +766,64 @@ describe('the creator setup, asked before the page moves on (owner video, 2026-1
     expect(router.replace).not.toHaveBeenCalled();
   });
 
-  it('does not move on while a sign-in runs, even once its session has landed', async () => {
+  // Review of #961: waiting for the whole sign-in (a guest's credits moved, the profile read, each
+  // with its own 30 s timeout) could hold the page, with no way out, for most of a minute.
+  it('moves on as soon as the session lands, without waiting for the rest of the sign-in', async () => {
     const router = await routerMock();
     answering(Promise.resolve(welcome()));
-    let landed!: () => void;
+    let finishSignIn!: () => void;
     authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
-      landed = resolve;
+      finishSignIn = resolve;
     }));
     const tree = render(<AuthRoute />);
     await pressGoogle(tree);
-    // The session is in (the guest's credits are still being moved to the account).
-    authState.user = { id: 'user-1' };
-    renderer.act(() => tree.update(<AuthRoute />));
     expect(router.dismissTo).not.toHaveBeenCalled();
-    expect(router.replace).not.toHaveBeenCalled();
-    await renderer.act(async () => landed());
+    // The session is in; the guest's credits are still being moved to the account.
+    authState.user = { id: 'user-1' };
+    await renderer.act(async () => {
+      tree.update(<AuthRoute />);
+    });
     expect(router.dismissTo).toHaveBeenCalledTimes(1);
     expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+    await renderer.act(async () => finishSignIn());
+    expect(router.dismissTo).toHaveBeenCalledTimes(1);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it('moves on once when the sign-in fails after its session landed, holding the spinner until then', async () => {
+    const router = await routerMock();
+    let answer!: (value: unknown) => void;
+    answering(new Promise((resolve) => {
+      answer = resolve;
+    }));
+    let failSignIn!: (error: Error) => void;
+    authState.signInWithGoogle.mockReturnValue(new Promise<void>((_resolve, reject) => {
+      failSignIn = reject;
+    }));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    authState.user = { id: 'user-1' };
+    await renderer.act(async () => {
+      tree.update(<AuthRoute />);
+    });
+    // Moving a guest's credits failed after the session landed; the answers are still on their way.
+    await renderer.act(async () => failSignIn(new Error('merge failed')));
+    expect(googleBusy(tree)).toBe(true);
+    expect(router.dismissTo).not.toHaveBeenCalled();
+    await renderer.act(async () => answer(welcome()));
+    expect(router.dismissTo).toHaveBeenCalledTimes(1);
+    expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+  });
+
+  it('leaves the question to the setup when an answer reads oddly', async () => {
+    const router = await routerMock();
+    const api = answering(Promise.resolve(welcome()));
+    api.getProfile.mockResolvedValue(null as never);
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(router.dismissTo).not.toHaveBeenCalled();
+    expect(peekCreatorSetupAnswers('user-1')).toBeNull();
   });
 
   it('goes nowhere when something else took the page off the stack while the answers were read', async () => {

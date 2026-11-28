@@ -6090,9 +6090,9 @@ function EnhanceOffer({ onUse }: { onUse: () => void }) {
 }
 
 /**
- * A toolbar button under the prompt: Enhance is the accent, Templates the quiet one beside it.
- * Two buttons side by side are capsules, as the web's are (docs/design/design-mobile.md → Radius):
- * its radius is half its minimum height, so on one line it is a capsule, and when a large text size
+ * A toolbar button under the prompt: Enhance, the accent, across the row (Templates sat beside it
+ * until 2026-11-28). A capsule, as the web's are (docs/design/design-mobile.md → Radius): its
+ * radius is half its minimum height, so on one line it is a capsule, and when a large text size
  * wraps its label it grows into a rounded rectangle instead of a stadium whose ends cut the words.
  */
 function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean }) {

@@ -26,9 +26,9 @@ import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
 import { describeProviderSignInError, type AuthNotice } from '@/lib/auth-error-copy';
 import { completeAuthScreen, leaveAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
-import { creatorSetupHasStep, handOffCreatorSetupAnswers, readCreatorSetupAnswers } from '@/lib/creator-setup-answers';
+import { clearCreatorSetupAnswers, creatorSetupHasStep, handOffCreatorSetupAnswers, readCreatorSetupAnswers } from '@/lib/creator-setup-answers';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
-import { creatorSetupReturn, providerSignInNext } from '@/lib/join-navigation';
+import { providerSignInNext } from '@/lib/join-navigation';
 import { useReducedMotion } from '@/lib/motion';
 import { TYPED_INVITE_CODE_HELD } from '@/lib/invite-share-link/invite-typed-code';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
@@ -65,6 +65,12 @@ type SignInWallProps = {
   initialMode?: SignInWallMode;
   /** Where an email sign-in returns, as the route hands it on. */
   emailReturnTo: string | string[] | undefined;
+  /**
+   * When that return is a fresh creator setup (the sign-up page's `/onboarding?returnTo=…`), the
+   * page the setup goes back to: the page then asks the setup's answers first, as it does for
+   * Apple and Google, and goes straight there when there is nothing to ask.
+   */
+  emailSetupReturn?: string;
   emailInPlace?: string | string[];
   /** A redirect's notice, when the page opens on the email form. */
   emailNotice?: AuthNotice | null;
@@ -84,6 +90,7 @@ function SignInWallBody({
   notice: redirectNotice = null,
   initialMode = 'choose',
   emailReturnTo,
+  emailSetupReturn,
   emailInPlace,
   emailNotice = null,
 }: SignInWallProps) {
@@ -181,10 +188,11 @@ function SignInWallBody({
 
   /**
    * A sign-in headed for the creator setup: reads the setup's answers first, while the page still
-   * shows the pressed button's spinner. Nothing to ask (the name is done; credits still to claim
-   * are offered by the popup over the return, as onboarding's own exit did) goes straight back to
-   * `route`; a name to choose opens the setup with the answers handed over, so it starts on that
-   * step. Answers that fail or keep it waiting leave the question to onboarding, as before.
+   * shows the pressed button's spinner (6 s at most). Nothing to ask (the name is done; credits
+   * still to claim are offered by the popup over the return, as onboarding's own exit did) goes
+   * straight back to `route`; a name to choose opens the setup with the answers handed over, so it
+   * starts on that step. Answers that fail, keep it waiting or read oddly leave the question to
+   * onboarding, as before.
    */
   const continueAfterSignIn = useCallback(async (route: string, inPlace: boolean, openSetup: () => void) => {
     const answers = await readCreatorSetupAnswers(api);
@@ -195,14 +203,21 @@ function SignInWallBody({
       openSetup();
       return;
     }
-    primeWelcomeCredits(queryClient, answers.profile.id, answers.welcome);
-    const account = userRef.current;
-    const hasStep = creatorSetupHasStep(answers, {
-      local: onboardingStateRef.current,
-      accountMetadata: account?.id === answers.profile.id ? account.user_metadata : undefined,
-    });
+    let hasStep = true;
+    try {
+      primeWelcomeCredits(queryClient, answers.profile.id, answers.welcome);
+      const account = userRef.current;
+      hasStep = creatorSetupHasStep(answers, {
+        local: onboardingStateRef.current,
+        accountMetadata: account?.id === answers.profile.id ? account.user_metadata : undefined,
+      });
+      if (hasStep) handOffCreatorSetupAnswers(answers);
+    } catch {
+      // An answer that reads oddly: onboarding asks again, as it always did.
+      clearCreatorSetupAnswers();
+      hasStep = true;
+    }
     if (hasStep) {
-      handOffCreatorSetupAnswers(answers);
       openSetup();
       return;
     }
@@ -210,40 +225,45 @@ function SignInWallBody({
     completeAuthScreen(router, route, { inPlace });
   }, [api, queryClient]);
 
+  // The page's one move on once signed in, kept so that a second caller waits for the same move.
+  const moving = useRef<Promise<void> | null>(null);
+
   // Signed in, by any way in (or already, if an account opened the page): once, from here.
   // Apple and Google go on to the name and the welcome credits (`providerSignInNext`); email,
   // and an account that opened the page signed in, go back to the return as the sign-in screen
-  // always did (for a guest's `/join` that return is onboarding itself). Either way a setup is
-  // asked first whether it has a step (`continueAfterSignIn`).
-  const finish = useCallback(async () => {
-    if (completed.current) return;
-    completed.current = true;
-    if (attempted.current) void trackOnboardingEvent(api, 'auth_succeeded', { step });
-    if (canceled.current) return;
-    const inPlace = tookReturnsPlace(emailInPlace);
-    if (lastMethod.current === 'email' || lastMethod.current === null) {
-      const setupReturn = creatorSetupReturn(emailReturnTo);
-      if (setupReturn) {
-        await continueAfterSignIn(setupReturn, inPlace, () => completeAuthScreen(router, emailReturnTo, { inPlace }));
+  // always did (for a guest's `/join` that return is onboarding itself, `emailSetupReturn`).
+  // Either way a setup is asked first whether it has a step (`continueAfterSignIn`).
+  const finish = useCallback((): Promise<void> => {
+    if (moving.current) return moving.current;
+    moving.current = (async () => {
+      completed.current = true;
+      if (attempted.current) void trackOnboardingEvent(api, 'auth_succeeded', { step });
+      if (canceled.current) return;
+      const inPlace = tookReturnsPlace(emailInPlace);
+      if (lastMethod.current === 'email' || lastMethod.current === null) {
+        if (emailSetupReturn) {
+          await continueAfterSignIn(emailSetupReturn, inPlace, () => completeAuthScreen(router, emailReturnTo, { inPlace }));
+          return;
+        }
+        completeAuthScreen(router, emailReturnTo, { inPlace });
         return;
       }
-      completeAuthScreen(router, emailReturnTo, { inPlace });
-      return;
-    }
-    const next = providerSignInNext(target, inPlace);
-    if (next.kind === 'return') {
-      completeAuthScreen(router, next.route, { inPlace });
-      return;
-    }
-    await continueAfterSignIn(next.href.params.returnTo, inPlace, () => router.replace(next.href as never));
-  }, [api, continueAfterSignIn, emailInPlace, emailReturnTo, step, target]);
+      const next = providerSignInNext(target, inPlace);
+      if (next.kind === 'return') {
+        completeAuthScreen(router, next.route, { inPlace });
+        return;
+      }
+      await continueAfterSignIn(next.href.params.returnTo, inPlace, () => router.replace(next.href as never));
+    })();
+    return moving.current;
+  }, [api, continueAfterSignIn, emailInPlace, emailReturnTo, emailSetupReturn, step, target]);
 
-  // An account that opened the page signed in, or a sign-in that ended without moving the page
-  // on (one that failed after its session landed): never while one runs, whose own end moves on
-  // once it is over, so a new account's guest credits are prepared before the setup is asked.
+  // As soon as the session lands, as the page always moved on: the rest of a sign-in (a guest's
+  // credits moved to the account, the profile read) goes on behind it. At once for an account that
+  // opened the page signed in.
   useEffect(() => {
-    if (user && isFocused && !inFlight) void finish();
-  }, [finish, inFlight, isFocused, user]);
+    if (user && isFocused) void finish();
+  }, [finish, isFocused, user]);
 
   /**
    * Runs one sign-in for either half. Refuses while another runs, counts the visit's first
@@ -261,6 +281,11 @@ function SignInWallBody({
       // The spinner stays on the pressed button until the page has moved on.
       await finish();
       return true;
+    } catch (error) {
+      // Its session landed before it failed, so the page is already moving on: the spinner
+      // holds until it has.
+      if (moving.current) await moving.current.catch(() => undefined);
+      throw error;
     } finally {
       inFlightRef.current = null;
       setInFlight(null);

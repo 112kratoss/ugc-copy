@@ -10,7 +10,6 @@ import {
   readCreatorSetupAnswers,
   type CreatorSetupAnswers,
 } from '../lib/creator-setup-answers';
-import { creatorSetupReturn } from '../lib/join-navigation';
 import type { ProfileResponse, WelcomeCreditResponse } from '../lib/types';
 
 const profile = {
@@ -117,25 +116,5 @@ describe('the hand-off to onboarding', () => {
     expect(peekCreatorSetupAnswers('user-1', 999)).toBeNull();
     clearCreatorSetupAnswers();
     expect(peekCreatorSetupAnswers('user-1', 1_000)).toBeNull();
-  });
-});
-
-describe('creatorSetupReturn', () => {
-  it('reads the page a fresh setup returns to, as join.tsx writes it', () => {
-    const target = '/create/image?remix=gen-1&tool=video';
-    expect(creatorSetupReturn(`/onboarding?returnTo=${encodeURIComponent(target)}`)).toBe(target);
-    expect(creatorSetupReturn(`/onboarding?inPlace=1&returnTo=${encodeURIComponent('/(tabs)')}`)).toBe('/(tabs)');
-    expect(creatorSetupReturn([`/onboarding?returnTo=${encodeURIComponent('/profile')}`])).toBe('/profile');
-  });
-
-  it('is nothing for any other return: onboarding already open, another page, or a bad return', () => {
-    expect(creatorSetupReturn('/onboarding')).toBeNull();
-    expect(creatorSetupReturn('/onboarding?goal=video')).toBeNull();
-    expect(creatorSetupReturn('/profile')).toBeNull();
-    expect(creatorSetupReturn('/profile?returnTo=%2Fx')).toBeNull();
-    expect(creatorSetupReturn(`/onboarding?returnTo=${encodeURIComponent('https://evil.example')}`)).toBeNull();
-    expect(creatorSetupReturn(`/onboarding?returnTo=${encodeURIComponent('//evil.example')}`)).toBeNull();
-    expect(creatorSetupReturn('/onboarding?returnTo=%E0%A4%A')).toBeNull();
-    expect(creatorSetupReturn(undefined)).toBeNull();
   });
 });

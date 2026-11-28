@@ -18,6 +18,7 @@ export default function JoinScreen() {
       // An email sign-in on the page's second half still meets a new account at the name and
       // credits: an existing, finished account passes straight through onboarding to `target`.
       emailReturnTo={`/onboarding?returnTo=${encodeURIComponent(target)}`}
+      emailSetupReturn={target}
     />
   );
 }

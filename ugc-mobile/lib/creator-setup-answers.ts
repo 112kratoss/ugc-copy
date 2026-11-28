@@ -75,13 +75,15 @@ export function creatorSetupHasStep(
     accountMetadata: unknown;
   },
 ): boolean {
-  return resolveOnboardingDestination({
+  const destination = resolveOnboardingDestination({
     hasUser: true,
     userId: answers.profile.id,
     welcome: answers.welcome,
     local,
     identityDeferredOnAccount: isIdentityDeferredInMetadata(accountMetadata),
-  }) === 'identity';
+  });
+  // Read as onboarding reads it: anything but "nothing to do" is the setup's to show.
+  return destination !== 'none' && destination !== 'reward';
 }
 
 let handedOff: { answers: CreatorSetupAnswers; at: number } | null = null;
