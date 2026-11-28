@@ -307,8 +307,9 @@ function assertAppleClientIdsKeepNative({ config, webClientId, bundleId = IOS_BU
 /**
  * Supabase's answer to a press of Continue with <provider> on the website,
  * asked at the project's own address (which every client still calls) unless
- * another origin is given: the redirect to the provider, unread. With no PKCE
- * challenge Supabase writes nothing for it.
+ * another origin is given: the redirect to the provider, unread. Supabase
+ * stores a short-lived flow-state row for every such request, with or without
+ * PKCE, as it does for a press someone abandons. Nothing signs in.
  */
 async function fetchSupabaseAuthorizeRedirect(provider, origin = `https://${PROJECT_REF}.supabase.co`) {
   const url = new URL('/auth/v1/authorize', origin);
@@ -475,8 +476,9 @@ async function probeAppleWebDeletion() {
 /**
  * Where Supabase sends Continue with Google, on the website and in both apps
  * (they open the same address): Google's authorize page, for an OAuth client,
- * returning to Supabase's callback. Google's account page names that
- * callback's site ("to continue to magicbooklet.com" since the custom domain).
+ * returning to Supabase's callback. Without a verified brand, Google's account
+ * page names that callback's site ("to continue to magicbooklet.com" from the
+ * custom domain on). Since 2026-11-28 it names the verified app, Magicbooklet.
  */
 function assertGoogleWebAuthorizeRedirect({
   status,
