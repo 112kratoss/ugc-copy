@@ -766,20 +766,18 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     vi.mocked(readMediaFileLength).mockReset().mockResolvedValue(null);
   });
 
-  it('routes to consumer templates from the prompt toolbar without authoring controls', () => {
+  // No template is published (the catalog was empty on 2026-11-28), so the toolbar's Templates button
+  // only ever opened "No templates yet": gone from all three creators (owner, 2026-11-28). The
+  // template screens stay for links into them.
+  it('offers no Templates button and no template authoring in the prompt toolbar', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" insideTab />);
     });
 
-    expect(collectText(tree!.root)).toContain('Templates');
+    expect(collectText(tree!.root)).not.toContain('Templates');
     expect(collectText(tree!.root)).not.toContain('Create template');
     expect(collectText(tree!.root)).not.toContain('Publish template');
-
-    renderer.act(() => {
-      findPressableByText(tree!.root, 'Templates').props.onPress();
-    });
-    expect(routerState.push).toHaveBeenCalledWith('/templates');
   });
 
   it('renders a schema-v1 model supplied only by the remote catalog', () => {
@@ -1659,7 +1657,7 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     expect(persistentBar.props.style.bottom).toBe(32);
   });
 
-  it('shows the reference rail count, and a toolbar of Templates and Enhance', () => {
+  it('shows the reference rail count, and a toolbar of Enhance alone', () => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
       tree = renderer.create(<MediaCreationScreen initialTool="image" />);
@@ -1679,15 +1677,15 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
         node.props.style?.borderRadius === 24 &&
         node.props.style?.flexDirection === 'row',
     );
-    expect(actionColumns.map((node) => node.props.accessibilityLabel)).toEqual(['Templates', 'Enhance · 2 credits']);
+    expect(actionColumns.map((node) => node.props.accessibilityLabel)).toEqual(['Enhance · 2 credits']);
     const referenceRail = tree!.root.findByProps({ testID: 'image-reference-rail' });
     expect(referenceRail.props.style).not.toEqual(expect.objectContaining({ borderTopWidth: expect.any(Number) }));
   });
 
   // The toolbar's first button repeated the slots on the page: Image's added references as the
   // rail's add does, Video's and Motion's could replace an attached frame or clip without asking,
-  // which their slots never do. The slots stay; every tab's toolbar is Templates and Enhance
-  // (owner's call on A1, 2026-10-21).
+  // which their slots never do. The slots stay; every tab's toolbar is Enhance (owner's call on A1,
+  // 2026-10-21; Templates left it on 2026-11-28 with no template published).
   it.each(['image', 'video', 'motion'] as const)('has no toolbar button that adds what the %s slots add', (tool) => {
     let tree: renderer.ReactTestRenderer | undefined;
     renderer.act(() => {
@@ -1695,7 +1693,8 @@ describe('MediaCreationScreen Phase 3 create workspace', () => {
     });
 
     const labels = tree!.root.findAll((node) => String(node.type) === 'pressable').map((node) => node.props.accessibilityLabel);
-    expect(labels).toContain('Templates');
+    expect(labels).toContain('Enhance · 2 credits');
+    expect(labels).not.toContain('Templates');
     expect(labels).not.toContain('Reference');
     expect(labels).not.toContain('Inputs');
   });

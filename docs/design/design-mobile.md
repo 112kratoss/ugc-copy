@@ -232,10 +232,10 @@ Rules:
 
 Three shapes on one scale, the web's too (`design-web.md` → Radius), drawn as Apple draws them (the HIG's Buttons chapter; SwiftUI's `Capsule` and `RoundedRectangle`, and iOS 26's `ConcentricRectangle`). Until November 2026 the app drew 36 radii, 263 of them as bare numbers.
 
-- **Capsule** (`pill`): anything pressed on one row (buttons, chips, segmented controls and their thumbs, toggles, search fields, the creator bar with its settings chip and Generate, Templates and Enhance, the dock's tabs) and every circle (icon buttons, avatars, badges, dots, progress tracks). Rows in a vertical stack (menu and drawer rows, list rows, a grid of options) are rounded rectangles, as the HIG prefers for a stack.
+- **Capsule** (`pill`): anything pressed on one row (buttons, chips, segmented controls and their thumbs, toggles, search fields, the creator bar with its settings chip and Generate, Enhance, the dock's tabs) and every circle (icon buttons, avatars, badges, dots, progress tracks). Rows in a vertical stack (menu and drawer rows, list rows, a grid of options) are rounded rectangles, as the HIG prefers for a stack.
 - **Fixed**, the outermost container's own step, by its size (table below).
 - **Concentric**, a shape nested 12pt or less inside a rounded container: the container's radius less the gap, snapped to a step and never under 8, so the two curves share a centre. Write it from the tokens: the Android menu's rows are `MENU_RADIUS - MENU_PADDING`, 20 less 4. A bar of capsules on one row, such as the creator's, is a capsule itself.
-- **A capsule whose label can wrap** takes half its minimum height as a fixed radius instead of `pill` (`xl` on a 48pt control), so it is a capsule on one line and grows into a rounded rectangle, not a stadium that cuts its words, when a large text size wraps the label. Templates and Enhance do; their labels are also capped at the control tier.
+- **A capsule whose label can wrap** takes half its minimum height as a fixed radius instead of `pill` (`xl` on a 48pt control), so it is a capsule on one line and grows into a rounded rectangle, not a stadium that cuts its words, when a large text size wraps the label. Enhance does; its label is also capped at the control tier.
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -351,7 +351,7 @@ Keep generating and publishing visibly different.
 
 ### Side menu
 
-Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Templates, Invite & Earn, Recipe Sales, Unlocked recipes, Settings, and Help & Support. Secondary destinations belong there or behind Profile, not in the dock.
+Home's menu button opens a drawer (`components/home-side-menu.tsx`) with Invite & Earn, Recipe Sales, Unlocked recipes, Settings, and Help & Support. Templates left it, and the creators' toolbar, on 2026-11-28: no template is published, so it only ever opened "No templates yet"; its screens stay for links into them. Secondary destinations belong there or behind Profile, not in the dock.
 
 ### Stack screens
 
