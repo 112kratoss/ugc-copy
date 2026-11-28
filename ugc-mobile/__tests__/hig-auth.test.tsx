@@ -114,7 +114,16 @@ vi.mock('lucide-react-native', () => ({
 vi.mock('@/lib/auth', () => ({ useAuth: () => authState }));
 vi.mock('@/lib/apple-auth', () => ({ isAppleAuthCanceled: () => false }));
 vi.mock('@/lib/google-auth', () => ({ isGoogleAuthCanceled: () => false }));
-vi.mock('@/lib/onboarding', () => ({ trackOnboardingEvent: vi.fn(async () => undefined) }));
+vi.mock('@/lib/onboarding', () => ({
+  trackOnboardingEvent: vi.fn(async () => undefined),
+  // The install's setup record, which the sign-in page's setup check reads (`lib/creator-setup-answers.ts`).
+  useOnboarding: () => ({ state: { identityDeferredAt: null, identityDeferredFor: null, status: 'not_started' } }),
+}));
+
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useQueryClient: () => ({ setQueryData: vi.fn() }),
+}));
 
 import AuthScreen from '../app/auth';
 

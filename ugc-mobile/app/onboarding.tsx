@@ -33,6 +33,7 @@ import {
 } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
+import { clearCreatorSetupAnswers, peekCreatorSetupAnswers, type CreatorSetupAnswers } from '@/lib/creator-setup-answers';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { onboardingReturnTo } from '@/lib/join-navigation';
 import { completeAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
@@ -124,6 +125,22 @@ function authDisplayName(metadata: Record<string, unknown> | undefined) {
   return typeof candidate === 'string' ? candidate.trim() : '';
 }
 
+type SetupAccount = { email?: string | null; user_metadata?: Record<string, unknown> };
+
+/**
+ * What the creator-name step opens with: the name the account has, or the one its sign-in brought,
+ * and its handle, or a handle made for it while it still carries the signup placeholder (owner,
+ * 2026-11-08), which they can change.
+ */
+function identityStart(profile: ProfileResponse, account: SetupAccount) {
+  const displayName = profile.displayName?.trim() || authDisplayName(account.user_metadata) || account.email?.split('@')[0] || 'Creator';
+  if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(profile.username ?? '')) {
+    const first = firstHandleSuggestion(displayName, account.email ?? null, (handle) => !readLocalUsernameRejection(handle));
+    return { displayName, username: first, suggestion: startHandleSuggestion(first) as HandleSuggestion | null };
+  }
+  return { displayName, username: profile.username ?? '', suggestion: null as HandleSuggestion | null };
+}
+
 /**
  * The first run stays dark in both schemes: its art is a neon night scene made
  * for black, and a flow that changed its look between steps would read as
@@ -162,6 +179,14 @@ function OnboardingFlow() {
     }
   }, [returnTo, returnsInPlace]);
   const { api, user, refreshProfile } = useAuth();
+  // The account's id keys the setup's reads. Its latest details (the name Apple's sign-in saves a
+  // moment after the session lands, say) are read from here when a read runs, so a change to them
+  // never sends the screen back to its loading card or resets what was typed (review of #961).
+  const userId = user?.id ?? null;
+  const latestUser = useRef(user);
+  useEffect(() => {
+    latestUser.current = user;
+  }, [user]);
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
@@ -169,11 +194,28 @@ function OnboardingFlow() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [step, setStep] = useState(state.introStep);
+  // The answers the sign-in page read on its way here (`lib/creator-setup-answers.ts`), and the
+  // name step they open: the setup then starts on that step, never on "Preparing your creator
+  // setup" first. Built once, with the screen, and only when this screen's own resolver agrees
+  // there is a name to choose; otherwise it reads the answers itself, as it always did.
+  const [handed] = useState<{ answers: CreatorSetupAnswers; start: ReturnType<typeof identityStart> } | null>(() => {
+    const answers = user ? peekCreatorSetupAnswers(user.id) : null;
+    if (!answers || !user) return null;
+    const destination = resolveOnboardingDestination({
+      hasUser: true,
+      userId: user.id,
+      welcome: answers.welcome,
+      local: { identityDeferredAt, identityDeferredFor, status: state.status },
+      identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
+    });
+    return destination === 'identity' ? { answers, start: identityStart(answers.profile, user) } : null;
+  });
+  const handedRef = useRef(handed);
   // A signed-in creator never belongs on the guest intro, so open straight into
   // `loading` and let the resolver pick the real stage. Seeding `intro` here is
   // what put an account holder on the welcome card while the profile fetch was
   // still in flight.
-  const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? 'loading' : 'intro');
+  const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? (handed ? 'identity' : 'loading') : 'intro');
   // Seen in this run of the app: Home does not open it again until the next start.
   useEffect(() => {
     markSetupShownThisRun();
@@ -184,15 +226,15 @@ function OnboardingFlow() {
   const isFlowFocused = useIsFocused();
   useHardwareBack(stage === 'identity' && isFlowFocused, () => undefined);
   const [goal, setGoal] = useState<OnboardingGoal>(state.goal);
-  const [profile, setProfile] = useState<ProfileResponse | null>(null);
-  const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
-  const [displayName, setDisplayName] = useState('');
-  const [username, setUsername] = useState('');
+  const [profile, setProfile] = useState<ProfileResponse | null>(handed?.answers.profile ?? null);
+  const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(handed?.answers.welcome ?? null);
+  const [displayName, setDisplayName] = useState(handed?.start.displayName ?? '');
+  const [username, setUsername] = useState(handed?.start.username ?? '');
   // The handle this screen filled in, while it is still the field's value: it
   // follows the display name and a taken one is swapped for a numbered one,
   // but nothing moves while the handle field has the cursor or a save runs,
   // and typing in the handle field ends it (owner 11-08, review of #735).
-  const [suggestion, setSuggestion] = useState<HandleSuggestion | null>(null);
+  const [suggestion, setSuggestion] = useState<HandleSuggestion | null>(handed?.start.suggestion ?? null);
   const [handleFocused, setHandleFocused] = useState(false);
   // A save that failed for a reason other than the handle: the step then
   // offers a way out, so a lost connection cannot hold someone on it.
@@ -219,41 +261,48 @@ function OnboardingFlow() {
    */
   const adoptWelcome = useCallback((next: WelcomeCreditResponse) => {
     setWelcome(next);
-    if (user) primeWelcomeCredits(queryClient, user.id, next);
-  }, [queryClient, user]);
+    if (userId) primeWelcomeCredits(queryClient, userId, next);
+  }, [queryClient, userId]);
 
   const loadAuthenticatedStage = useCallback(async () => {
-    if (!user) return;
-    setStage('loading');
-    setMessage(null);
+    const account = latestUser.current;
+    if (!account) return;
+    // Answers the sign-in page handed over were applied as the screen was built:
+    // no loading card and no second read, once.
+    const handedAnswers = handedRef.current?.answers.profile.id === account.id ? handedRef.current.answers : null;
+    handedRef.current = null;
+    clearCreatorSetupAnswers();
+    if (!handedAnswers) {
+      setStage('loading');
+      setMessage(null);
+    }
     try {
-      const [nextProfile, nextWelcome] = await Promise.all([
-        api.getProfile(),
-        api.getWelcomeCredits(),
-      ]);
-      setProfile(nextProfile);
-      adoptWelcome(nextWelcome);
-      const startingName = nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator';
-      setDisplayName(startingName);
-      if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '')) {
-        // The signup placeholder is nobody's name, so the field starts with a
-        // handle made for them instead (owner, 2026-11-08), which they can change.
-        const first = firstHandleSuggestion(startingName, user.email ?? null, (handle) => !readLocalUsernameRejection(handle));
-        setSuggestion(startHandleSuggestion(first));
-        setUsername(first);
+      let nextWelcome: WelcomeCreditResponse;
+      if (handedAnswers) {
+        nextWelcome = handedAnswers.welcome;
+        adoptWelcome(nextWelcome);
       } else {
-        setSuggestion(null);
-        setUsername(nextProfile.username ?? '');
+        const [nextProfile, fetchedWelcome] = await Promise.all([
+          api.getProfile(),
+          api.getWelcomeCredits(),
+        ]);
+        nextWelcome = fetchedWelcome;
+        setProfile(nextProfile);
+        adoptWelcome(nextWelcome);
+        const start = identityStart(nextProfile, account);
+        setDisplayName(start.displayName);
+        setSuggestion(start.suggestion);
+        setUsername(start.username);
       }
       // Resolved once, on entry. Re-deriving as state changes would eject
       // someone the instant `claimCredits` flips `eligible` to `claimed` —
       // mid-celebration, with the credits counter still animating.
       const destination = resolveOnboardingDestination({
         hasUser: true,
-        userId: user.id,
+        userId: account.id,
         welcome: nextWelcome,
         local: { identityDeferredAt, identityDeferredFor, status: state.status },
-        identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
+        identityDeferredOnAccount: isIdentityDeferredInMetadata(account.user_metadata),
       });
       if (destination === 'none' || destination === 'reward') {
         // Nothing for this screen to do: a deep link, a stale entry, an account
@@ -278,15 +327,15 @@ function OnboardingFlow() {
   // always refreshes the state's `updatedAt`; depending on the whole state
   // object made that write recreate this callback, retrigger the effect below,
   // and hold signed-in creators in an endless profile/welcome-credits fetch loop.
-  }, [adoptWelcome, api, goal, identityDeferredAt, identityDeferredFor, leaveForReturn, update, user]);
+  }, [adoptWelcome, api, goal, identityDeferredAt, identityDeferredFor, leaveForReturn, update, userId]);
 
   useEffect(() => {
     // Being signed in is the whole condition. This used to also require
     // `state.lastStep >= 4` — an install-local cursor — so the same account
     // entered the authenticated stages on one device and the guest welcome
     // screen on another.
-    if (user) void loadAuthenticatedStage();
-  }, [loadAuthenticatedStage, user]);
+    if (userId) void loadAuthenticatedStage();
+  }, [loadAuthenticatedStage, userId]);
 
   useEffect(() => {
     // `auth_succeeded` used to key off a `resume=identity` param. Delivery of

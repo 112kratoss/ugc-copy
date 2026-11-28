@@ -7,7 +7,6 @@ import {
   CircleHelp,
   Crown,
   Gift,
-  Layers3,
   LayoutDashboard,
   LogIn,
   LogOut,
@@ -418,7 +417,6 @@ export function HomeSideMenu({
             </View>
 
             <View style={{ gap: 8 }}>
-              <MenuRow icon={<Layers3 size={21} color={theme.colors.text} />} label="Templates" chosen={handoff.chosen === '/templates'} onPress={() => openScreen('/templates')} />
               <MenuRow icon={<Gift size={21} color={theme.colors.commerce} />} label="Invite & Earn" chosen={handoff.chosen === '/invite'} onPress={() => openScreen('/invite')} />
               <MenuRow icon={<LayoutDashboard size={21} color={theme.colors.text} />} label="Recipe Sales" chosen={handoff.chosen === '/seller-dashboard'} onPress={() => openScreen('/seller-dashboard')} />
               {/* The recipes this account unlocked from other creators, in the

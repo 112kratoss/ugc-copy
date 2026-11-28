@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   Image as ImageIcon,
-  Layers,
   Plus,
   Play,
   RefreshCw,
@@ -4430,7 +4429,6 @@ function ImagePromptComposer({
       </View>
 
         <View testID="composer-action-grid" style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-          <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
           <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels(enhanceVerb, isEnhancing)} onPress={onEnhance} disabled={isEnhancing} accent />
         </View>
 
@@ -5206,7 +5204,6 @@ function VideoCreatorComposer({
       )}
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
         <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || draft.isMultiShot} accent />
       </View>
 
@@ -5775,7 +5772,6 @@ function MotionCreatorComposer({
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
-        <ComposerToolbarButton icon={<Layers size={15} color={theme.colors.muted} />} label="Templates" onPress={() => router.push('/templates' as never)} />
         <ComposerToolbarButton icon={<Wand2 size={16} color={theme.colors.primary} />} {...enhanceButtonLabels('Enhance', isEnhancing)} onPress={onEnhance} disabled={isEnhancing || !draft.prompt.trim()} accent />
       </View>
 
@@ -6094,9 +6090,9 @@ function EnhanceOffer({ onUse }: { onUse: () => void }) {
 }
 
 /**
- * A toolbar button under the prompt: Enhance is the accent, Templates the quiet one beside it.
- * Two buttons side by side are capsules, as the web's are (docs/design/design-mobile.md → Radius):
- * its radius is half its minimum height, so on one line it is a capsule, and when a large text size
+ * A toolbar button under the prompt: Enhance, the accent, across the row (Templates sat beside it
+ * until 2026-11-28). A capsule, as the web's are (docs/design/design-mobile.md → Radius): its
+ * radius is half its minimum height, so on one line it is a capsule, and when a large text size
  * wraps its label it grows into a rounded rectangle instead of a stadium whose ends cut the words.
  */
 function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disabled, accent }: { icon: React.ReactNode; label: string; accessibilityLabel?: string; onPress: () => void; disabled?: boolean; accent?: boolean }) {
@@ -6126,8 +6122,8 @@ function ComposerToolbarButton({ icon, label, accessibilityLabel, onPress, disab
       })}
     >
       {icon}
-      {/* Centred and free to wrap, because a priced label ("Enhance · 2 credits") can take two lines in half
-          the row; capped at the control tier, so a one-word label never breaks mid-word. */}
+      {/* Centred and free to wrap, because a priced label ("Enhance · 2 credits") can take two lines at the
+          largest text sizes; capped at the control tier, so a one-word label never breaks mid-word. */}
       <Text maxFontSizeMultiplier={appTheme.typeScale.control} style={{ flexShrink: 1, color: accent ? theme.colors.primary : theme.colors.muted, fontSize: 12, fontWeight: '800', textAlign: 'center' }}>{label}</Text>
     </Pressable>
   );

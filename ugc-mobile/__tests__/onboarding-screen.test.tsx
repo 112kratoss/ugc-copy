@@ -168,6 +168,7 @@ import OnboardingScreen from '../app/onboarding';
 import { AccountDeletingError, ApiError, SessionMergedError } from '../lib/api-client';
 import { trackOnboardingEvent } from '../lib/onboarding';
 import { HANDLE_CHECK_DELAY_MS } from '../lib/use-handle-availability';
+import { clearCreatorSetupAnswers, handOffCreatorSetupAnswers, peekCreatorSetupAnswers } from '../lib/creator-setup-answers';
 import { welcomeCreditsQueryKey } from '../lib/use-onboarding-destination';
 import { resetWelcomePopupThisRun, welcomeReturnPath } from '../lib/welcome-popup';
 
@@ -210,6 +211,7 @@ const welcome = {
 
 describe('authenticated onboarding entry', () => {
   beforeEach(() => {
+    clearCreatorSetupAnswers();
     harness.api.getProfile.mockReset();
     harness.api.getWelcomeCredits.mockReset();
     harness.api.updateOnboardingState.mockReset();
@@ -238,6 +240,125 @@ describe('authenticated onboarding entry', () => {
     // The Home card reads this key. Seeding it here is what keeps the card
     // and this screen telling the same story.
     expect(queryClient.getQueryData(welcomeCreditsQueryKey('creator-1'))).toEqual(welcome);
+
+    act(() => tree?.unmount());
+  });
+
+  // Owner's video, 2026-11-28: after Google's page, "Preparing your creator setup" flashed on
+  // the way to the name step. The sign-in page reads the answers now and hands them over.
+  it('opens on the creator name from its first frame when the sign-in page handed the answers over', async () => {
+    const never = new Promise<never>(() => undefined);
+    harness.api.getProfile.mockReturnValue(never);
+    harness.api.getWelcomeCredits.mockReturnValue(never);
+    handOffCreatorSetupAnswers({ profile: { ...profile, id: 'creator-1' } as never, welcome: welcome as never });
+    const queryClient = new QueryClient();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    act(() => {
+      tree = renderScreen(queryClient);
+    });
+    const firstFrame = JSON.stringify(tree?.toJSON());
+    expect(firstFrame).toContain('Claim your creator name');
+    expect(firstFrame).not.toContain('Preparing your creator setup');
+    // The name and a handle made from it are in the fields from that frame too.
+    const fields = tree!.root.findAll((node) => String(node.type) === 'app-text-input');
+    expect(fields[0].props.value).toBe('Sarath');
+    expect(fields[1].props.value).toMatch(/^sarath/);
+
+    await act(async () => {
+      await settle();
+    });
+    // Read once, by the sign-in page: no second request, no loading card after the fact.
+    expect(harness.api.getProfile).not.toHaveBeenCalled();
+    expect(harness.api.getWelcomeCredits).not.toHaveBeenCalled();
+    expect(JSON.stringify(tree?.toJSON())).not.toContain('Preparing your creator setup');
+    expect(queryClient.getQueryData(welcomeCreditsQueryKey('creator-1'))).toEqual(welcome);
+    expect(harness.localUpdates).toEqual([{ goal: 'image' }]);
+    expect(peekCreatorSetupAnswers('creator-1')).toBeNull();
+
+    act(() => tree?.unmount());
+  });
+
+  // Review of #961: Apple saves a new account's name a moment after the session lands; that update
+  // gave the account a new object, which reloaded this screen onto its loading card and reset the
+  // fields, whatever had been typed.
+  it('keeps the name step and what was typed when the account’s details change', async () => {
+    const never = new Promise<never>(() => undefined);
+    harness.api.getProfile.mockReturnValue(never);
+    harness.api.getWelcomeCredits.mockReturnValue(never);
+    handOffCreatorSetupAnswers({ profile: { ...profile, id: 'creator-1' } as never, welcome: welcome as never });
+    const queryClient = new QueryClient();
+    const originalUser = harness.user;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    try {
+      act(() => {
+        tree = renderScreen(queryClient);
+      });
+      await act(async () => {
+        await settle();
+      });
+      act(() => {
+        tree!.root.findAll((node) => String(node.type) === 'app-text-input')[0].props.onChangeText('Sarath K');
+      });
+      // The account's name arrives: same account, a new object.
+      harness.user = { ...originalUser, user_metadata: { full_name: 'Sarath Kumar' } };
+      await act(async () => {
+        tree!.update(
+          <QueryClientProvider client={queryClient}>
+            <OnboardingScreen />
+          </QueryClientProvider>,
+        );
+        await settle();
+      });
+      expect(JSON.stringify(tree?.toJSON())).not.toContain('Preparing your creator setup');
+      expect(tree!.root.findAll((node) => String(node.type) === 'app-text-input')[0].props.value).toBe('Sarath K');
+      expect(harness.api.getProfile).not.toHaveBeenCalled();
+    } finally {
+      harness.user = originalUser;
+      act(() => tree?.unmount());
+    }
+  });
+
+  it('reads the answers itself, and leaves, when its own resolver finds no name to choose', async () => {
+    const named = { ...welcome, status: 'claimed', identityComplete: true };
+    harness.api.getProfile.mockResolvedValue({ ...profile, username: 'sarath' });
+    harness.api.getWelcomeCredits.mockResolvedValue(named);
+    handOffCreatorSetupAnswers({ profile: { ...profile, id: 'creator-1', username: 'sarath' } as never, welcome: named as never });
+    const queryClient = new QueryClient();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    act(() => {
+      tree = renderScreen(queryClient);
+    });
+    // Never the name step for an account that has one, not even for a frame.
+    expect(JSON.stringify(tree?.toJSON())).not.toContain('Claim your creator name');
+    await act(async () => {
+      await settle();
+    });
+    expect(harness.api.getWelcomeCredits).toHaveBeenCalledTimes(1);
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(peekCreatorSetupAnswers('creator-1')).toBeNull();
+
+    act(() => tree?.unmount());
+  });
+
+  it('reads the answers itself when those handed over describe another account', async () => {
+    harness.api.getProfile.mockResolvedValue(profile);
+    harness.api.getWelcomeCredits.mockResolvedValue(welcome);
+    handOffCreatorSetupAnswers({ profile: { ...profile, id: 'someone-else' } as never, welcome: welcome as never });
+    const queryClient = new QueryClient();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    act(() => {
+      tree = renderScreen(queryClient);
+    });
+    expect(JSON.stringify(tree?.toJSON())).toContain('Preparing your creator setup');
+    await act(async () => {
+      await settle();
+    });
+    expect(harness.api.getProfile).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(tree?.toJSON())).toContain('Claim your creator name');
 
     act(() => tree?.unmount());
   });
