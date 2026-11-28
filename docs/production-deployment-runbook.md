@@ -159,14 +159,14 @@ These settings are intentionally verified against the provider dashboards/adviso
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
 - Google Auth Platform: set Branding app name to `Magicbooklet`, add `magicbooklet.com` as an authorized domain, publish/verify the OAuth consent screen, and keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
-- Supabase project `ildfmhozpibwiopeavfg`: add a branded custom domain such as `auth.magicbooklet.com` or `api.magicbooklet.com` before broad social-login launch. In the Google OAuth client, allow both `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and the branded `https://<supabase-custom-domain>/auth/v1/callback` until cutover is verified. Add the branded host and callback to the Apple Services ID before activation, and set the repository variable `SUPABASE_AUTH_CALLBACK_URL` to the branded callback ("Sign in with Apple on the web" below). Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
+- Supabase project `ildfmhozpibwiopeavfg`: the custom domain `auth.magicbooklet.com` is active since 2026-11-28. Its DNS records, the return URLs registered at Google and Apple, the repository variable `SUPABASE_AUTH_CALLBACK_URL`, the checks and the rollback are under "Custom auth domain" below. Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
 - Apple Services ID, the Supabase Apple provider, and the repository secrets `APPLE_SIGN_IN_PRIVATE_KEY` and `SUPABASE_AUTH_CONFIG_TOKEN` that the monthly client-secret renewal reads: under "Sign in with Apple on the web" below.
 - Before this repository goes private on GitHub Free: environment secrets stop being readable there. The `production` environment's secrets (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `OPS_READ_SECRET`) and `mobile-production`'s `EXPO_TOKEN` need repository copies under the same names, with `vars.TESTFLIGHT_INTERNAL_GROUP` checked too, and environment protection rules stop applying. Do this before the switch.
 - RevenueCat project `proj4a602455`: send a production test webhook for integration `whintgr1689ecfb68` to `https://magicbooklet.com/api/mobile/commerce/revenuecat-webhook`, then verify Vercel logs show the route accepted the signed event. Current configured event types are `cancellation`, `non_renewing_purchase`, and `refund_reversed`.
 
 The local Supabase config baseline is intentionally stricter than the original project default: `minimum_password_length = 8`, `password_requirements = "lower_upper_letters_digits_symbols"`, and `secure_password_change = true`. Do not push a Supabase config change that weakens those values.
 
-The web login code already redirects Google sign-in back to `https://magicbooklet.com/auth/callback`. If Google's account chooser still says it will continue to `ildfmhozpibwiopeavfg.supabase.co`, the fix is not a Next.js button change: complete Google Auth Platform branding and activate a Supabase custom domain. Once the custom domain is active, update production `NEXT_PUBLIC_SUPABASE_URL` to that branded Supabase URL and redeploy so new OAuth flows advertise the branded callback host.
+Google's sign-in page names the site of the return URL Supabase gives it, Supabase Auth's own callback. It read "to continue to ildfmhozpibwiopeavfg.supabase.co" until the custom domain went live on 2026-11-28, and now reads "to continue to magicbooklet.com". Activating the domain changed that on the server, for the website and every installed app at once. Leave production `NEXT_PUBLIC_SUPABASE_URL` (and the app's `EXPO_PUBLIC_SUPABASE_URL`) on `ildfmhozpibwiopeavfg.supabase.co`: "Custom auth domain" below says why a switch would sign everyone out. To show the name "Magicbooklet" instead of a domain, the Google Auth Platform app must be published and its brand verified. On 2026-11-28 it was External, with the publishing status Testing and a logo set. Everyone can sign in all the same: Supabase asks Google only for `email profile`, and Google's rules for Testing let anyone through a request for no more than name, email and profile (Google Cloud Help, "Manage App Audience"). A sign-in that asked any other scope would be open only to the app's test users, so publish the app before either client adds one.
 
 Use the repeatable production gate helper after each external change:
 
@@ -326,6 +326,117 @@ rejects `provider = 'email'` sign-ups with a 403 and the message
 Keep `auth.email.enable_confirmations = false` while this policy holds; enabling
 confirmations without a sender would silently block every affected sign-in.
 
+### Custom auth domain (`auth.magicbooklet.com`)
+
+Live since 2026-11-28 12:21 UTC, on the owner's word that day ("our company
+profile instead of the supabase one … i know its a paid one but its okay").
+Supabase Auth gives Google and Apple `https://auth.magicbooklet.com/auth/v1/callback`
+as the return address, so Google's sign-in page reads "to continue to
+magicbooklet.com". This applies to the website and to every installed app at
+once. They all still call `https://ildfmhozpibwiopeavfg.supabase.co`, which keeps
+working, and neither client changed.
+
+What it is made of:
+
+- Supabase's Custom Domain add-on on `ugc-app` (Project Settings → Add-ons),
+  $10 a month, billed by the hour and not covered by the spend cap.
+- DNS at GoDaddy, which serves `magicbooklet.com` (nameservers
+  `ns73`/`ns74.domaincontrol.com`):
+  - CNAME `auth` → `ildfmhozpibwiopeavfg.supabase.co.`
+  - TXT `_acme-challenge.auth`, for the certificate Supabase issues and renews
+    (Google Trust Services; the first one runs to 2027-02-26).
+
+  Keep both records: without the CNAME the domain stops answering, and without
+  the TXT the next renewal can fail.
+- Return URLs registered with the providers. Keep the project's own callback
+  in both lists: it is the rollback.
+  - Google Cloud project `magicbooklet` → Google Auth Platform → Clients →
+    "magicbooklet" (the web client `811753998986-…`), Authorized redirect URIs:
+    - `https://auth.magicbooklet.com/auth/v1/callback`
+    - `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback`
+    - the local stack's two `:54321` URIs
+  - Apple Services ID `com.magicbooklet.mobile.web`:
+    - Domains: `auth.magicbooklet.com`, `ildfmhozpibwiopeavfg.supabase.co` and
+      `magicbooklet.com`
+    - Return URLs: the two callbacks above and `https://magicbooklet.com/delete-account`
+- The repository variable `SUPABASE_AUTH_CALLBACK_URL`, set to
+  `https://auth.magicbooklet.com/auth/v1/callback`, is the callback the monthly
+  Apple workflow's probe expects. `scripts/ops/production-external-gates.mjs`
+  defaults to the same.
+
+Checks. None needs a token, and nothing signs in:
+
+- `npm run ops:external-gates -- --probe-google-sign-in`: Supabase sends
+  Continue with Google back to that callback, and Google takes it there for the
+  client. A return URL nobody registered is refused first, so a pass means the
+  probe can see a refusal.
+- `npm run ops:external-gates -- --probe-apple-web-sign-in`: the same redirect
+  check for Apple ("Sign in with Apple on the web", step 4).
+- `npm run ops:external-gates -- --probe-auth-callback-registrations`: whether
+  Google and Apple both take `SUPABASE_AUTH_CALLBACK_URL` for Supabase's clients,
+  whatever Supabase sends them today. Run it before `supabase domains activate`
+  and before `delete`, with the variable set to the callback that will take over.
+  Activation sends every sign-in to the new callback at once.
+
+What did not change, and why (checked on 2026-11-28):
+
+- Client URLs. `NEXT_PUBLIC_SUPABASE_URL` and the app's
+  `EXPO_PUBLIC_SUPABASE_URL` stay on `ildfmhozpibwiopeavfg.supabase.co`. Don't
+  switch them for looks. Both the website's session cookie and the app's stored
+  session take their name from the URL's first label
+  (`sb-ildfmhozpibwiopeavfg-auth-token`: `src/lib/supabase-auth-cookie.ts`,
+  `ugc-mobile/lib/supabase.ts`), so a new host signs every user out unless the
+  old name is pinned. Storage URLs written from then on would also carry the new
+  host. `src/lib/remote-media-security.ts`, `next.config.ts` (images and CSP) and
+  the storage-URL readers recognize the host from that same variable.
+- Tokens. The issuer is still `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1`
+  (the project's OpenID configuration, read after activation), and nothing here
+  checks `iss`. auth-js `getClaims()` checks only the signature and the expiry,
+  and no RLS policy or Edge Function reads the claim.
+- Storage, Realtime, the REST API and both Edge Functions. They are called at the
+  project's address by both clients, the scripts and Kie's callback (`kie-webhook`),
+  and Supabase keeps serving that address.
+- The agents' MCP server and its OAuth server are the app's own, on
+  `magicbooklet.com`. Only the consent page's sign-in goes through Supabase, the
+  same way the website's does.
+- Auth mail. No Auth mail is sent (the identity policy above), so no mail link
+  carries the host.
+
+How activation went, for a repeat:
+
+1. `supabase domains create --project-ref ildfmhozpibwiopeavfg --custom-hostname auth.magicbooklet.com`
+   only works once the CNAME resolves (about a minute after it was saved at GoDaddy).
+2. Run `supabase domains reverify` until it says "ready for activation". That took
+   about two minutes after the TXT resolved.
+3. `--probe-auth-callback-registrations` green.
+4. `supabase domains activate`.
+
+Before activation the custom host answers 400 "Project not specified". It went on
+answering that for about a minute after activation, so a sign-in finishing in that
+minute fails at the callback. None did (auth logs), but activate at a quiet hour.
+
+Rollback (never run). Supabase's docs warn that removing an active custom domain
+"may cause some issues" for OAuth, which is why both providers keep the
+project's own callback:
+
+1. `SUPABASE_AUTH_CALLBACK_URL=https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback npm run ops:external-gates -- --probe-auth-callback-registrations`:
+   both providers must still take the project's own callback.
+2. At a quiet hour, `supabase domains delete --project-ref ildfmhozpibwiopeavfg`.
+   Auth should then give Google and Apple the project's own callback again, as
+   before activation. Supabase's docs don't say so outright, so step 3 checks
+   it. A sign-in already at Google or Apple at that moment comes back to the
+   custom host and can fail.
+3. With the same variable, `--probe-google-sign-in` and
+   `--probe-apple-web-sign-in` must pass.
+4. In the same sitting, set the repository variable `SUPABASE_AUTH_CALLBACK_URL`
+   to that callback: the monthly Apple workflow's probe reads it.
+5. Remove the add-on (Project Settings → Add-ons): it is billed by the hour
+   until then.
+6. Only after that, and only if wanted, take `auth.magicbooklet.com` out of the
+   Google client's redirect URIs and the Apple Services ID, and delete the two
+   DNS records at GoDaddy. Removing a provider's entry while the domain is still
+   active fails every sign-in through that provider.
+
 ### Sign in with Apple on the web
 
 Set up on 2026-11-02: Services ID `com.magicbooklet.mobile.web` ("Magicbooklet
@@ -430,11 +541,11 @@ Apple's invalid_client page.
    its primary App ID, so the website and the app are one entry in a person's
    Apple ID settings. Apple's user id is the same for every app of the team,
    which is what makes an account made on an iPhone sign in on the website as
-   itself. Domains: `ildfmhozpibwiopeavfg.supabase.co`. Return URL:
-   `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback`. Before a
-   Supabase custom domain is activated (the dashboard gates above), add its host
-   and its `/auth/v1/callback` here as well: Supabase sends Apple the custom
-   callback from activation on, and Apple refuses a return URL it was not given.
+   itself. Domains: `ildfmhozpibwiopeavfg.supabase.co` and `auth.magicbooklet.com`.
+   Return URLs: `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` and
+   `https://auth.magicbooklet.com/auth/v1/callback`. Supabase has sent Apple the
+   custom domain's callback since its activation ("Custom auth domain" above),
+   and Apple refuses a return URL it was not given.
    For deleting an account on the website, also add the domain
    `magicbooklet.com` and the return URL `https://magicbooklet.com/delete-account`
    (the deletion page's own Continue with Apple, below).
@@ -463,9 +574,11 @@ Apple's invalid_client page.
    `npm run ops:external-gates -- --probe-apple-web-sign-in` reads where
    Supabase sends a press of Continue with Apple, with no token, and fails
    unless it is Apple's authorize page for a client other than the bundle id,
-   returning to the project's callback. Once a custom domain is active, set
-   `SUPABASE_AUTH_CALLBACK_URL` to its callback: locally in the environment, and
-   for the monthly workflow as a repository variable. With `SUPABASE_MANAGEMENT_API_TOKEN` it
+   returning to the custom domain's callback. That callback is
+   `https://auth.magicbooklet.com/auth/v1/callback`, the script's default and
+   the value of the repository variable `SUPABASE_AUTH_CALLBACK_URL`, which the
+   monthly workflow passes. After a rollback, set the variable to the project's
+   own callback ("Custom auth domain" above). With `SUPABASE_MANAGEMENT_API_TOKEN` it
    also checks that the bundle id is still in Client IDs; without one, sign in
    with Apple in the iPhone app. It cannot see the secret. After the deploy, sign
    in on the website with the Apple ID of an iPhone account and check that it is
