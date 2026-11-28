@@ -11,6 +11,7 @@ import { getLockedRemixRailLabel, hasImmersiveDetailsPage, type ImmersivePreview
 import { useReducedMotion } from '@/lib/motion';
 import { ShareGlyph } from '@/lib/platform-glyphs';
 import { buildReelCaption, getRailCountLabel } from '@/lib/reel-overlay-view-model';
+import { REEL_CREATOR_ROW_HEIGHT, REEL_FOLLOW_PILL_HIT_SLOP, reelCaptionBottom } from '@/lib/reel-progress-view-model';
 import { appTheme, mediaColors, type AppTheme } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
 import {
@@ -38,8 +39,12 @@ import { ViewerActionsMenu } from '@/components/viewer-actions-menu';
  * same item, so the one hands over to the other without a pixel changing.
  */
 
-/** The creator byline reads as a single line of text; its reach is widened rather than its height. */
-const CREATOR_ROW_HEIGHT = 34;
+/**
+ * The creator byline reads as a single line of text; its reach is widened
+ * rather than its height. Shared with the progress bar, which keeps clear of
+ * that reach (`lib/reel-progress-view-model.ts`).
+ */
+const CREATOR_ROW_HEIGHT = REEL_CREATOR_ROW_HEIGHT;
 
 /**
  * The shade behind the caption and the rail, as React Native's own gradient,
@@ -135,9 +140,12 @@ export function ReelSlideChrome({
   const isTextPost = item.previewKind === 'text';
   const canOpenCreator = Boolean(item.creatorUsername);
 
+  // Just above the inset; lifted on a phone with none, so the reel's progress
+  // bar fits under the caption's touch areas (`reelCaptionBottom`).
+  const captionBottom = reelCaptionBottom(bottomInset);
   // Only the text needs a scrim. It runs from just above the caption block
   // to the bottom edge and no further — the picture above it is the point.
-  const scrimHeight = Math.max(220, captionBlockHeight + bottomInset + 120);
+  const scrimHeight = Math.max(220, captionBlockHeight + captionBottom + 96);
 
   return (
     <>
@@ -327,7 +335,7 @@ export function ReelSlideChrome({
           position: 'absolute',
           left: 18,
           right: 88,
-          bottom: bottomInset + 24,
+          bottom: captionBottom,
           gap: 8,
         }}
       >
@@ -562,7 +570,7 @@ function FollowPill({ following, pending, onPress }: { following: boolean; pendi
       accessibilityLabel={following ? 'Following' : 'Follow'}
       accessibilityState={{ selected: following, busy: pending }}
       disabled={pending}
-      hitSlop={6}
+      hitSlop={REEL_FOLLOW_PILL_HIT_SLOP}
       onPress={onPress}
       style={({ pressed }) => ({
         minHeight: 30,

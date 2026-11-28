@@ -191,6 +191,7 @@ vi.mock('@/components/media-zoom', () => ({
   useMediaZoomLentVideo: () => null,
   useMediaZoomOpened: () => true,
   useMediaZoomPaintReport: () => () => undefined,
+  useMediaZoomReclaims: () => 0,
   useMediaZoomStage: (options: { activeItemId: string | null; activePost: unknown }) => {
     screenState.zoomOptions = options;
     return screenState.zoom;

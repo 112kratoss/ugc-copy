@@ -963,6 +963,19 @@ export interface MediaZoomLentVideo {
 
 const MediaZoomLentVideoContext = createContext<MediaZoomLentVideo | null>(null);
 
+const MediaZoomReclaimedContext = createContext(0);
+
+/**
+ * Counts the times the reel has taken back the player it handed to its tile as
+ * a close began, because the close was let go of (iOS). The tile held it as one
+ * of its own meanwhile, silent and reporting no time, so the reel's playing
+ * slide sets it up again on each count, whether the tile had lent it or the
+ * reel had built it.
+ */
+export function useMediaZoomReclaims() {
+  return useContext(MediaZoomReclaimedContext);
+}
+
 /**
  * The tapped tile's picture, carried into the reel until the slide it belongs
  * to has painted its own; see `MediaZoomCarriedPicture`.
@@ -1522,6 +1535,12 @@ export interface MediaZoomStageValue {
   carried: MediaZoomCarried | null;
   /** The tile's playing video, for the slide that plays it; see `useMediaZoomLentVideo`. */
   lentVideo: MediaZoomLentVideo | null;
+  /**
+   * Counts the times the reel has taken back a player it handed to its tile
+   * for a close that was let go of (iOS), the reel's own player as well as one
+   * the tile lent (`useMediaZoomReclaims`).
+   */
+  reclaimed: number;
   reportPainted: () => void;
   /** Closes the reel: shrinks it back into the current post's tile, then leaves. */
   dismiss: () => void;
@@ -2535,6 +2554,7 @@ export function useMediaZoomStage({
     chromeStyle,
     carried: carriedPicture,
     lentVideo: lentVideoValue,
+    reclaimed,
     reportPainted,
     dismiss,
   };
@@ -2597,9 +2617,11 @@ export function MediaZoomStage({
                 <MediaZoomOpenedContext.Provider value={stage.opened}>
                   <MediaZoomLandedContext.Provider value={stage.landed && stage.drawn}>
                     <MediaZoomLentVideoContext.Provider value={stage.lentVideo}>
-                      <MediaZoomUncoveringContext.Provider value={stage.uncovering}>
-                        {children}
-                      </MediaZoomUncoveringContext.Provider>
+                      <MediaZoomReclaimedContext.Provider value={stage.reclaimed}>
+                        <MediaZoomUncoveringContext.Provider value={stage.uncovering}>
+                          {children}
+                        </MediaZoomUncoveringContext.Provider>
+                      </MediaZoomReclaimedContext.Provider>
                     </MediaZoomLentVideoContext.Provider>
                   </MediaZoomLandedContext.Provider>
                 </MediaZoomOpenedContext.Provider>
