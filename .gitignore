@@ -70,3 +70,9 @@ next-env.d.ts
 
 # Orphan listings name accounts and their files (npm run ops:storage-orphans)
 storage-orphans-*.tsv
+
+# Metro's transform cache is shared by every tree on the machine, so a session
+# driving a device from a worktree points TMPDIR at a folder of its own. Where
+# that folder is the worktree, the cache is thousands of files a `git add -A`
+# would otherwise carry into a commit.
+.metro-tmp/
