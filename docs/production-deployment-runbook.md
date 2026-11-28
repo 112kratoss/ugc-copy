@@ -158,7 +158,12 @@ These settings are intentionally verified against the provider dashboards/adviso
   cannot move `magicbooklet.com`; only `Production release` may promote it.
 - Supabase project `ildfmhozpibwiopeavfg`: enable leaked-password protection in Auth Email/password settings, then re-run security advisors until `auth_leaked_password_protection` is gone. Supabase docs: `https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection`.
 - Supabase project `ildfmhozpibwiopeavfg`: switch Auth database connections from the fixed `10` connection strategy to percentage-based allocation before increasing compute size, then re-run performance advisors until `auth_db_connections_absolute` is gone. Supabase docs: `https://supabase.com/docs/guides/deployment/going-into-prod`.
-- Google Auth Platform (Google Cloud project `magicbooklet`): done on 2026-11-28. The app is published (In production) and its brand is verified and shown: the name `Magicbooklet`, the logo, and `magicbooklet.com` as the only authorized domain. Keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Changing the name, the logo or the domains means verifying the brand again, and Google fails any domain it cannot verify as ours, such as a `supabase.co` host or an old site. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
+- Google Auth Platform (Google Cloud project `magicbooklet`): done on 2026-11-28. The app is published (In production) and its brand is verified and shown. The brand is made of:
+  - the name `Magicbooklet` and the logo;
+  - the home page `https://magicbooklet.com/`, the privacy policy `https://magicbooklet.com/privacy` and the terms `https://magicbooklet.com/terms`. Keep those pages public.
+  - `magicbooklet.com` as the only authorized domain.
+
+  Keep the production Google OAuth client connected in Supabase Dashboard > Auth > Providers > Google. Changing the name, the logo, the home page, the privacy policy link or the domains means verifying the brand again; Google saves the change as draft branding until then. Google fails any domain it cannot verify as ours, such as a `supabase.co` host or an old site. Supabase docs: `https://supabase.com/docs/guides/auth/social-login/auth-google`.
 - Supabase project `ildfmhozpibwiopeavfg`: the custom domain `auth.magicbooklet.com` is active since 2026-11-28. Its DNS records, the return URLs registered at Google and Apple, the repository variable `SUPABASE_AUTH_CALLBACK_URL`, the checks and the rollback are under "Custom auth domain" below. Supabase docs: `https://supabase.com/docs/guides/platform/custom-domains`.
 - Apple Services ID, the Supabase Apple provider, and the repository secrets `APPLE_SIGN_IN_PRIVATE_KEY` and `SUPABASE_AUTH_CONFIG_TOKEN` that the monthly client-secret renewal reads: under "Sign in with Apple on the web" below.
 - Before this repository goes private on GitHub Free: environment secrets stop being readable there. The `production` environment's secrets (`SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `VERCEL_TOKEN`, `OPS_READ_SECRET`) and `mobile-production`'s `EXPO_TOKEN` need repository copies under the same names, with `vars.TESTFLIGHT_INTERNAL_GROUP` checked too, and environment protection rules stop applying. Do this before the switch.
@@ -362,11 +367,15 @@ What it is made of:
       and the local stack's two `:54321` URIs.
     - JavaScript origins: `http://localhost:3000`.
 
-    The project's own callback was taken off on 2026-11-28 so Google could verify
-    the brand, which needs every domain to be ours. The same edit removed the
-    `supabase.co` and `ugccopy.com` authorized domains and the
-    `https://ugccopy.com` origin, which no sign-in used. A rollback starts by
-    putting the callback back.
+    The project's own callback came off this client on 2026-11-28 so Google could
+    verify the brand, which needs every domain to be ours. The client also lost
+    the `https://ugccopy.com` origin, which no sign-in used, and Branding →
+    Authorized domains lost `ildfmhozpibwiopeavfg.supabase.co` and `ugccopy.com`.
+    A rollback starts by putting the callback back. Google's policy says a
+    production client should hold no URIs only its developers use. The local
+    `:54321` callbacks and the `localhost:3000` origin passed the 2026-11-28
+    check, but if a later verification flags them, move them to a client of
+    their own.
   - Apple Services ID `com.magicbooklet.mobile.web`:
     - Domains: `auth.magicbooklet.com`, `ildfmhozpibwiopeavfg.supabase.co` and
       `magicbooklet.com`
@@ -447,14 +456,22 @@ callback before the domain goes. Apple still does. Google stopped on 2026-11-28,
 for the brand verification:
 
 1. Add `https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback` back to the
-   Google client's Authorized redirect URIs. Google adds
-   `ildfmhozpibwiopeavfg.supabase.co` to the authorized domains with it, and
-   it cannot verify that domain as ours. So the Magicbooklet brand cannot stay
-   verified while the project runs on that callback: expect the sign-in page to
-   name a domain again.
+   Google client's Authorized redirect URIs, and check that it saved.
+   - The client page says it adds a URI's domain to the authorized domains
+     itself. Google's help says to add the domain first. If the save is
+     refused, add `ildfmhozpibwiopeavfg.supabase.co` under Branding →
+     Authorized domains, then add the callback.
+   - Google cannot verify that domain as ours. Its docs say a domain change on
+     a published brand is kept as draft branding, so the published brand may
+     stay, but this was never tried. Look at the sign-in page after step 4.
 2. `SUPABASE_AUTH_CALLBACK_URL=https://ildfmhozpibwiopeavfg.supabase.co/auth/v1/callback npm run ops:external-gates -- --probe-auth-callback-registrations`:
-   both providers must take the project's own callback. Google can take minutes
-   to hours to apply a change, so repeat it until it passes.
+   both providers must take the project's own callback.
+   - Google applies a change over five minutes to a few hours, and one pass
+     from one machine doesn't show every Google server has it. Once it passes,
+     wait a few hours and run it again before step 3.
+   - If it hasn't passed after a few hours, re-check step 1 and stop.
+   - If the custom host is already down, skip the wait: Google sign-in fails
+     either way, and Apple recovers at once.
 3. At a quiet hour, `supabase domains delete --project-ref ildfmhozpibwiopeavfg`.
    Auth should then give Google and Apple the project's own callback again, as
    before activation. Supabase's docs don't say so outright, so step 4 checks
