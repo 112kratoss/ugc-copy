@@ -253,6 +253,21 @@ describe('showcase feed ranking', () => {
       expect(ranked).toEqual(['post-03', 'post-02', 'post-01', 'post-00']);
     });
 
+    it('orders repeats by score, searching the whole tier, when asked to continue another ranking', () => {
+      const ranked = rankAndDiversifyShowcaseItems({
+        items: posts,
+        featureRows: posts.map((post, index) => features(post.id, {
+          interestMatch: 1 - index * 0.05,
+          seenRecently: true,
+          // The best-scored was seen last.
+          lastSeenAt: `2026-11-${String(27 - index).padStart(2, '0')}T00:00:00.000Z`,
+        })),
+        repeatOrder: 'score',
+      }).map((entry) => entry.item.id);
+
+      expect(ranked).toEqual(posts.map((post) => post.id));
+    });
+
     it('still places every unseen post above every repeat', () => {
       const ranked = rankAndDiversifyShowcaseItems({
         items: posts.slice(0, 3),

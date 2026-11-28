@@ -1075,15 +1075,27 @@ describe('for-you-rules v3 wiring', () => {
     rows?: TableRows;
     session?: Record<string, unknown> | null;
   } = {}) {
-    const reads: Array<{ table: string; filters: Array<[string, string, unknown]> }> = [];
+    const reads: Array<{
+      table: string;
+      filters: Array<[string, string, unknown]>;
+      /** `.is`, `.order` and `.limit` as sent: the fake applies only the limit. */
+      calls: Array<[string, ...unknown[]]>;
+    }> = [];
     const persisted: PersistedSession[] = [];
     const from = vi.fn((table: string) => {
       const filters: Array<[string, string, unknown]> = [];
       let rowLimit = Number.POSITIVE_INFINITY;
-      reads.push({ table, filters });
+      const calls: Array<[string, ...unknown[]]> = [];
+      reads.push({ table, filters, calls });
       const query: Record<string, unknown> = {};
-      for (const method of ['select', 'or', 'order', 'contains', 'gt', 'is', 'update']) {
+      for (const method of ['select', 'or', 'contains', 'gt', 'update']) {
         query[method] = vi.fn(() => query);
+      }
+      for (const method of ['is', 'order']) {
+        query[method] = vi.fn((...args: unknown[]) => {
+          calls.push([method, ...args]);
+          return query;
+        });
       }
       for (const operator of ['eq', 'neq', 'in', 'gte']) {
         query[operator] = vi.fn((field: string, value: unknown) => {
@@ -1093,6 +1105,7 @@ describe('for-you-rules v3 wiring', () => {
       }
       query.limit = vi.fn((value: number) => {
         rowLimit = value;
+        calls.push(['limit', value]);
         return query;
       });
       query.maybeSingle = vi.fn(async () => ({
@@ -1603,6 +1616,49 @@ describe('for-you-rules v3 wiring', () => {
       const read = reads.find((entry) => entry.table === 'feed_events');
       expect(read?.filters).toContainEqual(['eq', 'anonymous_key_hash', 'guest-hash']);
       expect(read?.filters).toContainEqual(['in', 'post_id', ['top-up-seen', 'top-up-new']]);
+      expect(read?.filters.some(([, field]) => field === 'viewer_user_id')).toBe(false);
+      // The guest's own rows only, newest first under the row cap: the fake
+      // applies neither, so they are held here as sent.
+      expect(read?.calls).toEqual([
+        ['is', 'viewer_user_id', null],
+        ['order', 'occurred_at', { ascending: false }],
+        ['limit', 1000],
+      ]);
+    });
+
+    it('reads a signed-in viewer\'s impressions newest first, under the row cap', async () => {
+      const { client, reads } = v3Client({ candidates: [v3Candidate('ranked')] });
+
+      await forYouPage(client, { fallback: [item('top-up')] });
+
+      const read = reads.find((entry) => entry.table === 'feed_events');
+      expect(read?.filters).toContainEqual(['eq', 'viewer_user_id', 'viewer-1']);
+      expect(read?.filters).toContainEqual(['eq', 'event_type', 'impression']);
+      expect(read?.filters.some(([, field]) => field === 'anonymous_key_hash')).toBe(false);
+      expect(read?.calls).toEqual([['order', 'occurred_at', { ascending: false }], ['limit', 1000]]);
+    });
+
+    it('asks again for the posts a full read found no row of', async () => {
+      // A thousand impressions of one post fill the first read before the
+      // other post's single row is reached.
+      const { client, persisted, reads } = v3Client({
+        candidates: [v3Candidate('ranked-unseen')],
+        rows: {
+          feed_events: [
+            ...Array.from({ length: 1000 }, () => impression('top-up-busy', hoursAgo(1))),
+            impression('top-up-quiet', hoursAgo(200)),
+          ],
+        },
+      });
+
+      await forYouPage(client, { fallback: [item('top-up-busy'), item('top-up-quiet'), item('top-up-new')] });
+
+      const seenReads = reads.filter((entry) => entry.table === 'feed_events');
+      expect(seenReads.map((entry) => entry.filters.find(([operator]) => operator === 'in')?.[2])).toEqual([
+        ['top-up-busy', 'top-up-quiet', 'top-up-new'],
+        ['top-up-quiet', 'top-up-new'],
+      ]);
+      expect(persisted[0].p_items.map((entry) => entry.post_id).slice(-2)).toEqual(['top-up-quiet', 'top-up-busy']);
     });
 
     it('makes no read when there is no top-up post, no identity, or no lookback', async () => {
@@ -1620,6 +1676,28 @@ describe('for-you-rules v3 wiring', () => {
       });
       await forYouPage(noLookback.client, { fallback: [item('top-up')] });
       expect(noLookback.reads.some((entry) => entry.table === 'feed_events')).toBe(false);
+
+      // The first RPC reports no seen state for its own posts: a top-up post
+      // would be the feed's one repeat.
+      const firstRpcConfig: Record<string, unknown> = { ...FOR_YOU_RULES_V3_RETRIEVAL_CONFIG };
+      delete firstRpcConfig.candidate_rpc;
+      const firstRpc = v3Client({ candidates: [v3Candidate('ranked')], retrievalConfig: firstRpcConfig });
+      await forYouPage(firstRpc.client, { fallback: [item('top-up')] });
+      expect(firstRpc.rpc).toHaveBeenCalledWith('get_ranked_feed_candidates', expect.anything());
+      expect(firstRpc.reads.some((entry) => entry.table === 'feed_events')).toBe(false);
+    });
+
+    it('stores when each repeat was last seen, which is what ordered it', async () => {
+      const seenAt = hoursAgo(30);
+      const { client, persisted } = v3Client({
+        candidates: [v3Candidate('ranked-seen', { seen_recently: true, last_seen_at: seenAt }), v3Candidate('ranked-unseen')],
+      });
+
+      await forYouPage(client);
+
+      const byPost = new Map(persisted[0].p_items.map((entry) => [entry.post_id, entry.score_components]));
+      expect(byPost.get('ranked-seen')).toMatchObject({ seen_recently: true, last_seen_at: seenAt });
+      expect(byPost.get('ranked-unseen')).toMatchObject({ seen_recently: false, last_seen_at: null });
     });
 
     it('ranks the top-up as unseen, as before, when the impressions cannot be read', async () => {
@@ -1632,6 +1710,55 @@ describe('for-you-rules v3 wiring', () => {
       await forYouPage(client, { fallback: [item('top-up-seen')] });
 
       expect(persisted[0].p_items.map((entry) => entry.post_id)).toEqual(['top-up-seen', 'ranked-seen']);
+    });
+  });
+
+  describe('the order of repeats, by the page that asks', () => {
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+    // Three repeats: the strongest was seen last, the weakest longest ago.
+    const repeats = [
+      v3Candidate('strong-just-seen', { interest_match: 0.9, seen_recently: true, last_seen_at: hoursAgo(1) }),
+      v3Candidate('middle', { interest_match: 0.5, seen_recently: true, last_seen_at: hoursAgo(20) }),
+      v3Candidate('weak-seen-long-ago', { interest_match: 0.1, seen_recently: true, last_seen_at: hoursAgo(90) }),
+    ];
+
+    it('leads a first page with the repeat seen longest ago', async () => {
+      const { client, persisted } = v3Client({ candidates: repeats });
+
+      await forYouPage(client);
+
+      expect(persisted[0].p_items.map((entry) => entry.post_id))
+        .toEqual(['weak-seen-long-ago', 'middle', 'strong-just-seen']);
+    });
+
+    // An offset page continues a list cut from another ranking (the signed-out
+    // web's page one is the shared ranking, in score order), so it keeps the
+    // order repeats had before: review of PR 957, finding 1.
+    it('keeps an offset page in score order, as the page before it was cut', async () => {
+      const rankSpy = await spyOnRanking();
+      const { client } = v3Client({ candidates: repeats });
+
+      await forYouPage(client, { anonymousKeyHash: 'a'.repeat(64), offset: 12, viewerUserId: null });
+
+      expect(rankSpy.mock.calls[0][0].repeatOrder).toBe('score');
+      expect(rankSpy.mock.results[0].value.map((entry: RankedShowcaseItem) => entry.item.id))
+        .toEqual(['strong-just-seen', 'middle', 'weak-seen-long-ago']);
+    });
+
+    it('hydrates the repeats seen longest ago when the pool is over the budget', async () => {
+      // 70 repeats for 60 places: the ten seen longest ago score lowest.
+      const pool = Array.from({ length: 70 }, (_, index) => v3Candidate(`repeat-${String(index).padStart(2, '0')}`, {
+        interest_match: 0.9 - index * 0.01,
+        seen_recently: true,
+        last_seen_at: hoursAgo(index < 60 ? 1 + index * 0.01 : 100 + index),
+      }));
+      const { client, persisted } = v3Client({ candidates: pool });
+
+      await forYouPage(client);
+
+      const ranked = persisted[0].p_items.map((entry) => entry.post_id);
+      expect(ranked).toHaveLength(60);
+      expect(ranked.slice(0, 10).sort()).toEqual(pool.slice(60).map((row) => row.post_id).sort());
     });
   });
 

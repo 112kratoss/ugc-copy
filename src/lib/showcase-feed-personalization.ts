@@ -39,6 +39,7 @@ import {
   scoreRankedFeedFeatures,
   type RankedFeedDiversityConfig,
   type RankedFeedFeatureRow,
+  type RankedFeedRepeatOrder,
   type RankedFeedScoreWeights,
   type RankedShowcaseItem,
 } from '@/lib/showcase-feed-ranking';
@@ -222,6 +223,8 @@ function scoreComponents(
     creator_quality: features.creatorQuality,
     exploration_ucb: features.explorationUcb,
     seen_recently: features.seenRecently,
+    // What ordered a repeat among the repeats (`compareSeenTier`).
+    last_seen_at: features.lastSeenAt ?? null,
     semantic_cluster: features.semanticCluster ?? null,
     // v3 RPC columns, under the names normalizeRankedFeedFeatureRow reads, so
     // a continuation page judges visibility at the level the session was
@@ -434,6 +437,8 @@ async function loadCreatorNegativeFeedbackRates({
 
 /** The most impression rows one top-up seen read takes (PostgREST's own cap). */
 const TOP_UP_SEEN_ROW_LIMIT = 1000;
+/** Reads at most, each for the posts the one before found no row of. */
+const TOP_UP_SEEN_MAX_READS = 3;
 
 /**
  * When the viewer last saw each of `postIds`, for the posts a ranking takes
@@ -445,44 +450,61 @@ const TOP_UP_SEEN_ROW_LIMIT = 1000;
  * two near-duplicates led his Explore lane each time, 22 impressions each).
  *
  * The same impressions over the same lookback as the RPC's own `seen` read,
- * through the (viewer, post, occurred_at) impression indexes. Newest first, so
- * the row cap cuts the oldest; each post keeps its latest. Empty when there is
- * nothing to ask, and when the read fails: the posts then rank as unseen, as
- * before.
+ * through the (viewer, post, occurred_at) impression indexes, newest first. A
+ * read that comes back full may have been cut before it reached a post's rows
+ * (every impression of every post asked for counts toward the cap), so the
+ * posts it found nothing of are asked for again, alone. Nothing is asked under
+ * the first RPC, which reports no seen state for its own posts: a top-up post
+ * would be the one repeat in the feed. Empty too when there is nothing to
+ * ask, and when a read fails: the posts then rank as unseen, as before.
  */
 async function loadTopUpLastSeen({
   anonymousKeyHash,
+  candidateRpc,
   lookbackDays,
   postIds,
   serviceClient,
   viewerUserId,
 }: {
   anonymousKeyHash: string | null;
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'];
   lookbackDays: number;
   postIds: string[];
   serviceClient: SupabaseClient;
   viewerUserId: string | null;
 }): Promise<Map<string, string>> {
   const lastSeen = new Map<string, string>();
-  if (postIds.length === 0 || lookbackDays <= 0 || (!viewerUserId && !anonymousKeyHash)) return lastSeen;
+  if (
+    candidateRpc === 'v1'
+    || postIds.length === 0
+    || lookbackDays <= 0
+    || (!viewerUserId && !anonymousKeyHash)
+  ) return lastSeen;
 
   try {
-    const query = serviceClient
-      .from('feed_events')
-      .select('post_id, occurred_at')
-      .eq('event_type', 'impression')
-      .in('post_id', postIds)
-      .gte('occurred_at', new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString());
-    const { data, error } = await (viewerUserId
-      ? query.eq('viewer_user_id', viewerUserId)
-      : query.is('viewer_user_id', null).eq('anonymous_key_hash', anonymousKeyHash as string))
-      .order('occurred_at', { ascending: false })
-      .limit(TOP_UP_SEEN_ROW_LIMIT);
-    if (error) throw error;
-    for (const row of (data ?? []) as Array<{ post_id: unknown; occurred_at: unknown }>) {
-      if (typeof row.post_id !== 'string' || typeof row.occurred_at !== 'string') continue;
-      const known = lastSeen.get(row.post_id);
-      if (!known || Date.parse(row.occurred_at) > Date.parse(known)) lastSeen.set(row.post_id, row.occurred_at);
+    const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
+    let unanswered = postIds;
+    for (let read = 0; read < TOP_UP_SEEN_MAX_READS && unanswered.length > 0; read += 1) {
+      const query = serviceClient
+        .from('feed_events')
+        .select('post_id, occurred_at')
+        .eq('event_type', 'impression')
+        .in('post_id', unanswered)
+        .gte('occurred_at', since);
+      const { data, error } = await (viewerUserId
+        ? query.eq('viewer_user_id', viewerUserId)
+        : query.is('viewer_user_id', null).eq('anonymous_key_hash', anonymousKeyHash as string))
+        .order('occurred_at', { ascending: false })
+        .limit(TOP_UP_SEEN_ROW_LIMIT);
+      if (error) throw error;
+      const rows = (data ?? []) as Array<{ post_id: unknown; occurred_at: unknown }>;
+      for (const row of rows) {
+        if (typeof row.post_id !== 'string' || typeof row.occurred_at !== 'string') continue;
+        const known = lastSeen.get(row.post_id);
+        if (!known || Date.parse(row.occurred_at) > Date.parse(known)) lastSeen.set(row.post_id, row.occurred_at);
+      }
+      if (rows.length < TOP_UP_SEEN_ROW_LIMIT) break;
+      unanswered = unanswered.filter((postId) => !lastSeen.has(postId));
     }
     return lastSeen;
   } catch (error) {
@@ -1483,9 +1505,10 @@ async function rankFreshCandidates({
   // last resort they are meant to be.
   // The ranker's own order inside the tier (`compareSeenTier`), so the repeats
   // that reach it past the budget are the ones it would lead with.
+  const repeatOrder: RankedFeedRepeatOrder = offset > 0 ? 'score' : 'least-recent';
   const sortedFeatureRows = featureRows
     ? [...featureRows].sort((left, right) => (
-      compareSeenTier(left, right)
+      compareSeenTier(left, right, repeatOrder)
       || scoreRankedFeedFeatures(right, algorithm.scoreWeights)
       - scoreRankedFeedFeatures(left, algorithm.scoreWeights)
     ))
@@ -1545,6 +1568,7 @@ async function rankFreshCandidates({
     }),
     loadTopUpLastSeen({
       anonymousKeyHash: viewerUserId ? null : anonymousKeyHash,
+      candidateRpc: algorithm.retrieval.candidateRpc,
       lookbackDays: algorithm.retrieval.seenLookbackDays,
       postIds: mergedCandidateItems.filter((item) => !featureRowsByPostId.has(item.id)).map((item) => item.id),
       serviceClient,
@@ -1594,6 +1618,7 @@ async function rankFreshCandidates({
     diversityConfig: algorithm.diversityConfig,
     seenPenalty: algorithm.retrieval.seenPenalty,
     seed: randomSeed,
+    repeatOrder,
   }).slice(0, algorithm.eligibleItemLimit);
   onPhaseTiming?.('ranking', performance.now() - rankingStartedAt);
   return { ranked, randomSeed, seedBucket: seed.seedBucket };

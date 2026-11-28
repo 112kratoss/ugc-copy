@@ -690,12 +690,26 @@ function lastSeenMs(features: Pick<RankedFeedFeatureRow, 'lastSeenAt'>) {
 export function compareSeenTier(
   left: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt'>,
   right: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt'>,
+  repeatOrder: RankedFeedRepeatOrder = 'least-recent',
 ) {
   return (
     Number(left.seenRecently) - Number(right.seenRecently)
-    || (left.seenRecently ? lastSeenMs(left) - lastSeenMs(right) : 0)
+    || (repeatOrder === 'least-recent' && left.seenRecently ? lastSeenMs(left) - lastSeenMs(right) : 0)
   );
 }
+
+/**
+ * How a ranking orders its repeats. `least-recent` is the rule above, for a
+ * ranking that stands on its own: a first page, and with it the session a
+ * cursor pages through. `score` is the order repeats had before it, kept for a
+ * ranking that continues a list cut from another one: an offset page, ranked
+ * again for each request. The signed-out web's page one is the shared ranking,
+ * which knows no reader, and its next page is ranked for the guest; ordered by
+ * last seen, that page would be cut from a different list (a short page, the
+ * posts seen longest ago never reached), and impressions made on one page
+ * would move the list under the next. By score, as before, it lines up.
+ */
+export type RankedFeedRepeatOrder = 'least-recent' | 'score';
 
 /**
  * How far down the repeats the fatigue rules may look for a post that suits a
@@ -705,14 +719,22 @@ export function compareSeenTier(
  * ranking, minutes after the reader saw them (the owner's lane: one creator
  * held 36 of 49 posts, and a post alone in its cluster stood on the first
  * screen of every simulated refresh). Unseen posts are searched in full, as
- * before.
+ * before. Every rule the pass applies is bounded alike, the paid share and the
+ * exploration quota with the creator and cluster caps: with nothing but paid
+ * repeats in reach, one is placed past the share.
  */
 const REPEAT_FATIGUE_REACH = 12;
 
-function compareRankedCandidates(left: RankedShowcaseItem, right: RankedShowcaseItem) {
+function compareRankedCandidates(
+  left: RankedShowcaseItem,
+  right: RankedShowcaseItem,
+  repeatOrder: RankedFeedRepeatOrder,
+) {
   return (
-    compareSeenTier(left.features, right.features)
+    compareSeenTier(left.features, right.features, repeatOrder)
     || right.score - left.score
+    // By score, the repeat seen longest ago still wins a tie.
+    || (left.features.lastSeenAt ?? '').localeCompare(right.features.lastSeenAt ?? '')
     || right.item.createdAt.localeCompare(left.item.createdAt)
     || right.item.id.localeCompare(left.item.id)
   );
@@ -723,7 +745,11 @@ function compareRankedCandidates(left: RankedShowcaseItem, right: RankedShowcase
  * k is counted once, in that pre-decay order, and the list is re-sorted only
  * after every multiplier is in — as `vm-ranker` does over its candidate pool.
  */
-function applyAuthorDecay(ordered: RankedShowcaseItem[], diversityConfig: RankedFeedDiversityConfig) {
+function applyAuthorDecay(
+  ordered: RankedShowcaseItem[],
+  diversityConfig: RankedFeedDiversityConfig,
+  repeatOrder: RankedFeedRepeatOrder,
+) {
   const postsAboveByCreator = new Map<string, number>();
   let decayed = false;
   for (const entry of ordered) {
@@ -737,7 +763,7 @@ function applyAuthorDecay(ordered: RankedShowcaseItem[], diversityConfig: Ranked
       decayed = true;
     }
   }
-  if (decayed) ordered.sort(compareRankedCandidates);
+  if (decayed) ordered.sort((left, right) => compareRankedCandidates(left, right, repeatOrder));
 }
 
 function isColdStartEligible(features: RankedFeedFeatureRow, diversityConfig: RankedFeedDiversityConfig) {
@@ -831,6 +857,7 @@ export function rankAndDiversifyShowcaseItems({
   diversityConfig = DEFAULT_RANKED_FEED_DIVERSITY_CONFIG,
   seenPenalty = DEFAULT_SEEN_REPEAT_PENALTY,
   seed = 0,
+  repeatOrder = 'least-recent',
 }: {
   featureRows: RankedFeedFeatureRow[];
   items: ShowcaseFeedItem[];
@@ -840,6 +867,8 @@ export function rankAndDiversifyShowcaseItems({
   seenPenalty?: number;
   /** The session's `random_seed`: the cold-start draws replay exactly from it. */
   seed?: number;
+  /** `score` for a ranking that continues another's list (`RankedFeedRepeatOrder`). */
+  repeatOrder?: RankedFeedRepeatOrder;
 }): RankedShowcaseItem[] {
   // A config built before v3 lacks the new keys; they read as off.
   const config: RankedFeedDiversityConfig = { ...DEFAULT_RANKED_FEED_DIVERSITY_CONFIG, ...diversityConfig };
@@ -873,8 +902,8 @@ export function rankAndDiversifyShowcaseItems({
         },
       };
     })
-    .sort(compareRankedCandidates);
-  applyAuthorDecay(remaining, config);
+    .sort((left, right) => compareRankedCandidates(left, right, repeatOrder));
+  applyAuthorDecay(remaining, config, repeatOrder);
   const coldStartPick = drawColdStartPick(remaining, config, seed);
   const coldStartSlotIndex = config.coldStartSlotRank - 1;
   let coldStartPending = coldStartPick !== null;
@@ -887,8 +916,9 @@ export function rankAndDiversifyShowcaseItems({
       !unseenRemains || !candidate.features.seenRecently
     );
     // Once only repeats are left, the fatigue rules choose among the few seen
-    // longest ago (`REPEAT_FATIGUE_REACH`), not the whole tier.
-    const reach = unseenRemains ? remaining.length : REPEAT_FATIGUE_REACH;
+    // longest ago (`REPEAT_FATIGUE_REACH`), not the whole tier. By score there
+    // is no such few, and the search is the whole tier, as it always was.
+    const reach = unseenRemains || repeatOrder === 'score' ? remaining.length : REPEAT_FATIGUE_REACH;
     const findCandidate = (predicate: (candidate: RankedShowcaseItem) => boolean) => (
       remaining.findIndex((candidate, index) => index < reach && withinSeenTier(candidate) && predicate(candidate))
     );
