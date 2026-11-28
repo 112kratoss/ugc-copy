@@ -834,6 +834,28 @@ export function closesPictureAlone({
   return Boolean(picture) && !videoUrl && !reducedMotion && fromTile;
 }
 
+/**
+ * The post whose tile Back closes the reel into: the one the reel was opened
+ * from, however many posts the reader has moved through since, as Instagram's
+ * close goes back into the tile that was tapped (filmed on the owner's iPhone,
+ * 2026-09-17; owner, 2026-11-28: "imagine we swipe to 10 media and then press
+ * back it goes back to the initial media"). The grid has not moved under the
+ * reel, so that tile is where the reader left it. The post on screen when that
+ * tile has gone (a hide or a block made from the reel took its post away), and
+ * the post on screen for a reel that did not come out of a tile.
+ *
+ * Until 2026-11-28 the close went into the tile of the post on screen: a
+ * neighbour on screen took it, and one further down the grid had the reel fly
+ * off the bottom of the screen (iOS) or fade out (Android).
+ */
+export function zoomCloseItemId(
+  originItemId: string | null | undefined,
+  activeItemId: string | null,
+  originTileThere: boolean
+): string | null {
+  return originItemId && originTileThere ? originItemId : activeItemId;
+}
+
 export interface ZoomFrame {
   /** The window onto the reel, in window coordinates. */
   clip: ZoomRect;

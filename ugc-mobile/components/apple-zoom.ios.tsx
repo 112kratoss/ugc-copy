@@ -180,10 +180,12 @@ export const APPLE_ZOOM_LANDED_AFTER_MS = 450;
 const POP_ACTIONS = new Set(['GO_BACK', 'POP', 'POP_TO', 'POP_TO_TOP']);
 
 /**
- * Points the zoom at the tile of the post the reader is on, so a close shrinks
- * into that tile rather than the one they tapped. The tile has to be on the
- * same surface and still mounted; UIKit shrinks the reel to the middle of the
- * screen when no view answers the identifier.
+ * Points the zoom at the tile of the post `activeItemId` names: the reel passes
+ * the one the reader tapped, whatever post they are on (`zoomCloseItemId` in
+ * lib/media-zoom-transition.ts), so a close shrinks back into it as
+ * Instagram's does. The tile has to be on the same surface and still mounted;
+ * UIKit shrinks the reel to the middle of the screen when no view answers the
+ * identifier.
  */
 export function useAppleZoomRetarget(
   activeItemId: string | null,

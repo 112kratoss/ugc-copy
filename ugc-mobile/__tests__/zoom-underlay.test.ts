@@ -101,7 +101,9 @@ describe('the screen under an open reel', () => {
   // can never sit under is added to the list below, with the reason.
   it('is not joined by another view that leaves layout', () => {
     const known = [
-      // Help & Support's three panes, each a list: there before the rule, not yet checked for the fault.
+      // Help & Support's three panes, each a FlatList, there before the rule. Checked on the Pixel 9a
+      // emulator 2026-11-28: Updates grown by Show more between two pane switches kept its place, so
+      // the fault, seen with Explore's FlashList, did not show here.
       'app/support.tsx',
     ];
     const found: string[] = [];
