@@ -44,6 +44,7 @@ import {
   refreshPullProgress,
 } from '@/lib/refresh-book';
 import { useAppTheme } from '@/lib/theme-context';
+import { tileOpenTouchHold } from '@/lib/tile-open-touch-hold';
 
 // Screen suites mock react-native down to the primitives each screen draws, as
 // the skeleton's do (`components/skeleton.tsx`): these two are read through a
@@ -177,8 +178,11 @@ export function useBookPull({
       .maxPointers(1)
       .onTouchesDown((event, manager) => {
         'worklet';
-        if (!enabledNow.value) {
-          // Nothing to refresh, or a card's pictures being swiped: the touch is the list's.
+        if (!enabledNow.value || tileOpenTouchHold.value !== null) {
+          // Nothing to refresh, or a card's pictures being swiped: the touch is
+          // the list's. Or a tile is opening a post, and the swipe is meant for
+          // that post: the view over this screen takes native touches, but this
+          // handler is found without it (`lib/tile-open-touch-hold.ts`).
           decided.value = true;
           manager.fail();
           return;

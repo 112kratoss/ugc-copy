@@ -225,6 +225,8 @@ interface TileOpen {
   startedAt: number;
   holdMs: number;
   claimed: boolean;
+  /** The surface the tapped tile is on (`MediaZoomSurface`), when it is on one. */
+  surfaceId: string | null;
   /**
    * Back was pressed after the reel was pushed and before it could answer:
    * the reel closes as soon as it has taken the open over
@@ -245,6 +247,54 @@ export const TILE_OPEN_CLOSE_GRACE_MS = 4000;
 
 let tileOpen: TileOpen | null = null;
 let tileOpenSerial = 0;
+const tileOpenListeners = new Set<() => void>();
+
+function setTileOpen(next: TileOpen | null) {
+  tileOpen = next;
+  tileOpenListeners.forEach((listener) => listener());
+}
+
+/** Told each time an open begins, is taken over by its reel, or ends. */
+export function subscribeToTileOpen(listener: () => void) {
+  tileOpenListeners.add(listener);
+  return () => {
+    tileOpenListeners.delete(listener);
+  };
+}
+
+/**
+ * The longest a reel that took an open over keeps the screen beneath from
+ * touches: it lets go itself once it can be touched (`endTileOpen`), well
+ * inside this. A bound, so that nothing left unended can leave a screen dead.
+ */
+export const TILE_OPEN_TOUCH_HOLD_MAX_MS = 5000;
+
+/**
+ * Until when the screen a tile was tapped on leaves touches alone, or null
+ * when it takes them: from the tap until the screen it opens can be touched.
+ *
+ * The picture flies for about half a second before its reel is pushed, and the
+ * reel is not the touched screen until it is up. A swipe in that time, meant
+ * for the post, went to the grid beneath: it scrolled, went on coasting under
+ * the reel, and Back returned to other posts (the owner's S24, 2026-11-28:
+ * seven opens each swiped about 0.25 s after the reel's screen was made;
+ * on the Pixel 9a emulator the grid moved 2,100 px). The same hold as for a
+ * second tap on a tile (`canOpenFromTile`), for every touch.
+ *
+ * Of the tapped tile's own screen only (`tileOpenSurface`): the screen the
+ * open brings up can itself be a surface (the profile's card feed), and is the
+ * one to be touched.
+ */
+/** The surface whose tile is opening a post, or null: no open under way, or a tile on no surface. */
+export function tileOpenSurface(): string | null {
+  return tileOpen?.surfaceId ?? null;
+}
+
+export function tileOpenHoldsTouchesUntil(now: number): number | null {
+  if (!tileOpen) return null;
+  const until = tileOpen.startedAt + (tileOpen.claimed ? TILE_OPEN_TOUCH_HOLD_MAX_MS : tileOpen.holdMs);
+  return now < until ? until : null;
+}
 
 /** Whether a tap on a tile may open its post: no flight in the air, and no earlier open under way. */
 export function canOpenFromTile(now: number): boolean {
@@ -258,10 +308,10 @@ export function canOpenFromTile(now: number): boolean {
  * way, and the tap is to be ignored. The hold defaults to the hand-off's own
  * lifetime: a reel mounting later than that would not grow out of the tile.
  */
-export function beginTileOpen(now: number, holdMs = ORIGIN_TTL_MS): number | null {
+export function beginTileOpen(now: number, holdMs = ORIGIN_TTL_MS, surfaceId: string | null = null): number | null {
   if (!canOpenFromTile(now)) return null;
   tileOpenSerial += 1;
-  tileOpen = { serial: tileOpenSerial, startedAt: now, holdMs, claimed: false, closeRequested: false };
+  setTileOpen({ serial: tileOpenSerial, startedAt: now, holdMs, claimed: false, closeRequested: false, surfaceId });
   return tileOpenSerial;
 }
 
@@ -293,16 +343,17 @@ export function claimTileOpen(now: number): number | null {
   if (!tileOpen || tileOpen.claimed) return null;
   const holdMs = tileOpen.holdMs + (tileOpen.closeRequested ? TILE_OPEN_CLOSE_GRACE_MS : 0);
   if (now - tileOpen.startedAt >= holdMs) {
-    tileOpen = null;
+    setTileOpen(null);
     return null;
   }
-  tileOpen = { ...tileOpen, claimed: true };
-  return tileOpen.serial;
+  const claimed = { ...tileOpen, claimed: true };
+  setTileOpen(claimed);
+  return claimed.serial;
 }
 
 /** The screen an open brought up can be touched, or has gone: tiles open posts again. */
 export function endTileOpen(serial: number | null) {
-  if (serial !== null && tileOpen?.serial === serial) tileOpen = null;
+  if (serial !== null && tileOpen?.serial === serial) setTileOpen(null);
 }
 
 /**

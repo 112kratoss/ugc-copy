@@ -75,6 +75,7 @@ import {
   type ZoomVideo,
 } from '@/lib/media-zoom-transition';
 import { MediaZoomTileShapedContext } from '@/lib/media-zoom-tile-shape';
+import { tileOpenTouchHold } from '@/lib/tile-open-touch-hold';
 import {
   MediaZoomTileKeyContext,
   MediaZoomVideoOfferContext,
@@ -883,6 +884,11 @@ function fadeOutZoomStill(onDone: () => void) {
 }
 
 const MediaZoomSurfaceContext = createContext<string | null>(null);
+
+/** The id of the surface a component is drawn on (`MediaZoomSurface`), or null off any. */
+export function useMediaZoomSurfaceId() {
+  return useContext(MediaZoomSurfaceContext);
+}
 const MediaZoomChromeContext = createContext<StyleProp<ViewStyle>>(null);
 const MediaZoomPaintContext = createContext<(() => void) | null>(null);
 const MediaZoomOpenedContext = createContext(true);
@@ -1010,7 +1016,46 @@ export function MediaZoomSurface({ children, revealItem }: { children: ReactNode
   const surfaceId = useId();
   useEffect(() => revealItem ? registerAppleZoomSurface(surfaceId, revealItem) : undefined, [revealItem, surfaceId]);
   useEffect(() => () => forgetAppleZoomSurface(surfaceId), [surfaceId]);
-  return <MediaZoomSurfaceContext.Provider value={surfaceId}>{children}</MediaZoomSurfaceContext.Provider>;
+  return (
+    <MediaZoomSurfaceContext.Provider value={surfaceId}>
+      {children}
+      <TileOpenTouchShield surfaceId={surfaceId} />
+    </MediaZoomSurfaceContext.Provider>
+  );
+}
+
+const takeTileOpenTouch = () => true;
+/** Over the whole of the surface's parent. Spelt out: several screens' suites stand in for React Native without its StyleSheet. */
+const TILE_OPEN_TOUCH_SHIELD_STYLE: ViewStyle = { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0 };
+
+/**
+ * Over a screen whose tile is opening a post: takes every touch until the
+ * screen that open brings up can be touched, so a swipe meant for the post
+ * does not scroll the grid beneath.
+ *
+ * Always there, and let through until an open begins. It is switched on the
+ * UI thread by a value set inside the tap's own handler, not by a render, nor
+ * by anything that waits for that handler to end: a view put up by a render
+ * arrived after a quick swipe had begun (about 100 ms after the tap, on the
+ * Pixel 9a emulator), and a scroll that has begun goes on under a view that
+ * arrives over it. It fills the surface's parent, which holds the surface's
+ * tiles, and is on for the tapped tile's own surface only (`lib/tile-open-touch-hold.ts`).
+ */
+function TileOpenTouchShield({ surfaceId }: { surfaceId: string }) {
+  const shieldProps = useAnimatedProps(() => ({
+    pointerEvents: tileOpenTouchHold.value === surfaceId ? ('auto' as const) : ('none' as const),
+  }));
+  return (
+    <Animated.View
+      accessible={false}
+      animatedProps={shieldProps}
+      collapsable={false}
+      importantForAccessibility="no-hide-descendants"
+      onStartShouldSetResponder={takeTileOpenTouch}
+      style={TILE_OPEN_TOUCH_SHIELD_STYLE}
+      testID="tile-open-touch-shield"
+    />
+  );
 }
 
 export interface MediaZoomSource {
@@ -1144,7 +1189,7 @@ export function useMediaZoomSource({
     // opening, or while a close is still landing, opens nothing
     // (`beginTileOpen`). A zoomed open lasts until the reel it pushes can be
     // touched; one without a zoom until its screen has covered this one.
-    const openSerial = beginTileOpen(Date.now());
+    const openSerial = beginTileOpen(Date.now(), undefined, surfaceId);
     if (openSerial === null) return;
     openingPreview = active && preview ? { itemId, preview, post: post ?? null, recordedAt: Date.now() } : null;
     const openPlainly = () => {
