@@ -179,6 +179,14 @@ function OnboardingFlow() {
     }
   }, [returnTo, returnsInPlace]);
   const { api, user, refreshProfile } = useAuth();
+  // The account's id keys the setup's reads. Its latest details (the name Apple's sign-in saves a
+  // moment after the session lands, say) are read from here when a read runs, so a change to them
+  // never sends the screen back to its loading card or resets what was typed (review of #961).
+  const userId = user?.id ?? null;
+  const latestUser = useRef(user);
+  useEffect(() => {
+    latestUser.current = user;
+  }, [user]);
   const { state, update, skip, complete } = useOnboarding();
   const queryClient = useQueryClient();
   const identityDeferredAt = state.identityDeferredAt;
@@ -253,14 +261,15 @@ function OnboardingFlow() {
    */
   const adoptWelcome = useCallback((next: WelcomeCreditResponse) => {
     setWelcome(next);
-    if (user) primeWelcomeCredits(queryClient, user.id, next);
-  }, [queryClient, user]);
+    if (userId) primeWelcomeCredits(queryClient, userId, next);
+  }, [queryClient, userId]);
 
   const loadAuthenticatedStage = useCallback(async () => {
-    if (!user) return;
+    const account = latestUser.current;
+    if (!account) return;
     // Answers the sign-in page handed over were applied as the screen was built:
     // no loading card and no second read, once.
-    const handedAnswers = handedRef.current?.answers.profile.id === user.id ? handedRef.current.answers : null;
+    const handedAnswers = handedRef.current?.answers.profile.id === account.id ? handedRef.current.answers : null;
     handedRef.current = null;
     clearCreatorSetupAnswers();
     if (!handedAnswers) {
@@ -280,7 +289,7 @@ function OnboardingFlow() {
         nextWelcome = fetchedWelcome;
         setProfile(nextProfile);
         adoptWelcome(nextWelcome);
-        const start = identityStart(nextProfile, user);
+        const start = identityStart(nextProfile, account);
         setDisplayName(start.displayName);
         setSuggestion(start.suggestion);
         setUsername(start.username);
@@ -290,10 +299,10 @@ function OnboardingFlow() {
       // mid-celebration, with the credits counter still animating.
       const destination = resolveOnboardingDestination({
         hasUser: true,
-        userId: user.id,
+        userId: account.id,
         welcome: nextWelcome,
         local: { identityDeferredAt, identityDeferredFor, status: state.status },
-        identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
+        identityDeferredOnAccount: isIdentityDeferredInMetadata(account.user_metadata),
       });
       if (destination === 'none' || destination === 'reward') {
         // Nothing for this screen to do: a deep link, a stale entry, an account
@@ -318,15 +327,15 @@ function OnboardingFlow() {
   // always refreshes the state's `updatedAt`; depending on the whole state
   // object made that write recreate this callback, retrigger the effect below,
   // and hold signed-in creators in an endless profile/welcome-credits fetch loop.
-  }, [adoptWelcome, api, goal, identityDeferredAt, identityDeferredFor, leaveForReturn, update, user]);
+  }, [adoptWelcome, api, goal, identityDeferredAt, identityDeferredFor, leaveForReturn, update, userId]);
 
   useEffect(() => {
     // Being signed in is the whole condition. This used to also require
     // `state.lastStep >= 4` — an install-local cursor — so the same account
     // entered the authenticated stages on one device and the guest welcome
     // screen on another.
-    if (user) void loadAuthenticatedStage();
-  }, [loadAuthenticatedStage, user]);
+    if (userId) void loadAuthenticatedStage();
+  }, [loadAuthenticatedStage, userId]);
 
   useEffect(() => {
     // `auth_succeeded` used to key off a `resume=identity` param. Delivery of

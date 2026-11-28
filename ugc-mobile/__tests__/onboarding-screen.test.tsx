@@ -279,6 +279,47 @@ describe('authenticated onboarding entry', () => {
     act(() => tree?.unmount());
   });
 
+  // Review of #961: Apple saves a new account's name a moment after the session lands; that update
+  // gave the account a new object, which reloaded this screen onto its loading card and reset the
+  // fields, whatever had been typed.
+  it('keeps the name step and what was typed when the account’s details change', async () => {
+    const never = new Promise<never>(() => undefined);
+    harness.api.getProfile.mockReturnValue(never);
+    harness.api.getWelcomeCredits.mockReturnValue(never);
+    handOffCreatorSetupAnswers({ profile: { ...profile, id: 'creator-1' } as never, welcome: welcome as never });
+    const queryClient = new QueryClient();
+    const originalUser = harness.user;
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    try {
+      act(() => {
+        tree = renderScreen(queryClient);
+      });
+      await act(async () => {
+        await settle();
+      });
+      act(() => {
+        tree!.root.findAll((node) => String(node.type) === 'app-text-input')[0].props.onChangeText('Sarath K');
+      });
+      // The account's name arrives: same account, a new object.
+      harness.user = { ...originalUser, user_metadata: { full_name: 'Sarath Kumar' } };
+      await act(async () => {
+        tree!.update(
+          <QueryClientProvider client={queryClient}>
+            <OnboardingScreen />
+          </QueryClientProvider>,
+        );
+        await settle();
+      });
+      expect(JSON.stringify(tree?.toJSON())).not.toContain('Preparing your creator setup');
+      expect(tree!.root.findAll((node) => String(node.type) === 'app-text-input')[0].props.value).toBe('Sarath K');
+      expect(harness.api.getProfile).not.toHaveBeenCalled();
+    } finally {
+      harness.user = originalUser;
+      act(() => tree?.unmount());
+    }
+  });
+
   it('reads the answers itself, and leaves, when its own resolver finds no name to choose', async () => {
     const named = { ...welcome, status: 'claimed', identityComplete: true };
     harness.api.getProfile.mockResolvedValue({ ...profile, username: 'sarath' });

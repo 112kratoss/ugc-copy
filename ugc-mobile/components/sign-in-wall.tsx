@@ -43,6 +43,13 @@ import { markWelcomeReturn } from '@/lib/welcome-popup';
 import { useWelcomePromise } from '@/lib/welcome-promise';
 
 const SIDE = 20;
+/**
+ * How long the page waits, once the session has landed, for the rest of a sign-in that is still
+ * running (a new Apple account's name saved, a guest's credits moved, the profile read) before it
+ * moves on anyway: long enough for those on a fair connection, so the screen after it opens on
+ * settled details, short enough that a slow one never holds the page (review of #961).
+ */
+export const SIGN_IN_LANDED_WAIT_MS = 4_000;
 /** The page turning between its two halves: quick enough to feel like one page. */
 const TURN_MS = 360;
 
@@ -258,11 +265,20 @@ function SignInWallBody({
     return moving.current;
   }, [api, continueAfterSignIn, emailInPlace, emailReturnTo, emailSetupReturn, step, target]);
 
-  // As soon as the session lands, as the page always moved on: the rest of a sign-in (a guest's
-  // credits moved to the account, the profile read) goes on behind it. At once for an account that
+  // Once the session lands: when the sign-in that landed it ends (`runSignIn`), or
+  // SIGN_IN_LANDED_WAIT_MS later, whichever comes first, so its last steps finish before the next
+  // screen reads the account and none of them can hold the page. At once for an account that
   // opened the page signed in.
   useEffect(() => {
-    if (user && isFocused) void finish();
+    if (!user || !isFocused) return;
+    if (!inFlightRef.current) {
+      void finish();
+      return;
+    }
+    const wait = setTimeout(() => {
+      void finish();
+    }, SIGN_IN_LANDED_WAIT_MS);
+    return () => clearTimeout(wait);
   }, [finish, isFocused, user]);
 
   /**
@@ -282,9 +298,9 @@ function SignInWallBody({
       await finish();
       return true;
     } catch (error) {
-      // Its session landed before it failed, so the page is already moving on: the spinner
-      // holds until it has.
-      if (moving.current) await moving.current.catch(() => undefined);
+      // Its session landed before it failed: the page moves on now, as it always did, and the
+      // spinner holds until it has.
+      if (moving.current || userRef.current) await finish().catch(() => undefined);
       throw error;
     } finally {
       inFlightRef.current = null;

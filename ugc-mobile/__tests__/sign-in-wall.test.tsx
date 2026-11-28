@@ -239,6 +239,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 import AuthRoute from '../app/auth';
 import JoinScreen from '../app/join';
 import { EmailSignInForm } from '../components/email-sign-in-form';
+import { SIGN_IN_LANDED_WAIT_MS } from '../components/sign-in-wall';
 import { MEDIA_WALL_TILES, mediaWallColumn, mediaWallGeometry } from '../components/media-wall';
 import { signInOpensOnEmailForm } from '../lib/join-navigation';
 import { clearCreatorSetupAnswers, peekCreatorSetupAnswers } from '../lib/creator-setup-answers';
@@ -767,52 +768,96 @@ describe('the creator setup, asked before the page moves on (owner video, 2026-1
   });
 
   // Review of #961: waiting for the whole sign-in (a guest's credits moved, the profile read, each
-  // with its own 30 s timeout) could hold the page, with no way out, for most of a minute.
-  it('moves on as soon as the session lands, without waiting for the rest of the sign-in', async () => {
-    const router = await routerMock();
-    answering(Promise.resolve(welcome()));
-    let finishSignIn!: () => void;
-    authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
-      finishSignIn = resolve;
-    }));
-    const tree = render(<AuthRoute />);
-    await pressGoogle(tree);
-    expect(router.dismissTo).not.toHaveBeenCalled();
-    // The session is in; the guest's credits are still being moved to the account.
-    authState.user = { id: 'user-1' };
-    await renderer.act(async () => {
-      tree.update(<AuthRoute />);
+  // with its own 30 s timeout) could hold the page, with no way out, for most of a minute; moving
+  // on the moment the session landed raced a new Apple account's name save. Now: once the session
+  // lands, the page waits for the sign-in to end, SIGN_IN_LANDED_WAIT_MS at most.
+  describe('once the session has landed', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
     });
-    expect(router.dismissTo).toHaveBeenCalledTimes(1);
-    expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
-    await renderer.act(async () => finishSignIn());
-    expect(router.dismissTo).toHaveBeenCalledTimes(1);
-    expect(router.replace).not.toHaveBeenCalled();
-  });
 
-  it('moves on once when the sign-in fails after its session landed, holding the spinner until then', async () => {
-    const router = await routerMock();
-    let answer!: (value: unknown) => void;
-    answering(new Promise((resolve) => {
-      answer = resolve;
-    }));
-    let failSignIn!: (error: Error) => void;
-    authState.signInWithGoogle.mockReturnValue(new Promise<void>((_resolve, reject) => {
-      failSignIn = reject;
-    }));
-    const tree = render(<AuthRoute />);
-    await pressGoogle(tree);
-    authState.user = { id: 'user-1' };
-    await renderer.act(async () => {
-      tree.update(<AuthRoute />);
+    afterEach(() => {
+      vi.useRealTimers();
     });
-    // Moving a guest's credits failed after the session landed; the answers are still on their way.
-    await renderer.act(async () => failSignIn(new Error('merge failed')));
-    expect(googleBusy(tree)).toBe(true);
-    expect(router.dismissTo).not.toHaveBeenCalled();
-    await renderer.act(async () => answer(welcome()));
-    expect(router.dismissTo).toHaveBeenCalledTimes(1);
-    expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+
+    const land = async (tree: renderer.ReactTestRenderer) => {
+      authState.user = { id: 'user-1' };
+      await renderer.act(async () => {
+        tree.update(<AuthRoute />);
+      });
+    };
+
+    it('waits for the rest of the sign-in, at most the landed wait, then moves on once', async () => {
+      const router = await routerMock();
+      answering(Promise.resolve(welcome()));
+      let finishSignIn!: () => void;
+      authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
+        finishSignIn = resolve;
+      }));
+      const tree = render(<AuthRoute />);
+      await pressGoogle(tree);
+      await land(tree);
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(SIGN_IN_LANDED_WAIT_MS - 1);
+      });
+      expect(router.dismissTo).not.toHaveBeenCalled();
+      expect(googleBusy(tree)).toBe(true);
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(router.dismissTo).toHaveBeenCalledTimes(1);
+      expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+      await renderer.act(async () => finishSignIn());
+      expect(router.dismissTo).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree.unmount());
+    });
+
+    it('moves on as soon as the sign-in ends within that wait, and only once', async () => {
+      const router = await routerMock();
+      answering(Promise.resolve(welcome()));
+      let finishSignIn!: () => void;
+      authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
+        finishSignIn = resolve;
+      }));
+      const tree = render(<AuthRoute />);
+      await pressGoogle(tree);
+      await land(tree);
+      expect(router.dismissTo).not.toHaveBeenCalled();
+      await renderer.act(async () => finishSignIn());
+      expect(router.dismissTo).toHaveBeenCalledTimes(1);
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(SIGN_IN_LANDED_WAIT_MS);
+      });
+      expect(router.dismissTo).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree.unmount());
+    });
+
+    it('moves on at once when the sign-in fails after its session landed, holding the spinner until then', async () => {
+      const router = await routerMock();
+      let answer!: (value: unknown) => void;
+      answering(new Promise((resolve) => {
+        answer = resolve;
+      }));
+      let failSignIn!: (error: Error) => void;
+      authState.signInWithGoogle.mockReturnValue(new Promise<void>((_resolve, reject) => {
+        failSignIn = reject;
+      }));
+      const tree = render(<AuthRoute />);
+      await pressGoogle(tree);
+      await land(tree);
+      // Moving a guest's credits failed after the session landed; the answers are on their way.
+      await renderer.act(async () => failSignIn(new Error('merge failed')));
+      expect(googleBusy(tree)).toBe(true);
+      expect(router.dismissTo).not.toHaveBeenCalled();
+      await renderer.act(async () => answer(welcome()));
+      expect(router.dismissTo).toHaveBeenCalledTimes(1);
+      expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+      await renderer.act(async () => {
+        await vi.advanceTimersByTimeAsync(SIGN_IN_LANDED_WAIT_MS);
+      });
+      expect(router.dismissTo).toHaveBeenCalledTimes(1);
+      renderer.act(() => tree.unmount());
+    });
   });
 
   it('leaves the question to the setup when an answer reads oddly', async () => {
