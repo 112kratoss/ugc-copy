@@ -273,6 +273,7 @@
             "linked_post_title": "Launch frame",
             "linked_post_visibility": "public",
             "linked_post_archived_at": null,
+            "linked_post_view_count": 1284,
             "linked_post_bundle": {
               "accessMode": "free",
               "status": "published",
@@ -300,6 +301,7 @@
             "error_message": null,
             "moderation_removed_at": null,
             "linked_post_bundle": null,
+            "linked_post_view_count": null,
             "media": {
               "id": "private-video-1",
               "kind": "video",
@@ -340,6 +342,7 @@
             "linked_post_title": null,
             "linked_post_visibility": null,
             "linked_post_archived_at": null,
+            "linked_post_view_count": null,
             "linked_post_bundle": null,
             "archived_at": null,
             "moderation_removed_at": null
@@ -367,6 +370,7 @@
             "linked_post_title": null,
             "linked_post_visibility": null,
             "linked_post_archived_at": null,
+            "linked_post_view_count": null,
             "linked_post_bundle": null,
             "archived_at": null,
             "moderation_removed_at": null
@@ -407,6 +411,7 @@
                 "linked_post_title": null,
                 "linked_post_visibility": null,
                 "linked_post_archived_at": null,
+                "linked_post_view_count": null,
                 "linked_post_bundle": null,
                 "archived_at": null,
                 "moderation_removed_at": null
@@ -469,6 +474,7 @@
                 "linked_post_title": null,
                 "linked_post_visibility": null,
                 "linked_post_archived_at": null,
+                "linked_post_view_count": null,
                 "linked_post_bundle": null,
                 "archived_at": "2026-10-20T08:00:00.000Z",
                 "moderation_removed_at": null

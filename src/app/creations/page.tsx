@@ -122,6 +122,8 @@ interface Generation {
         status: 'draft' | 'published';
         priceUsdCents: number;
     } | null;
+    /** The linked post's views, for a post older than the loaded posts page. */
+    linked_post_view_count?: number | null;
     /** A failed run whose cost settlement gave back. */
     refunded?: boolean;
     /** Why a failed run failed, in public words; null for every other status. */
@@ -166,6 +168,8 @@ interface OwnerPost {
     sourceLabel: string;
     createdAt: string;
     updatedAt: string;
+    /** Lifetime views; left out for a post under moderation or a tombstoned one. */
+    viewCount?: number;
     publicPath: string | null;
     ownerPath: string;
     resourcePath: string | null;

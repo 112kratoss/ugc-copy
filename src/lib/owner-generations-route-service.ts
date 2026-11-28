@@ -117,6 +117,10 @@ type LinkedPostRow = {
   title: string | null;
   visibility: 'public' | 'unlisted' | 'private';
   archived_at: string | null;
+  /** Lifetime views, for the count Studio and the app draw on a creation. */
+  view_count: number | null;
+  review_status: string | null;
+  tombstoned_at: string | null;
 };
 
 export type OwnerGenerationsRoutePayload = {
@@ -363,6 +367,16 @@ function collectOwnerMediaUrlCandidates(
   return Array.from(candidates);
 }
 
+/**
+ * The count a linked post contributes to its creation, or null where no count
+ * may be shown: no post, a post under moderation, or a tombstoned one.
+ */
+function readLinkedPostViewCount(post: LinkedPostRow | undefined): number | null {
+  if (!post) return null;
+  if (post.review_status === 'hidden' || post.review_status === 'flagged' || post.tombstoned_at) return null;
+  return Math.max(0, Number(post.view_count) || 0);
+}
+
 async function loadLinkedPostMap(params: {
   supabase: OwnerGenerationsRouteClient;
   generationIds: string[];
@@ -376,7 +390,7 @@ async function loadLinkedPostMap(params: {
 
   let postsQuery = params.supabase
     .from('posts')
-    .select('id, generation_id, title, visibility, archived_at')
+    .select('id, generation_id, title, visibility, archived_at, view_count, review_status, tombstoned_at')
     .in('generation_id', params.generationIds)
     .in('user_id', params.ownerUserIds);
 
@@ -951,6 +965,14 @@ export async function listOwnerGenerationsForRoute({
       linked_post_title: linkedPost?.title ?? null,
       linked_post_visibility: linkedPost?.visibility ?? null,
       linked_post_archived_at: linkedPost?.archived_at ?? null,
+      // The linked post's views, which both Studio and the app's Creations tab
+      // draw on the creation itself. Studio loads only the newest page of
+      // posts, so for an older post this is its only copy of the count. A post
+      // a moderator hid or flagged, or a tombstoned one, sends none, as
+      // `owner-posts.ts` does for the Posts list; the shared rule in
+      // `ugc-mobile/lib/view-count/` then draws nothing for a count of 0 or a
+      // post that is not public.
+      linked_post_view_count: readLinkedPostViewCount(linkedPost),
       linked_post_bundle: linkedPost ? linkedPostBundleMap.get(linkedPost.id) ?? null : null,
       // The recipe of the caller's own post this run remixed (`readOwnSourceRecipe`), with the inputs.
       ...(summaryOnly ? {} : {
