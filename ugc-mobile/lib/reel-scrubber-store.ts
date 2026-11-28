@@ -3,9 +3,9 @@
  * drawn with the slide's chrome, over every media page of the post, while the
  * player belongs to one media page several components down
  * (`app/viewer.tsx`): the page whose video is playing attaches its player
- * here, and the bar draws and scrubs whatever is attached. Kept outside React
- * state so attaching, scrubbing and seeking re-render only the bar and the
- * page, never the slide.
+ * here, with a way to ask whether its clip means to play, and the bar draws
+ * and scrubs whatever is attached. Kept outside React state so attaching,
+ * scrubbing and seeking re-render only the bar and the page, never the slide.
  */
 
 export type ReelScrubberSnapshot<Player> = {
@@ -14,15 +14,18 @@ export type ReelScrubberSnapshot<Player> = {
   /** A finger is dragging the bar. */
   scrubbing: boolean;
   /**
-   * The scrub is over and the clip is on its way back to playing: it loads at
-   * the place the finger let go, and says it is not playing until it does.
-   * That pause is the scrub's, not the reader's.
+   * The clip the bar moved is on its way back to playing: it loads at the new
+   * place and says it is not playing until it does. That pause is the bar's,
+   * not the reader's.
    */
   resuming: boolean;
 };
 
+const pausedIntent = () => false;
+
 export function createReelScrubberStore<Player>() {
   let snapshot: ReelScrubberSnapshot<Player> = { player: null, scrubbing: false, resuming: false };
+  let readIntent: () => boolean = pausedIntent;
   let seekGeneration = 0;
   let lastSeekAt = Number.NEGATIVE_INFINITY;
   const listeners = new Set<() => void>();
@@ -44,15 +47,28 @@ export function createReelScrubberStore<Player>() {
     },
 
     /**
-     * The page whose video is playing hands over its player; the returned
-     * function takes it back. Taking back a player that has since been
-     * replaced changes nothing, so the order pages swap in does not matter.
+     * The page whose video is playing hands over its player, and how to ask
+     * whether its clip means to play (what the reader sees: playing, or the
+     * Play mark); the returned function takes it back. Taking back a player
+     * that has since been replaced changes nothing, so the order pages swap
+     * in does not matter.
      */
-    attach(player: Player) {
+    attach(player: Player, wantsPlayback: () => boolean = pausedIntent) {
+      readIntent = wantsPlayback;
       if (snapshot.player !== player) publish({ player, scrubbing: false, resuming: false });
       return () => {
-        if (snapshot.player === player) publish({ player: null, scrubbing: false, resuming: false });
+        if (snapshot.player !== player) return;
+        readIntent = pausedIntent;
+        publish({ player: null, scrubbing: false, resuming: false });
       };
+    },
+
+    /**
+     * Whether the attached clip means to play. Not the player's own `playing`,
+     * which is false while a clip that means to play is still loading.
+     */
+    wantsPlayback() {
+      return snapshot.player !== null && readIntent();
     },
 
     setScrubbing(scrubbing: boolean) {
@@ -75,7 +91,7 @@ export function createReelScrubberStore<Player>() {
     seekGeneration: () => seekGeneration,
 
     /**
-     * Whether the clip is being scrubbed, is on its way back from a scrub, or
+     * Whether the clip is being scrubbed, is on its way back from a seek, or
      * was moved within `windowMs`. A load a seek causes is the reader's doing,
      * not a stall.
      */
@@ -86,3 +102,52 @@ export function createReelScrubberStore<Player>() {
 }
 
 export type ReelScrubberStore<Player> = ReturnType<typeof createReelScrubberStore<Player>>;
+
+/** The part of a player a resume needs: expo-video's `VideoPlayer` has it. */
+export type ResumablePlayer = {
+  addListener(eventName: 'playingChange', listener: (event: { isPlaying: boolean }) => void): { remove(): void };
+  play(): void;
+};
+
+/**
+ * Holds the slide's resume while a clip the bar moved, and that means to play,
+ * loads at its new place: until it says it plays again, or `graceMs` passes,
+ * its "not playing" is the seek's (`lib/reel-scrubber-store.ts`'s `resuming`),
+ * so the page shows no Play mark and no loading sparkles for it. A drag paused
+ * the clip, so it is asked to play (`play`); a tap or a screen reader's step
+ * did not. Returns the function that ends the hold early (a new scrub, the
+ * reader's own tap, the bar going); it ends once, and calls `onEnd` once.
+ */
+export function holdResume<Player extends ResumablePlayer>(
+  store: ReelScrubberStore<Player>,
+  player: Player,
+  { play, graceMs, onEnd }: { play: boolean; graceMs: number; onEnd?: () => void },
+): () => void {
+  let ended = false;
+  let subscription: { remove(): void } | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const end = () => {
+    if (ended) return;
+    ended = true;
+    subscription?.remove();
+    if (timer !== null) clearTimeout(timer);
+    if (store.getSnapshot().player === player) store.setResuming(false);
+    onEnd?.();
+  };
+  if (store.getSnapshot().player !== player) {
+    end();
+    return end;
+  }
+  try {
+    subscription = player.addListener('playingChange', (event) => {
+      if (event.isPlaying) end();
+    });
+    store.setResuming(true);
+    timer = setTimeout(end, graceMs);
+    if (play) player.play();
+  } catch {
+    // Released under the bar (a page that settled, a re-signed source, Back).
+    end();
+  }
+  return end;
+}

@@ -1,4 +1,4 @@
-import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
+import { MIN_HIT_TARGET_PT, verticalHitSlop } from '@/lib/hit-target';
 
 /**
  * The reel's progress bar (`components/reel-progress-bar.tsx`): a thin line
@@ -8,15 +8,37 @@ import { MIN_HIT_TARGET_PT } from '@/lib/hit-target';
  * gestures call on the UI thread are marked as worklets.
  */
 
-/** Where the caption block ends above the bottom inset (`components/reel-chrome.tsx`). The touch area stops there. */
+/** Where the caption block ends above the bottom inset (`components/reel-chrome.tsx`). */
 export const REEL_CAPTION_BOTTOM_LIFT = 24;
+/** The caption's creator row (`components/reel-chrome.tsx`), and the slop of the Follow pill in it. */
+export const REEL_CREATOR_ROW_HEIGHT = 34;
+export const REEL_FOLLOW_PILL_HIT_SLOP = 6;
+/** How far the caption's touch areas reach below its block: the most any of its rows' slop does. */
+export const REEL_CAPTION_SLOP_BELOW = Math.max(REEL_FOLLOW_PILL_HIT_SLOP, verticalHitSlop(REEL_CREATOR_ROW_HEIGHT).bottom);
 /** How far above the bottom inset the line is drawn. */
 export const REEL_PROGRESS_LINE_LIFT = 6;
 /** The line at rest, and its height while a finger is on it. */
 export const REEL_PROGRESS_LINE_HEIGHT = 2;
 export const REEL_PROGRESS_LINE_HELD_HEIGHT = 6;
-/** The line's ends sit in from the screen's edges, in line with the caption, and clear of the edge swipes. */
+/** The line's ends sit in from the screen's edges, in line with the caption. */
 export const REEL_PROGRESS_SIDE_INSET = 18;
+/** A finger may land this far past either end of the line and still hold it there; further out is the edge swipes'. */
+export const REEL_PROGRESS_END_SLOP = 8;
+
+function cleanInset(bottomInset: number) {
+  return Number.isFinite(bottomInset) ? Math.max(0, bottomInset) : 0;
+}
+
+/**
+ * The caption block's bottom edge, above the bottom of the slide. Just above
+ * the inset; on a phone with little or none (an iPhone SE or 8), lifted until
+ * the progress bar's 44pt touch area fits beneath the caption's own touch
+ * areas. A home indicator (34pt) or Android's navigation bar (48pt or more)
+ * leaves it where it always was.
+ */
+export function reelCaptionBottom(bottomInset: number): number {
+  return Math.max(cleanInset(bottomInset) + REEL_CAPTION_BOTTOM_LIFT, MIN_HIT_TARGET_PT + REEL_CAPTION_SLOP_BELOW);
+}
 
 export type ReelProgressFrame = {
   /** The touch area's distance from the bottom of the slide. */
@@ -25,19 +47,24 @@ export type ReelProgressFrame = {
   height: number;
   /** The line's centre, measured up from the bottom of the touch area. */
   lineCenter: number;
+  /** The touch area's distance from each side of the slide: the line and its end slop, nothing wider. */
+  side: number;
 };
 
 /**
- * The bar's touch area and line, from the slide's bottom inset. The area runs
- * up to the caption's bottom edge and down into the inset for its 44pt, so it
- * takes no touch from the caption; with no inset to go into (a phone without a
- * home indicator) it keeps its 44pt and starts at the bottom edge.
+ * The bar's touch area and line, from the slide's bottom inset. The area ends
+ * below the lowest reach of the caption's touch areas, so it takes no touch
+ * from them, and runs down into the inset for its 44pt; the line sits just
+ * above the inset, inside it.
  */
 export function reelProgressFrame(bottomInset: number): ReelProgressFrame {
-  const inset = Number.isFinite(bottomInset) ? Math.max(0, bottomInset) : 0;
+  const inset = cleanInset(bottomInset);
   const height = MIN_HIT_TARGET_PT;
-  const bottom = Math.max(0, inset + REEL_CAPTION_BOTTOM_LIFT - height);
-  return { bottom, height, lineCenter: inset + REEL_PROGRESS_LINE_LIFT - bottom };
+  const top = reelCaptionBottom(inset) - REEL_CAPTION_SLOP_BELOW;
+  const bottom = Math.max(0, top - height);
+  const halfLine = REEL_PROGRESS_LINE_HELD_HEIGHT / 2;
+  const line = Math.min(bottom + height - halfLine, Math.max(bottom + halfLine, inset + REEL_PROGRESS_LINE_LIFT));
+  return { bottom, height, lineCenter: line - bottom, side: REEL_PROGRESS_SIDE_INSET - REEL_PROGRESS_END_SLOP };
 }
 
 /** A finger needs this much sideways travel before the bar takes the touch. */
@@ -169,10 +196,13 @@ function clockSeconds(seconds: number, rounding: 'floor' | 'round'): number {
 }
 
 /**
- * The furthest a step between two time reports can go and still be playing:
- * reports come 4 a second, so anything longer was a seek.
+ * How far a time report may run ahead of the clock since the last one and
+ * still be the clip playing on: reports come four a second, some late and
+ * some in a burst after a busy moment, so a step is measured against the time
+ * that passed between them, with this much to spare. Anything further was a
+ * seek.
  */
-export const REEL_WATCH_MAX_STEP_SECONDS = 1.5;
+export const REEL_WATCH_STEP_SLACK_SECONDS = 0.75;
 const REEL_WATCH_EPSILON_SECONDS = 0.05;
 
 /**
@@ -182,11 +212,13 @@ const REEL_WATCH_EPSILON_SECONDS = 0.05;
  * counts again only once playing carries it past what was reached before.
  * Without seeks this is the furthest position, as the reel always reported:
  * the first report stands (a clip taken over from a feed tile starts part-way
- * in), and a loop starting over changes nothing.
+ * in), a loop starting over changes nothing, and a gap in the reports (a held
+ * close, a busy main thread) costs nothing while the clip moved no faster
+ * than the clock.
  */
 export function createReelWatchReach() {
   let reach: number | null = null;
-  let previous: number | null = null;
+  let previous: { seconds: number; at: number } | null = null;
   let jumped = false;
 
   return {
@@ -195,27 +227,87 @@ export function createReelWatchReach() {
       jumped = true;
     },
 
-    /** Takes a time report in seconds and returns the furthest point reached by playing. */
-    sample(seconds: number): number {
-      if (!Number.isFinite(seconds) || seconds < 0) return reach ?? 0;
+    /**
+     * Takes a time report, in seconds, with the clock in ms when it arrived and
+     * the playback rate, and returns the furthest point reached by playing.
+     */
+    sample(seconds: number, now: number, rate = 1): number {
+      if (!Number.isFinite(seconds) || seconds < 0 || !Number.isFinite(now)) return reach ?? 0;
+      const last = previous;
+      previous = { seconds, at: now };
       if (jumped) {
         jumped = false;
-        previous = seconds;
         if (reach === null) reach = 0;
         return reach;
       }
-      if (reach === null || previous === null) {
+      if (reach === null || last === null) {
         reach = seconds;
-        previous = seconds;
         return reach;
       }
-      const from = previous;
-      previous = seconds;
-      const playedOn = seconds >= from && seconds - from <= REEL_WATCH_MAX_STEP_SECONDS;
-      if (playedOn && from <= reach + REEL_WATCH_EPSILON_SECONDS) reach = Math.max(reach, seconds);
+      const elapsedSeconds = Math.max(0, now - last.at) / 1000;
+      const step = seconds - last.seconds;
+      const playedOn = step >= 0
+        && step <= elapsedSeconds * Math.max(1, Number.isFinite(rate) ? rate : 1) + REEL_WATCH_STEP_SLACK_SECONDS;
+      if (playedOn && last.seconds <= reach + REEL_WATCH_EPSILON_SECONDS) reach = Math.max(reach, seconds);
       return reach;
     },
   };
 }
 
 export type ReelWatchReach = ReturnType<typeof createReelWatchReach>;
+
+export type ReelWatchReport = {
+  /** The share of the clip played, 0 to 1. */
+  progress: number;
+  durationMs: number;
+};
+
+/**
+ * The watch progress one reel slide's video reports for one visit (the reel's
+ * `media_progress`, `lib/showcase-media-progress.ts`). Kept for the whole
+ * visit: an overlay over the slide (comments, the actions sheet, Details,
+ * unlock, the app losing focus) stops the reports but is the same visit, and a
+ * place scrubbed to before it is still not watched after it. Started over when
+ * the slide is left, where the clip is rewound. Seeks are the bar's, counted by
+ * the slide's store (`lib/reel-scrubber-store.ts`): a report under a new count
+ * follows a seek, and nothing is reported while a finger drags the bar.
+ */
+export function createReelWatchVisit(seekGeneration: number) {
+  let reach = createReelWatchReach();
+  let seeks = seekGeneration;
+
+  return {
+    /** The slide was left: the next visit starts from nothing, at the store's current seek count. */
+    leave(currentSeekGeneration: number) {
+      reach = createReelWatchReach();
+      seeks = currentSeekGeneration;
+    },
+
+    report({
+      seconds,
+      durationSeconds,
+      now,
+      rate,
+      scrubbing,
+      seekGeneration: currentSeekGeneration,
+    }: {
+      seconds: number;
+      durationSeconds: number;
+      now: number;
+      rate: number;
+      scrubbing: boolean;
+      seekGeneration: number;
+    }): ReelWatchReport | null {
+      if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return null;
+      if (scrubbing) return null;
+      if (currentSeekGeneration !== seeks) {
+        seeks = currentSeekGeneration;
+        reach.noteSeek();
+      }
+      const reached = reach.sample(seconds, now, rate);
+      return { progress: Math.min(1, reached / durationSeconds), durationMs: durationSeconds * 1000 };
+    },
+  };
+}
+
+export type ReelWatchVisit = ReturnType<typeof createReelWatchVisit>;

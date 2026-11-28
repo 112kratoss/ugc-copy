@@ -28,6 +28,7 @@ import {
   FEED_PREVIEW_FORWARD_BUFFER_SECONDS,
 } from '@/lib/media-performance';
 import { MEDIA_DISPLAY_DEADLINE_MS } from '@/lib/media-recovery';
+import { createReaderMoveFilter } from '@/lib/reader-video-moves';
 import { useMediaSource } from '@/lib/use-media-source';
 import { hexWithAlpha } from '@/lib/eased-fade';
 import { appTheme, mediaColors, themes } from '@/lib/theme';
@@ -686,7 +687,12 @@ function FeedVideoPlayerLayer({
   useEffect(() => {
     if (!reportsPlaybackTime || !playing || returning) return undefined;
     setTimeUpdateInterval(player, FEED_PREVIEW_TIME_UPDATE_INTERVAL_SECONDS);
+    // A reel that closed into this tile may hand over a clip the reader dragged
+    // ahead with its progress bar: that place is not watched here, so nothing
+    // is reported until the clip starts over (`lib/reader-video-moves.ts`).
+    const admits = createReaderMoveFilter(player);
     const subscription = player.addListener('timeUpdate', (event) => {
+      if (!admits(event.currentTime)) return;
       playbackTimeRef.current?.(event.currentTime, player.duration);
     });
     return () => {

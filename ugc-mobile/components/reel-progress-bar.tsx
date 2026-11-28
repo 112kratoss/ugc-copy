@@ -1,6 +1,6 @@
 import type { VideoPlayer } from 'expo-video';
-import { createContext, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { Text, View, type AccessibilityActionEvent, type LayoutChangeEvent } from 'react-native';
+import { createContext, useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { View, type AccessibilityActionEvent, type LayoutChangeEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Reanimated, {
   Easing,
@@ -12,24 +12,20 @@ import Reanimated, {
 } from 'react-native-reanimated';
 
 import { useScreenReaderRunning } from '@/components/notice-card';
-import { REEL_TEXT_SHADOW } from '@/components/reel-chrome';
+import { AppText } from '@/components/ui';
 import { useReducedMotion } from '@/lib/motion';
 import {
+  REEL_PROGRESS_END_SLOP,
   REEL_PROGRESS_LINE_HEIGHT,
   REEL_PROGRESS_LINE_HELD_HEIGHT,
-  REEL_PROGRESS_SIDE_INSET,
   REEL_SCRUB_ACTIVATE_DISTANCE,
-  reelAccessibilityStepSeconds,
   reelProgressAccessibilityText,
-  reelProgressFraction,
   reelProgressFrame,
-  reelProgressNeedsResync,
   reelScrubDecision,
   reelScrubFraction,
   reelScrubLabel,
-  reelSeekSeconds,
-  type ReelProgressRun,
 } from '@/lib/reel-progress-view-model';
+import { createReelScrubController } from '@/lib/reel-scrub-controller';
 import { createReelScrubberStore, type ReelScrubberStore } from '@/lib/reel-scrubber-store';
 import { appTheme, mediaColors } from '@/lib/theme';
 import { useAppTheme } from '@/lib/theme-context';
@@ -42,13 +38,17 @@ import { useAppTheme } from '@/lib/theme-context';
  * rail and caption; the playing page hands it its player through
  * `ReelScrubberContext` (`lib/reel-scrubber-store.ts`).
  *
- * Built here rather than taken from the player: expo-video's native controls
- * answer their own touches and fight the reel's swipe and double tap on
- * Android (`.claude/rules/mobile-runtime.md`), and bring their whole control
- * strip with them, and no native slider is in the binaries people have. What
- * is native is the seeking: expo-video's scrubbing mode (Apple's chase-time
- * seeking on iOS, ExoPlayer's scrubbing mode on Android) while the finger
- * moves, then one exact seek where it lets go. The line moves on the UI
+ * Why it is drawn here, after checking the native controls first:
+ * - expo-video's native controls answer their own touches and fight the
+ *   reel's swipe and double tap on Android (`.claude/rules/mobile-runtime.md`),
+ *   and bring their whole control strip with them.
+ * - @expo/ui 55's Slider (SwiftUI's and Compose's) is in the binaries, but it
+ *   is the system control: a full-height track with its thumb always showing,
+ *   not a hairline under the caption that thickens under a finger, and a
+ *   native view of its own answering touches inside the reel's lists.
+ * What is native is the seeking: expo-video's scrubbing mode (Apple's
+ * chase-time seeking on iOS, ExoPlayer's scrubbing mode on Android) while the
+ * finger moves, then one exact seek where it lets go. The line moves on the UI
  * thread: it runs to the clip's end at the clip's pace and is checked against
  * the player's time reports, four a second.
  */
@@ -66,7 +66,7 @@ export function useReelScrubberStore(): ReelVideoScrubberStore {
 const noSubscription = () => () => {};
 const no = () => false;
 
-/** Whether the slide's bar is being dragged; false with no store. */
+/** Whether a finger is dragging the slide's bar, whatever it plays; false with no store. */
 export function useReelScrubbing(store: ReelVideoScrubberStore | null): boolean {
   return useSyncExternalStore(
     store ? store.subscribe : noSubscription,
@@ -74,11 +74,19 @@ export function useReelScrubbing(store: ReelVideoScrubberStore | null): boolean 
   );
 }
 
-/** Whether the clip is on its way back to playing after a scrub; false with no store. */
-export function useReelResuming(store: ReelVideoScrubberStore | null): boolean {
+/** Whether the bar is dragging this player's clip. */
+export function useReelScrubbingFor(store: ReelVideoScrubberStore | null, player: VideoPlayer): boolean {
   return useSyncExternalStore(
     store ? store.subscribe : noSubscription,
-    store ? () => store.getSnapshot().resuming : no,
+    store ? () => store.getSnapshot().player === player && store.getSnapshot().scrubbing : no,
+  );
+}
+
+/** Whether this player's clip is on its way back to playing after the bar moved it. */
+export function useReelResumingFor(store: ReelVideoScrubberStore | null, player: VideoPlayer): boolean {
+  return useSyncExternalStore(
+    store ? store.subscribe : noSubscription,
+    store ? () => store.getSnapshot().player === player && store.getSnapshot().resuming : no,
   );
 }
 
@@ -88,12 +96,12 @@ export function ReelScrubChromeFade({ store, children }: { store: ReelVideoScrub
   const reducedMotion = useReducedMotion();
   const opacity = useSharedValue(1);
   useEffect(() => {
-    opacity.value = withTiming(scrubbing ? 0 : 1, {
+    opacity.set(withTiming(scrubbing ? 0 : 1, {
       duration: reducedMotion ? 0 : scrubbing ? 120 : 220,
       easing: Easing.out(Easing.quad),
-    });
+    }));
   }, [opacity, reducedMotion, scrubbing]);
-  const style = useAnimatedStyle(() => ({ opacity: opacity.value }));
+  const style = useAnimatedStyle(() => ({ opacity: opacity.get() }));
   return (
     <Reanimated.View pointerEvents="box-none" style={[{ position: 'absolute', inset: 0 }, style]}>
       {children}
@@ -101,18 +109,11 @@ export function ReelScrubChromeFade({ store, children }: { store: ReelVideoScrub
   );
 }
 
-/** Exact seeks, as the player starts with; the scrub loosens them while the finger moves. */
-const EXACT_SEEK = { toleranceBefore: 0, toleranceAfter: 0 };
-const SCRUB_SEEK = { toleranceBefore: 0.1, toleranceAfter: 0.1 };
 /** A load right after a seek is the reader's doing, not a stall. */
 export const REEL_SEEK_LOAD_WINDOW_MS = 1500;
-/** How long a clip let go of mid-scrub has to play again before its pause counts as a stop. */
-const RESUME_GRACE_MS = 2500;
-/** After a seek, time reports from before it are ignored until one lands this near the new place... */
-const SEEK_SETTLE_SECONDS = 0.5;
-/** ...or this long has passed. */
-const SEEK_SETTLE_MS = 1000;
 const THUMB_SIZE = 14;
+const LINE_BOX_HEIGHT = REEL_PROGRESS_LINE_HELD_HEIGHT;
+const SCRUB_ACCESSIBILITY_ACTIONS = [{ name: 'increment' }, { name: 'decrement' }, { name: 'activate' }];
 
 export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubberStore; bottomInset: number }) {
   const theme = useAppTheme();
@@ -134,26 +135,28 @@ export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubb
   const decided = useSharedValue(false);
   const dragging = useSharedValue(false);
 
-  const durationRef = useRef(0);
-  const runRef = useRef<ReelProgressRun | null>(null);
-  const pendingSeekRef = useRef<{ seconds: number; until: number } | null>(null);
-  const scrubRef = useRef<{ wasPlaying: boolean } | null>(null);
-  // Where the clip was last reported or sent, in seconds. Reading `currentTime`
-  // on Android blocks the JS thread on the main thread (expo-video's
-  // VideoModule.kt), which a scrub keeps busy, so it is read once per player.
-  const positionRef = useRef(0);
-  // A scrub sends at most one seek a frame: the finger's latest place.
-  const scrubTargetRef = useRef(0);
-  const scrubFrameRef = useRef<number | null>(null);
-  // Ends the wait for a clip let go of mid-scrub to play again.
-  const resumeRef = useRef<(() => void) | null>(null);
-  const tracksClockRef = useRef(false);
+  // Everything the bar does with the player (`lib/reel-scrub-controller.ts`),
+  // made once for this slide's store. It draws through the line below.
+  const [controller] = useState(() => createReelScrubController<VideoPlayer>({
+    store,
+    line: {
+      setFraction(fraction) {
+        cancelAnimation(progress);
+        progress.set(fraction);
+      },
+      runToEnd(fraction, durationMs) {
+        progress.set(fraction);
+        progress.set(withTiming(1, { duration: durationMs, easing: Easing.linear }));
+      },
+    },
+    setClock: setClockSeconds,
+  }));
   useEffect(() => {
-    durationRef.current = durationSeconds;
-  }, [durationSeconds]);
+    controller.setDuration(durationSeconds);
+  }, [controller, durationSeconds]);
   useEffect(() => {
-    tracksClockRef.current = screenReader;
-  }, [screenReader]);
+    controller.setTracksClock(screenReader);
+  }, [controller, screenReader]);
 
   // The clip's length, once its source has loaded.
   useEffect(() => {
@@ -173,164 +176,35 @@ export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubb
   }, [player]);
 
   useEffect(() => {
-    shown.value = withTiming(interactive ? 1 : 0, { duration: reducedMotion ? 0 : 160, easing: Easing.out(Easing.quad) });
+    shown.set(withTiming(interactive ? 1 : 0, { duration: reducedMotion ? 0 : 160, easing: Easing.out(Easing.quad) }));
   }, [interactive, reducedMotion, shown]);
 
   // Follows the player: a run to the clip's end at its pace while it plays,
   // the exact place while it does not, set back only when a report disagrees.
   useEffect(() => {
     if (!player || !(durationSeconds > 0)) return;
-    runRef.current = null;
-    positionRef.current = player.currentTime;
-    const sync = (reportedSeconds: number) => {
-      if (store.getSnapshot().scrubbing) return;
-      const now = Date.now();
-      const pending = pendingSeekRef.current;
-      if (pending) {
-        if (now < pending.until && Math.abs(reportedSeconds - pending.seconds) > SEEK_SETTLE_SECONDS) return;
-        pendingSeekRef.current = null;
-      }
-      if (tracksClockRef.current) setClockSeconds(Math.floor(reportedSeconds));
-      const fraction = reelProgressFraction(reportedSeconds, durationSeconds);
-      if (!player.playing || player.status !== 'readyToPlay') {
-        runRef.current = null;
-        cancelAnimation(progress);
-        progress.value = fraction;
-        return;
-      }
-      if (!reelProgressNeedsResync(runRef.current, now, fraction, durationSeconds)) return;
-      const rate = player.playbackRate > 0 ? player.playbackRate : 1;
-      const remainingMs = Math.max(0, ((durationSeconds - reportedSeconds) * 1000) / rate);
-      runRef.current = { from: fraction, startedAt: now, durationMs: remainingMs };
-      progress.value = fraction;
-      progress.value = withTiming(1, { duration: remainingMs, easing: Easing.linear });
-    };
-    const resync = () => {
-      if (store.getSnapshot().scrubbing) return;
-      runRef.current = null;
-      sync(positionRef.current);
-    };
-    resync();
+    controller.follow();
     const subscriptions = [
-      player.addListener('timeUpdate', (event) => {
-        positionRef.current = event.currentTime;
-        sync(event.currentTime);
-      }),
-      player.addListener('playingChange', resync),
-      player.addListener('statusChange', resync),
+      player.addListener('timeUpdate', (event) => controller.report(player, event.currentTime)),
+      player.addListener('playingChange', () => controller.resync(player)),
+      player.addListener('statusChange', () => controller.resync(player)),
     ];
     return () => {
       for (const subscription of subscriptions) subscription.remove();
       cancelAnimation(progress);
-      runRef.current = null;
     };
-  }, [durationSeconds, player, progress, store]);
-
-  const seekTo = useCallback((target: VideoPlayer, seconds: number) => {
-    target.currentTime = seconds;
-    positionRef.current = seconds;
-    runRef.current = null;
-    pendingSeekRef.current = { seconds, until: Date.now() + SEEK_SETTLE_MS };
-    store.noteSeek(Date.now());
-    setClockSeconds(Math.floor(seconds));
-  }, [store]);
-
-  const beginScrub = useCallback((fraction: number) => {
-    const target = store.getSnapshot().player;
-    if (!target) return;
-    // A scrub begun while the last one's clip was still coming back plays it on.
-    const resuming = resumeRef.current !== null;
-    resumeRef.current?.();
-    scrubRef.current = { wasPlaying: target.playing || resuming };
-    runRef.current = null;
-    target.pause();
-    target.seekTolerance = SCRUB_SEEK;
-    target.scrubbingModeOptions = { scrubbingModeEnabled: true };
-    // The clip and the label go to the finger at once, not at its next move.
-    const seconds = reelSeekSeconds(fraction, durationRef.current);
-    target.currentTime = seconds;
-    positionRef.current = seconds;
-    setClockSeconds(Math.floor(seconds));
-    store.setScrubbing(true);
-  }, [store]);
-
-  const applyScrub = useCallback(() => {
-    scrubFrameRef.current = null;
-    const target = store.getSnapshot().player;
-    if (!target || !scrubRef.current) return;
-    const seconds = reelSeekSeconds(scrubTargetRef.current, durationRef.current);
-    target.currentTime = seconds;
-    positionRef.current = seconds;
-    setClockSeconds(Math.floor(seconds));
-  }, [store]);
-
-  const scrubTo = useCallback((fraction: number) => {
-    scrubTargetRef.current = fraction;
-    if (scrubFrameRef.current !== null) return;
-    scrubFrameRef.current = requestAnimationFrame(applyScrub);
-  }, [applyScrub]);
-
-  const endScrub = useCallback((fraction: number) => {
-    if (scrubFrameRef.current !== null) {
-      cancelAnimationFrame(scrubFrameRef.current);
-      scrubFrameRef.current = null;
-    }
-    const scrub = scrubRef.current;
-    scrubRef.current = null;
-    const target = store.getSnapshot().player;
-    if (!target || !scrub) {
-      store.setScrubbing(false);
-      return;
-    }
-    target.scrubbingModeOptions = { scrubbingModeEnabled: false };
-    target.seekTolerance = EXACT_SEEK;
-    seekTo(target, reelSeekSeconds(fraction, durationRef.current));
-    store.setScrubbing(false);
-    if (!scrub.wasPlaying) return;
-    // It loads at the new place before it plays, and says it is not playing
-    // meanwhile: until it plays again, or the grace runs out, that is the scrub's.
-    store.setResuming(true);
-    let subscription: { remove: () => void } | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const finish = () => {
-      subscription?.remove();
-      if (timer !== null) clearTimeout(timer);
-      if (resumeRef.current === finish) resumeRef.current = null;
-      store.setResuming(false);
-    };
-    subscription = target.addListener('playingChange', (event) => {
-      if (event.isPlaying) finish();
-    });
-    timer = setTimeout(finish, RESUME_GRACE_MS);
-    resumeRef.current = finish;
-    target.play();
-  }, [seekTo, store]);
-
-  const tapSeek = useCallback((fraction: number) => {
-    const target = store.getSnapshot().player;
-    if (!target || scrubRef.current) return;
-    seekTo(target, reelSeekSeconds(fraction, durationRef.current));
-  }, [seekTo, store]);
+  }, [controller, durationSeconds, player, progress]);
 
   // A bar taken from under a finger (the post scrolled on, the clip failed)
   // leaves its player as it found it.
-  useEffect(() => () => {
-    if (scrubFrameRef.current !== null) {
-      cancelAnimationFrame(scrubFrameRef.current);
-      scrubFrameRef.current = null;
-    }
-    resumeRef.current?.();
-    const scrub = scrubRef.current;
-    if (!scrub || !player) return;
-    scrubRef.current = null;
-    player.scrubbingModeOptions = { scrubbingModeEnabled: false };
-    player.seekTolerance = EXACT_SEEK;
-  }, [player]);
+  useEffect(() => () => controller.release(player), [controller, player]);
 
   const holdDuration = reducedMotion ? 0 : 90;
   const releaseDuration = reducedMotion ? 0 : 180;
   // Made once per change of what it reads, not per render: the scrub label
-  // re-renders the bar while a finger is on it.
+  // re-renders the bar while a finger is on it. Shared values are read and
+  // written with get and set, and the JS side is the controller's, so React
+  // Compiler compiles the bar.
   const gesture = useMemo(() => {
     const pan = Gesture.Pan()
       .enabled(interactive)
@@ -340,49 +214,49 @@ export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubb
         'worklet';
         const touch = event.allTouches[0];
         if (!touch) return;
-        startX.value = touch.absoluteX;
-        startY.value = touch.absoluteY;
-        decided.value = false;
-        held.value = withTiming(1, { duration: holdDuration, easing: Easing.out(Easing.quad) });
+        startX.set(touch.absoluteX);
+        startY.set(touch.absoluteY);
+        decided.set(false);
+        held.set(withTiming(1, { duration: holdDuration, easing: Easing.out(Easing.quad) }));
       })
       .onTouchesMove((event, manager) => {
         'worklet';
-        if (decided.value) return;
+        if (decided.get()) return;
         const touch = event.allTouches[0];
         if (!touch) return;
-        const decision = reelScrubDecision(touch.absoluteX - startX.value, touch.absoluteY - startY.value);
+        const decision = reelScrubDecision(touch.absoluteX - startX.get(), touch.absoluteY - startY.get());
         if (decision === 'scrub') {
-          decided.value = true;
+          decided.set(true);
           manager.activate();
         } else if (decision === 'pass') {
-          decided.value = true;
+          decided.set(true);
           manager.fail();
         }
       })
       .onStart((event) => {
         'worklet';
-        dragging.value = true;
+        dragging.set(true);
         cancelAnimation(progress);
-        const fraction = reelScrubFraction(event.x - REEL_PROGRESS_SIDE_INSET, trackWidth.value);
-        progress.value = fraction;
-        runOnJS(beginScrub)(fraction);
+        const fraction = reelScrubFraction(event.x - REEL_PROGRESS_END_SLOP, trackWidth.get());
+        progress.set(fraction);
+        runOnJS(controller.beginScrub)(fraction);
       })
       .onUpdate((event) => {
         'worklet';
-        const fraction = reelScrubFraction(event.x - REEL_PROGRESS_SIDE_INSET, trackWidth.value);
-        if (fraction === progress.value) return;
-        progress.value = fraction;
-        runOnJS(scrubTo)(fraction);
+        const fraction = reelScrubFraction(event.x - REEL_PROGRESS_END_SLOP, trackWidth.get());
+        if (fraction === progress.get()) return;
+        progress.set(fraction);
+        runOnJS(controller.scrubTo)(fraction);
       })
       .onEnd(() => {
         'worklet';
-        if (!dragging.value) return;
-        dragging.value = false;
-        runOnJS(endScrub)(progress.value);
+        if (!dragging.get()) return;
+        dragging.set(false);
+        runOnJS(controller.endScrub)(progress.get());
       })
       .onFinalize(() => {
         'worklet';
-        held.value = withTiming(0, { duration: releaseDuration, easing: Easing.out(Easing.quad) });
+        held.set(withTiming(0, { duration: releaseDuration, easing: Easing.out(Easing.quad) }));
       });
     const tap = Gesture.Tap()
       .enabled(interactive)
@@ -391,55 +265,52 @@ export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubb
       .onEnd((event, success) => {
         'worklet';
         if (!success) return;
-        const fraction = reelScrubFraction(event.x - REEL_PROGRESS_SIDE_INSET, trackWidth.value);
+        const fraction = reelScrubFraction(event.x - REEL_PROGRESS_END_SLOP, trackWidth.get());
         cancelAnimation(progress);
-        progress.value = fraction;
-        runOnJS(tapSeek)(fraction);
+        progress.set(fraction);
+        runOnJS(controller.tapSeek)(fraction);
       });
     return Gesture.Race(pan, tap);
-  }, [beginScrub, decided, dragging, endScrub, held, holdDuration, interactive, progress, releaseDuration, scrubTo, startX, startY, tapSeek, trackWidth]);
+  }, [controller, decided, dragging, held, holdDuration, interactive, progress, releaseDuration, startX, startY, trackWidth]);
 
   const onTrackLayout = useCallback((event: LayoutChangeEvent) => {
-    trackWidth.value = event.nativeEvent.layout.width;
+    trackWidth.set(event.nativeEvent.layout.width);
   }, [trackWidth]);
 
   const onAccessibilityAction = useCallback((event: AccessibilityActionEvent) => {
-    const target = store.getSnapshot().player;
-    const duration = durationRef.current;
-    if (!target || !(duration > 0)) return;
-    const step = reelAccessibilityStepSeconds(duration);
     const name = event.nativeEvent.actionName;
-    if (name !== 'increment' && name !== 'decrement') return;
-    const next = positionRef.current + (name === 'increment' ? step : -step);
-    const seconds = reelSeekSeconds(reelProgressFraction(next, duration), duration);
-    cancelAnimation(progress);
-    progress.value = reelProgressFraction(seconds, duration);
-    seekTo(target, seconds);
-  }, [progress, seekTo, store]);
+    // A double tap activates the bar, which does nothing: without its own
+    // activate, iOS and Android would tap its middle for it, a seek to 50%.
+    if (name === 'increment') controller.step(1);
+    else if (name === 'decrement') controller.step(-1);
+  }, [controller]);
 
-  const barStyle = useAnimatedStyle(() => ({ opacity: shown.value }));
+  const barStyle = useAnimatedStyle(() => ({ opacity: shown.get() }));
   const lineStyle = useAnimatedStyle(() => ({
-    transform: [{ scaleY: 1 + held.value * (REEL_PROGRESS_LINE_HELD_HEIGHT / REEL_PROGRESS_LINE_HEIGHT - 1) }],
+    transform: [{ scaleY: 1 + held.get() * (REEL_PROGRESS_LINE_HELD_HEIGHT / REEL_PROGRESS_LINE_HEIGHT - 1) }],
   }));
   const playedStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: (progress.value - 1) * trackWidth.value }],
+    transform: [{ translateX: (progress.get() - 1) * trackWidth.get() }],
   }));
   const thumbStyle = useAnimatedStyle(() => ({
-    opacity: held.value,
-    transform: [{ translateX: progress.value * trackWidth.value }, { scale: 0.5 + held.value * 0.5 }],
+    opacity: held.get(),
+    transform: [{ translateX: progress.get() * trackWidth.get() }, { scale: 0.5 + held.get() * 0.5 }],
   }));
 
-  const lineBoxHeight = REEL_PROGRESS_LINE_HELD_HEIGHT;
   return (
     <Reanimated.View
       pointerEvents={interactive ? 'box-none' : 'none'}
       style={[{ position: 'absolute', left: 0, right: 0, bottom: frame.bottom, height: frame.height }, barStyle]}
     >
+      {/* The rail and caption fade with their shade while the bar is dragged,
+          so the time sits on a shade of its own. */}
       {scrubbing ? (
         <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: frame.height + 8, alignItems: 'center' }}>
-          <Text style={{ color: mediaColors.onMedia, ...appTheme.type.body, fontWeight: '700', fontVariant: ['tabular-nums'], ...REEL_TEXT_SHADOW }}>
-            {reelScrubLabel(clockSeconds, durationSeconds)}
-          </Text>
+          <View style={{ borderRadius: appTheme.radii.pill, backgroundColor: mediaColors.mediaChip, paddingHorizontal: 12, paddingVertical: 4 }}>
+            <AppText variant="button" color={mediaColors.onMedia} style={{ fontVariant: ['tabular-nums'] }}>
+              {reelScrubLabel(clockSeconds, durationSeconds)}
+            </AppText>
+          </View>
         </View>
       ) : null}
       <GestureDetector gesture={gesture}>
@@ -450,13 +321,14 @@ export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubb
           accessibilityLabel="Video progress"
           // Never back to undefined, which Android would not clear (hig-accessibility-label-states).
           accessibilityValue={{ text: interactive ? reelProgressAccessibilityText(clockSeconds, durationSeconds) : '' }}
-          accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+          accessibilityActions={SCRUB_ACCESSIBILITY_ACTIONS}
           onAccessibilityAction={onAccessibilityAction}
-          style={{ flex: 1, paddingHorizontal: REEL_PROGRESS_SIDE_INSET }}
+          // The line and a finger's width past either end, clear of the edge swipes.
+          style={{ position: 'absolute', top: 0, bottom: 0, left: frame.side, right: frame.side }}
         >
           <View
             onLayout={onTrackLayout}
-            style={{ position: 'absolute', left: REEL_PROGRESS_SIDE_INSET, right: REEL_PROGRESS_SIDE_INSET, bottom: frame.lineCenter - lineBoxHeight / 2, height: lineBoxHeight, justifyContent: 'center' }}
+            style={{ position: 'absolute', left: REEL_PROGRESS_END_SLOP, right: REEL_PROGRESS_END_SLOP, bottom: frame.lineCenter - LINE_BOX_HEIGHT / 2, height: LINE_BOX_HEIGHT, justifyContent: 'center' }}
           >
             <Reanimated.View
               style={[{ height: REEL_PROGRESS_LINE_HEIGHT, borderRadius: REEL_PROGRESS_LINE_HEIGHT / 2, overflow: 'hidden', backgroundColor: mediaColors.mediaTrack }, lineStyle]}
@@ -468,7 +340,7 @@ export function ReelProgressBar({ store, bottomInset }: { store: ReelVideoScrubb
               style={[{
                 position: 'absolute',
                 left: -THUMB_SIZE / 2,
-                top: (lineBoxHeight - THUMB_SIZE) / 2,
+                top: (LINE_BOX_HEIGHT - THUMB_SIZE) / 2,
                 width: THUMB_SIZE,
                 height: THUMB_SIZE,
                 borderRadius: THUMB_SIZE / 2,
