@@ -368,8 +368,11 @@ Checks. None needs a token, and nothing signs in:
 
 - `npm run ops:external-gates -- --probe-google-sign-in`: Supabase sends
   Continue with Google back to that callback, Google takes it there for the
-  client, and the callback's host answers for the project. That last check also
-  covers the DNS records and the certificate. The same request with a return URL
+  client, and the callback's host answers for the project. That last check sees
+  a missing CNAME and a certificate that has lapsed or names another host. It
+  cannot see a missing TXT record or a failed renewal before the certificate
+  lapses (the first one on 2027-02-26), and its only scheduled run is the
+  monthly Apple workflow's. The same request with a return URL
   nobody registered goes first and must be refused, so a pass means the probe
   can see a refusal.
 - `npm run ops:external-gates -- --probe-apple-web-sign-in`: Supabase sends
@@ -416,6 +419,9 @@ How activation went, for a repeat:
    about two minutes after the TXT resolved.
 3. `--probe-auth-callback-registrations` green.
 4. `supabase domains activate`.
+5. `--probe-google-sign-in` and `--probe-apple-web-sign-in` green, with the
+   variable set to the new callback. Retry through the first minute, while the
+   new host still answers 400.
 
 Before activation the custom host answers 400 "Project not specified". It went on
 answering that for about a minute after activation, so a sign-in finishing in that
