@@ -124,6 +124,8 @@ import { useAppTheme } from '@/lib/theme-context';
 import type { ShowcaseFeedEventType, ShowcaseFeedItem, ShowcaseFeedResponse, ShowcasePostResponse } from '@/lib/types';
 import type { AppleZoomOpen } from '@/lib/apple-zoom';
 import { useScrollWithinContent } from '@/lib/use-scroll-within-content';
+import { keyedMasonryData } from '@/lib/keyed-masonry-layouts';
+import { useKeyedMasonryPlace } from '@/lib/use-keyed-masonry-place';
 
 type FeedFilterId = MobileShowcaseFeedFilterId;
 
@@ -531,7 +533,20 @@ export default function ShowcaseScreen() {
     // clients talking to an older server during rollout.
     return user ? flattened : filterAnonymousSessionShowcaseFeedItems(flattened);
   }, [showcaseQuery.data?.pages, user]);
-  const cards = useMemo(() => buildShowcaseMasonry(showcaseItems), [showcaseItems]);
+  // Named as this lane's posts: a tile's height and column then follow its
+  // post when one leaves or comes back (a hide, a block, an Undo), and the grid
+  // keeps the reader's place when that happens above the screen
+  // (lib/keyed-masonry-layouts.ts). Another filter or tool is another feed.
+  const laneScope = useMemo(() => JSON.stringify(queryKey), [queryKey]);
+  const cards = useMemo(
+    () => keyedMasonryData(buildShowcaseMasonry(showcaseItems), laneScope),
+    [showcaseItems, laneScope],
+  );
+  const keyedMasonryPlace = useKeyedMasonryPlace(feedRef, cards);
+  const handleContentSizeChange = useCallback((contentWidth: number, contentHeight: number) => {
+    keepScrollWithinContent(contentWidth, contentHeight);
+    keyedMasonryPlace.onContentSizeChange();
+  }, [keepScrollWithinContent, keyedMasonryPlace]);
   const showcasePageCount = showcaseQuery.data?.pages.length ?? 0;
   // Keyed off the rendered cards, not the ranked items: a page that is entirely
   // text posts renders nothing, and that has to read as empty, not as loaded.
@@ -725,6 +740,7 @@ export default function ShowcaseScreen() {
   // Scroll events arrive every frame; only the moment the header passes under
   // the status bar, one way or the other, reaches React.
   const trackListOffset = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    keyedMasonryPlace.onScroll(event.nativeEvent.contentOffset.y);
     const scrolledOff = listHeaderHeight > 0
       && event.nativeEvent.contentOffset.y >= LIST_HEADER_TOP_GAP + listHeaderHeight;
     if (scrolledOff === listHeaderScrolledOffRef.current) return;
@@ -1000,7 +1016,10 @@ export default function ShowcaseScreen() {
         data={isFirstLoad ? [] : cards}
         drawDistance={SHOWCASE_DRAW_DISTANCE}
         extraData={feedExtraData}
-        onScrollBeginDrag={() => dispatchActivation({ type: 'dragBegin' })}
+        onScrollBeginDrag={() => {
+          keyedMasonryPlace.onScrollBeginDrag();
+          dispatchActivation({ type: 'dragBegin' });
+        }}
         onScrollEndDrag={(event) => dispatchActivation({
           type: 'dragEnd',
           velocityY: event.nativeEvent.velocity?.y,
@@ -1008,16 +1027,15 @@ export default function ShowcaseScreen() {
         onMomentumScrollBegin={() => dispatchActivation({ type: 'momentumBegin' })}
         onMomentumScrollEnd={() => dispatchActivation({ type: 'momentumEnd' })}
         onScroll={trackListOffset}
-        onContentSizeChange={keepScrollWithinContent}
+        onContentSizeChange={handleContentSizeChange}
         getItemType={(item) => item.mediaKind ?? item.item.category}
         keyExtractor={(item) => item.id}
         // FlashList's default keeps whichever post is first on screen in place
         // across a data change, finding it again by key. A filter switch is a
         // new feed, though: Free's first post also sits further down All, so
-        // Free → All opened there rather than at the top. Off, little is lost:
-        // in this masonry a card that grows or leaves above the screen
-        // re-places every card after it, and pinning one card never held the
-        // rest still.
+        // Free → All opened there rather than at the top. The reader's place
+        // within one feed is kept by the keyed masonry instead (`cards` above),
+        // which knows a filter switch from a post leaving.
         maintainVisibleContentPosition={{ disabled: true }}
         masonry
         numColumns={2}
