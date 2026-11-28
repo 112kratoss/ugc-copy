@@ -28,6 +28,7 @@ import {
   SHOWCASE_FEED_FALLBACK_ALGORITHM_VERSION,
   buildFallbackRankedFeedFeatures,
   buildRecommendationContext,
+  buildRepeatSittings,
   compareSeenTier,
   decodeRankedFeedCursor,
   encodeRankedFeedCursor,
@@ -225,6 +226,12 @@ function scoreComponents(
     seen_recently: features.seenRecently,
     // What ordered a repeat among the repeats (`compareSeenTier`).
     last_seen_at: features.lastSeenAt ?? null,
+    // When the sitting it was last seen in began: repeats of one sitting are
+    // tied, and the session's `random_seed` orders the tie. Null for a post
+    // ordered by `last_seen_at` alone.
+    seen_sitting_at: typeof entry.repeatSittingAt === 'number'
+      ? new Date(entry.repeatSittingAt).toISOString()
+      : null,
     semantic_cluster: features.semanticCluster ?? null,
     // v3 RPC columns, under the names normalizeRankedFeedFeatureRow reads, so
     // a continuation page judges visibility at the level the session was
@@ -510,6 +517,58 @@ async function loadTopUpLastSeen({
   } catch (error) {
     logBackendError('error_loading_feed_top_up_seen', { error });
     return new Map();
+  }
+}
+
+/** The most earlier rankings a ranking ties its repeats by: the newest hundred. */
+const RANKING_STARTS_LIMIT = 100;
+
+/**
+ * When the viewer's earlier rankings began (ms), newest first, for the order
+ * of repeats (`RepeatSittings` in `showcase-feed-ranking.ts`): posts last seen
+ * between two of these moments were seen in one sitting and are tied. Every
+ * feed session of the viewer counts, whatever its lane, since an impression in
+ * any lane makes a post seen in all of them. One read through the
+ * (viewer, created_at) index, over the lookback the seen state itself has.
+ *
+ * Empty under the first RPC (it reports no repeats), with no lookback, with no
+ * identity, and when the read fails: repeats then go by last seen alone, as
+ * they did before 2026-11-28. A post seen before the oldest moment returned
+ * keeps its exact place by last seen.
+ */
+async function loadRankingStarts({
+  anonymousKeyHash,
+  candidateRpc,
+  lookbackDays,
+  serviceClient,
+  viewerUserId,
+}: {
+  anonymousKeyHash: string | null;
+  candidateRpc: RankedFeedRetrievalConfig['candidateRpc'];
+  lookbackDays: number;
+  serviceClient: SupabaseClient;
+  viewerUserId: string | null;
+}): Promise<number[]> {
+  if (candidateRpc === 'v1' || lookbackDays <= 0 || (!viewerUserId && !anonymousKeyHash)) return [];
+
+  try {
+    const since = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString();
+    const query = serviceClient
+      .from('feed_sessions')
+      .select('created_at')
+      .gte('created_at', since);
+    const { data, error } = await (viewerUserId
+      ? query.eq('viewer_user_id', viewerUserId)
+      : query.is('viewer_user_id', null).eq('anonymous_key_hash', anonymousKeyHash as string))
+      .order('created_at', { ascending: false })
+      .limit(RANKING_STARTS_LIMIT);
+    if (error) throw error;
+    return ((data ?? []) as Array<{ created_at: unknown }>)
+      .map((row) => (typeof row.created_at === 'string' ? Date.parse(row.created_at) : Number.NaN))
+      .filter((start) => Number.isFinite(start));
+  } catch (error) {
+    logBackendError('error_loading_feed_ranking_starts', { error });
+    return [];
   }
 }
 
@@ -1493,6 +1552,18 @@ async function rankFreshCandidates({
     (error: unknown) => ({ ok: false as const, error }),
   );
   const earlyFallback = fallbackIsOneRead ? readFallback() : null;
+  const repeatOrder: RankedFeedRepeatOrder = offset > 0 ? 'score' : 'least-recent';
+  // Read beside the candidate read (it never rejects), for the order of
+  // repeats; a ranking that keeps them by score has no use for it.
+  const rankingStartsRead = repeatOrder === 'least-recent'
+    ? timed('ranking_starts', () => loadRankingStarts({
+      anonymousKeyHash: viewerUserId ? null : anonymousKeyHash,
+      candidateRpc: algorithm.retrieval.candidateRpc,
+      lookbackDays: algorithm.retrieval.seenLookbackDays,
+      serviceClient,
+      viewerUserId,
+    }))
+    : Promise.resolve<number[]>([]);
   const featureRows = await timed('candidate_rpc', () => loadCandidateFeatures({
     algorithm,
     anonymousKeyHash,
@@ -1500,15 +1571,22 @@ async function rankFreshCandidates({
     serviceClient,
     viewerUserId,
   }));
+  // Drawn before ranking and persisted with the session: the cold-start slot's
+  // Thompson draws, and the order of repeats seen in one sitting, replay
+  // exactly from it.
+  const seed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset, seedBucket });
+  const { randomSeed } = seed;
+  const sittingStarts = await rankingStartsRead;
+  const sittings = repeatOrder === 'least-recent' ? buildRepeatSittings(sittingStarts, randomSeed) : null;
   // Hydration is budgeted, so the pre-sort must already respect the seen tier;
   // otherwise repeats consume the budget and never reach the reranker as the
   // last resort they are meant to be.
-  // The ranker's own order inside the tier (`compareSeenTier`), so the repeats
-  // that reach it past the budget are the ones it would lead with.
-  const repeatOrder: RankedFeedRepeatOrder = offset > 0 ? 'score' : 'least-recent';
+  // The ranker's own order inside the tier (`compareSeenTier`, the same
+  // sittings and seed), so the repeats that reach it past the budget are the
+  // ones it would lead with.
   const sortedFeatureRows = featureRows
     ? [...featureRows].sort((left, right) => (
-      compareSeenTier(left, right, repeatOrder)
+      compareSeenTier(left, right, repeatOrder, sittings)
       || scoreRankedFeedFeatures(right, algorithm.scoreWeights)
       - scoreRankedFeedFeatures(left, algorithm.scoreWeights)
     ))
@@ -1605,10 +1683,6 @@ async function rankFreshCandidates({
         sources: ['fresh'],
       };
     });
-  // Drawn before ranking and persisted with the session: the cold-start slot's
-  // Thompson draws replay exactly from it.
-  const seed = rankingSeed({ identityless: !viewerUserId && !anonymousKeyHash, offset, seedBucket });
-  const { randomSeed } = seed;
   const rankingStartedAt = performance.now();
   const ranked = rankAndDiversifyShowcaseItems({
     items: candidateItems,
@@ -1619,6 +1693,7 @@ async function rankFreshCandidates({
     seenPenalty: algorithm.retrieval.seenPenalty,
     seed: randomSeed,
     repeatOrder,
+    sittingStarts,
   }).slice(0, algorithm.eligibleItemLimit);
   onPhaseTiming?.('ranking', performance.now() - rankingStartedAt);
   return { ranked, randomSeed, seedBucket: seed.seedBucket };

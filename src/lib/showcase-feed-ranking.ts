@@ -219,6 +219,11 @@ export type RankedShowcaseItem = {
   features: RankedFeedFeatureRow;
   score: number;
   components: RankedFeedScoreComponents;
+  /**
+   * For a repeat ranked by sitting: when the sitting it was last seen in began
+   * (ms), or null for one seen before every ranking known (`RepeatSittings`).
+   */
+  repeatSittingAt?: number | null;
 };
 
 // Defaults stay exactly at v1: a missing weight key must never silently
@@ -686,16 +691,78 @@ function lastSeenMs(features: Pick<RankedFeedFeatureRow, 'lastSeenAt'>) {
  * and the catalog goes round once before a post returns. The price: among
  * repeats a stronger post seen a minute ago waits behind a weaker one seen
  * yesterday. A new post is unseen and still leads them all.
+ *
+ * Told where the viewer's earlier rankings began (`sittings`), "longest ago"
+ * is counted in sittings, not moments: `RepeatSittings`.
  */
 export function compareSeenTier(
-  left: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt'>,
-  right: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt'>,
+  left: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt' | 'postId'>,
+  right: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt' | 'postId'>,
   repeatOrder: RankedFeedRepeatOrder = 'least-recent',
+  sittings: RepeatSittings | null = null,
 ) {
-  return (
-    Number(left.seenRecently) - Number(right.seenRecently)
-    || (repeatOrder === 'least-recent' && left.seenRecently ? lastSeenMs(left) - lastSeenMs(right) : 0)
-  );
+  const tier = Number(left.seenRecently) - Number(right.seenRecently);
+  if (tier || repeatOrder !== 'least-recent' || !left.seenRecently) return tier;
+  const leftSeen = lastSeenMs(left);
+  const rightSeen = lastSeenMs(right);
+  if (!sittings) return leftSeen - rightSeen;
+  const leftSitting = sittingStartMs(leftSeen, sittings);
+  const rightSitting = sittingStartMs(rightSeen, sittings);
+  // A post seen before the oldest ranking known is in no sitting: it keeps its
+  // own moment, which is earlier than every sitting.
+  if (leftSitting === null || leftSitting !== rightSitting) {
+    return (leftSitting ?? leftSeen) - (rightSitting ?? rightSeen);
+  }
+  return sittingDraw(sittings.seed, left.postId) - sittingDraw(sittings.seed, right.postId);
+}
+
+/**
+ * The viewer's earlier rankings, as the moments they began (ms, oldest first),
+ * and the seed of the ranking being made. Built by `buildRepeatSittings`.
+ *
+ * A sitting is the time between two of those moments: the posts a reader saw
+ * under one ranking, before they asked for the next. Posts last seen in the
+ * same sitting are tied, and the tie is ordered by a draw from the seed, so it
+ * differs at every ranking and replays within one.
+ *
+ * Why (owner's S24, 2026-11-28, the first pull after repeats went by last
+ * seen): a reader who scrolls a whole lane sees its posts in page order, so
+ * their last-seen times are that page's order and the next ranking was the
+ * same run of posts again. And a pull is made from the top of the page: the
+ * tiles on screen at that moment are the ones seen first in the sitting, which
+ * by last seen alone came back first. Between sittings the order stays by
+ * time: what was looked at since the last ranking is still shown last, and
+ * the catalog still goes round. An event is refused unless it occurred at or
+ * after its session's `created_at` (`record_showcase_feed_events`), so an
+ * impression never falls in a sitting before the ranking that showed it.
+ */
+export type RepeatSittings = { readonly starts: readonly number[]; readonly seed: number };
+
+/** Null when there is no earlier ranking to tie by: repeats then go by last seen alone. */
+export function buildRepeatSittings(starts: readonly number[] | null | undefined, seed: number): RepeatSittings | null {
+  const known = (starts ?? []).filter((start) => Number.isFinite(start)).sort((left, right) => left - right);
+  return known.length > 0 ? { starts: known, seed } : null;
+}
+
+/** The start of the sitting a moment falls in: the latest ranking begun at or before it. */
+function sittingStartMs(seenMs: number, { starts }: RepeatSittings): number | null {
+  let low = 0;
+  let high = starts.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (starts[middle] <= seenMs) low = middle + 1;
+    else high = middle;
+  }
+  return low > 0 ? starts[low - 1] : null;
+}
+
+/** A post's place among the posts of its sitting, in [0, 1): FNV-1a of its id from the seed, mixed once. */
+function sittingDraw(seed: number, postId: string) {
+  let hash = (2166136261 ^ seed) >>> 0;
+  for (let index = 0; index < postId.length; index += 1) {
+    hash = Math.imul(hash ^ postId.charCodeAt(index), 16777619);
+  }
+  return mulberry32(hash >>> 0)();
 }
 
 /**
@@ -729,9 +796,10 @@ function compareRankedCandidates(
   left: RankedShowcaseItem,
   right: RankedShowcaseItem,
   repeatOrder: RankedFeedRepeatOrder,
+  sittings: RepeatSittings | null,
 ) {
   return (
-    compareSeenTier(left.features, right.features, repeatOrder)
+    compareSeenTier(left.features, right.features, repeatOrder, sittings)
     || right.score - left.score
     // By score, the repeat seen longest ago still wins a tie.
     || (left.features.lastSeenAt ?? '').localeCompare(right.features.lastSeenAt ?? '')
@@ -749,6 +817,7 @@ function applyAuthorDecay(
   ordered: RankedShowcaseItem[],
   diversityConfig: RankedFeedDiversityConfig,
   repeatOrder: RankedFeedRepeatOrder,
+  sittings: RepeatSittings | null,
 ) {
   const postsAboveByCreator = new Map<string, number>();
   let decayed = false;
@@ -763,7 +832,7 @@ function applyAuthorDecay(
       decayed = true;
     }
   }
-  if (decayed) ordered.sort((left, right) => compareRankedCandidates(left, right, repeatOrder));
+  if (decayed) ordered.sort((left, right) => compareRankedCandidates(left, right, repeatOrder, sittings));
 }
 
 function isColdStartEligible(features: RankedFeedFeatureRow, diversityConfig: RankedFeedDiversityConfig) {
@@ -858,6 +927,7 @@ export function rankAndDiversifyShowcaseItems({
   seenPenalty = DEFAULT_SEEN_REPEAT_PENALTY,
   seed = 0,
   repeatOrder = 'least-recent',
+  sittingStarts = null,
 }: {
   featureRows: RankedFeedFeatureRow[];
   items: ShowcaseFeedItem[];
@@ -865,13 +935,19 @@ export function rankAndDiversifyShowcaseItems({
   scoreWeights?: RankedFeedScoreWeights;
   diversityConfig?: RankedFeedDiversityConfig;
   seenPenalty?: number;
-  /** The session's `random_seed`: the cold-start draws replay exactly from it. */
+  /**
+   * The session's `random_seed`: the cold-start draws, and the order of repeats
+   * seen in one sitting, replay exactly from it.
+   */
   seed?: number;
   /** `score` for a ranking that continues another's list (`RankedFeedRepeatOrder`). */
   repeatOrder?: RankedFeedRepeatOrder;
+  /** When the viewer's earlier rankings began, in ms (`RepeatSittings`). Unused by score. */
+  sittingStarts?: readonly number[] | null;
 }): RankedShowcaseItem[] {
   // A config built before v3 lacks the new keys; they read as off.
   const config: RankedFeedDiversityConfig = { ...DEFAULT_RANKED_FEED_DIVERSITY_CONFIG, ...diversityConfig };
+  const sittings = repeatOrder === 'least-recent' ? buildRepeatSittings(sittingStarts, seed) : null;
   const offsetScores = rankedFeedMultipliersActive(config);
   const featuresByPostId = new Map(featureRows.map((row) => [row.postId, row]));
   const remaining = items
@@ -891,6 +967,9 @@ export function rankAndDiversifyShowcaseItems({
         item,
         features,
         score,
+        repeatSittingAt: sittings && features.seenRecently
+          ? sittingStartMs(lastSeenMs(features), sittings)
+          : null,
         components: {
           base,
           offset,
@@ -902,8 +981,8 @@ export function rankAndDiversifyShowcaseItems({
         },
       };
     })
-    .sort((left, right) => compareRankedCandidates(left, right, repeatOrder));
-  applyAuthorDecay(remaining, config, repeatOrder);
+    .sort((left, right) => compareRankedCandidates(left, right, repeatOrder, sittings));
+  applyAuthorDecay(remaining, config, repeatOrder, sittings);
   const coldStartPick = drawColdStartPick(remaining, config, seed);
   const coldStartSlotIndex = config.coldStartSlotRank - 1;
   let coldStartPending = coldStartPick !== null;

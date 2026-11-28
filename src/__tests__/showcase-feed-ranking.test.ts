@@ -282,6 +282,107 @@ describe('showcase feed ranking', () => {
     });
   });
 
+  // Owner's S24, 2026-11-28, the first pull after the rule above shipped: at
+  // 07:49 UTC he had scrolled 42 of his lane's 49 posts in one go, so he saw
+  // them in page order, and "seen longest ago first" was that page again:
+  // places 12 to 48 of the 10:14 ranking were the 07:49 sequence, post for
+  // post, and two of its first four tiles were back on the first screen.
+  describe('repeats seen in one sitting', () => {
+    const SCROLL_STARTED = Date.parse('2026-11-28T07:49:01.000Z');
+    const lane = Array.from({ length: 24 }, (_, index) => createItem(`post-${String(index).padStart(2, '0')}`));
+    /** The whole lane scrolled once, top to bottom, a second a tile. */
+    const scrolledOnce = () => new Map(lane.map((post, index) => (
+      [post.id, new Date(SCROLL_STARTED + (index + 1) * 1000).toISOString()]
+    )));
+    const rank = ({
+      repeatOrder,
+      seed,
+      seenAt,
+      sittingStarts,
+    }: {
+      repeatOrder?: 'least-recent' | 'score';
+      seed: number;
+      seenAt: Map<string, string>;
+      sittingStarts?: number[];
+    }) => rankAndDiversifyShowcaseItems({
+      items: lane,
+      featureRows: lane.map((post, index) => features(post.id, {
+        interestMatch: 1 - index * 0.02,
+        seenRecently: true,
+        lastSeenAt: seenAt.get(post.id) as string,
+      })),
+      seed,
+      sittingStarts,
+      repeatOrder,
+    });
+    const ids = (ranked: ReturnType<typeof rank>) => ranked.map((entry) => entry.item.id);
+    const scrollOrder = lane.map((post) => post.id);
+
+    it('replays the scroll when it is not told where the sitting began (the fault)', () => {
+      expect(ids(rank({ seed: 7, seenAt: scrolledOnce() }))).toEqual(scrollOrder);
+    });
+
+    it('gives a scrolled lane a different order at each ranking', () => {
+      const seenAt = scrolledOnce();
+      const first = ids(rank({ seed: 7, seenAt, sittingStarts: [SCROLL_STARTED] }));
+      const second = ids(rank({ seed: 8, seenAt, sittingStarts: [SCROLL_STARTED] }));
+
+      expect(first).not.toEqual(scrollOrder);
+      expect(second).not.toEqual(first);
+      // The first screen is not the top of the page he scrolled.
+      expect(first.slice(0, 4)).not.toEqual(scrollOrder.slice(0, 4));
+      expect([...first].sort()).toEqual(scrollOrder);
+      // One ranking, one order: a session replays from its seed.
+      expect(ids(rank({ seed: 7, seenAt, sittingStarts: [SCROLL_STARTED] }))).toEqual(first);
+    });
+
+    it('still shows last what was looked at since the last ranking', () => {
+      const seenAt = scrolledOnce();
+      const starts = [SCROLL_STARTED];
+      const lookedAt: string[][] = [];
+      for (let pull = 0; pull < 3; pull += 1) {
+        const pulledAt = SCROLL_STARTED + (pull + 1) * 600_000;
+        const page = ids(rank({ seed: 20 + pull, seenAt, sittingStarts: starts }));
+        // Nothing he looked at after an earlier pull is on this first screen.
+        expect(page.slice(0, 4).filter((id) => lookedAt.flat().includes(id)), `pull ${pull}`).toEqual([]);
+        // Each earlier screen closes the page, the one looked at first before the next.
+        lookedAt.forEach((screen, index) => {
+          const from = page.length - lookedAt.slice(index).flat().length;
+          expect(page.slice(from, from + screen.length).sort(), `pull ${pull}, screen ${index}`).toEqual([...screen].sort());
+        });
+        // He looks at the first screen of this ranking, then pulls again.
+        starts.push(pulledAt);
+        const screen = page.slice(0, 4);
+        screen.forEach((id, index) => seenAt.set(id, new Date(pulledAt + 2000 + index).toISOString()));
+        lookedAt.push(screen);
+      }
+    });
+
+    it('keeps the exact order of posts seen before the oldest ranking it is told of', () => {
+      const seenAt = scrolledOnce();
+      const page = ids(rank({ seed: 7, seenAt, sittingStarts: [SCROLL_STARTED + 12_500] }));
+
+      // The first twelve were seen before that ranking began: by last seen.
+      expect(page.slice(0, 12)).toEqual(scrollOrder.slice(0, 12));
+      expect(page.slice(12)).not.toEqual(scrollOrder.slice(12));
+      expect(page.slice(12).sort()).toEqual(scrollOrder.slice(12));
+    });
+
+    it('says which sitting ordered each repeat', () => {
+      const ranked = rank({ seed: 7, seenAt: scrolledOnce(), sittingStarts: [SCROLL_STARTED + 12_500, Number.NaN] });
+      const byId = new Map(ranked.map((entry) => [entry.item.id, entry.repeatSittingAt ?? null]));
+
+      expect(byId.get('post-00')).toBeNull();
+      expect(byId.get('post-23')).toBe(SCROLL_STARTED + 12_500);
+    });
+
+    it('leaves a ranking that continues another one in score order', () => {
+      const page = ids(rank({ repeatOrder: 'score', seed: 7, seenAt: scrolledOnce(), sittingStarts: [SCROLL_STARTED] }));
+
+      expect(page).toEqual(scrollOrder);
+    });
+  });
+
   it('round trips stable opaque cursors and rejects malformed values', () => {
     const encoded = encodeRankedFeedCursor({ sessionId: 'session-1', position: 24 });
     expect(decodeRankedFeedCursor(encoded)).toEqual({ sessionId: 'session-1', position: 24 });
