@@ -1762,6 +1762,150 @@ describe('for-you-rules v3 wiring', () => {
     });
   });
 
+  // Owner's S24, 2026-11-28: a lane scrolled once was seen in page order, so
+  // by last seen alone the next ranking replayed it. Repeats seen under one
+  // earlier ranking are tied, and the tie is drawn from the new ranking's seed.
+  describe('repeats seen in one sitting', () => {
+    const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const ranking = (createdAt: string, viewer: Record<string, unknown> = { viewer_user_id: 'viewer-1' }) => ({
+      created_at: createdAt,
+      viewer_user_id: null,
+      anonymous_key_hash: null,
+      ...viewer,
+    });
+    // Twenty repeats seen top to bottom between 50 and 49 minutes ago, the
+    // strongest first: the page order, the score order and the last-seen order agree.
+    const scrolled = (count = 20) => Array.from({ length: count }, (_, index) => (
+      v3Candidate(`scrolled-${String(index).padStart(2, '0')}`, {
+        interest_match: 0.9 - index * 0.01,
+        seen_recently: true,
+        last_seen_at: minutesAgo(50 - index * 0.01),
+      })
+    ));
+    const scrollOrder = (count = 20) => scrolled(count).map((row) => row.post_id);
+    const startsRead = (reads: ReturnType<typeof v3Client>['reads']) => reads.filter((read) => (
+      read.table === 'feed_sessions' && read.calls.some(([method]) => method === 'order')
+      && read.calls.some(([method, value]) => method === 'limit' && value === 100)
+    ));
+
+    it('does not replay the scroll, and still shows last what was seen since the last ranking', async () => {
+      const scrollBegan = minutesAgo(60);
+      const lastPull = minutesAgo(10);
+      const { client, persisted } = v3Client({
+        candidates: [
+          ...scrolled(),
+          v3Candidate('looked-at-since', { interest_match: 0.99, seen_recently: true, last_seen_at: minutesAgo(9) }),
+        ],
+        // Another viewer's ranking began in the middle of the scroll: read as
+        // this viewer's, it would cut the scroll into two sittings.
+        rows: { feed_sessions: [ranking(lastPull), ranking(scrollBegan), ranking(minutesAgo(49.9), { viewer_user_id: 'viewer-2' })] },
+      });
+
+      await forYouPage(client);
+
+      const order = persisted[0].p_items.map((entry) => entry.post_id);
+      expect(order.at(-1)).toBe('looked-at-since');
+      expect(order.slice(0, -1)).not.toEqual(scrollOrder());
+      expect(order.slice(0, -1).sort()).toEqual(scrollOrder());
+      // A stored session says which sitting ordered each repeat.
+      const byPost = new Map(persisted[0].p_items.map((entry) => [entry.post_id, entry.score_components]));
+      scrollOrder().forEach((postId) => {
+        expect(byPost.get(postId), postId).toMatchObject({ seen_sitting_at: scrollBegan });
+      });
+      expect(byPost.get('looked-at-since')).toMatchObject({ seen_sitting_at: lastPull });
+    });
+
+    it('reads when the viewer\'s rankings began, newest first under a cap, within the seen lookback', async () => {
+      const { client, reads } = v3Client({ candidates: scrolled(3) });
+
+      await forYouPage(client);
+
+      const [read, ...others] = startsRead(reads);
+      expect(others).toEqual([]);
+      expect(read.filters).toContainEqual(['eq', 'viewer_user_id', 'viewer-1']);
+      expect(read.filters.some(([, field]) => field === 'anonymous_key_hash')).toBe(false);
+      const since = read.filters.find(([operator, field]) => operator === 'gte' && field === 'created_at')?.[2] as string;
+      const lookbackMs = FOR_YOU_RULES_V3_RETRIEVAL_CONFIG.seen_lookback_days * 24 * 3_600_000;
+      expect(Math.abs(Date.now() - lookbackMs - Date.parse(since))).toBeLessThan(60_000);
+      expect(read.calls).toEqual([['order', 'created_at', { ascending: false }], ['limit', 100]]);
+    });
+
+    it('reads a guest\'s rankings by the guest\'s key', async () => {
+      const { client, persisted, reads } = v3Client({
+        candidates: scrolled(),
+        rows: { feed_sessions: [ranking(minutesAgo(60), { anonymous_key_hash: 'guest-hash' })] },
+      });
+
+      await forYouPage(client, { anonymousKeyHash: 'guest-hash', viewerUserId: null });
+
+      const [read] = startsRead(reads);
+      expect(read.filters).toContainEqual(['eq', 'anonymous_key_hash', 'guest-hash']);
+      expect(read.filters.some(([, field]) => field === 'viewer_user_id')).toBe(false);
+      expect(read.calls[0]).toEqual(['is', 'viewer_user_id', null]);
+      expect(persisted[0].p_items.map((entry) => entry.post_id)).not.toEqual(scrollOrder());
+    });
+
+    it('goes by last seen alone when no earlier ranking is known, or the read fails', async () => {
+      const none = v3Client({ candidates: scrolled() });
+      await forYouPage(none.client);
+      expect(none.persisted[0].p_items.map((entry) => entry.post_id)).toEqual(scrollOrder());
+      expect(none.persisted[0].p_items[0].score_components).toMatchObject({ seen_sitting_at: null });
+
+      const failing = v3Client({
+        candidates: scrolled(),
+        failingTable: 'feed_sessions',
+        rows: { feed_sessions: [ranking(minutesAgo(60))] },
+      });
+      await forYouPage(failing.client);
+      expect(failing.persisted[0].p_items.map((entry) => entry.post_id)).toEqual(scrollOrder());
+      expect(loggerMocks.logBackendError).toHaveBeenCalledWith('error_loading_feed_ranking_starts', expect.anything());
+    });
+
+    it('makes no read for an offset page, without an identity, without a lookback, or under the first RPC', async () => {
+      const rows = { feed_sessions: [ranking(minutesAgo(60), { anonymous_key_hash: 'a'.repeat(64) })] };
+      const rankSpy = await spyOnRanking();
+      const offsetPage = v3Client({ candidates: scrolled(), rows });
+      await forYouPage(offsetPage.client, { anonymousKeyHash: 'a'.repeat(64), offset: 12, viewerUserId: null });
+      expect(startsRead(offsetPage.reads)).toEqual([]);
+      expect(rankSpy.mock.results[0].value.map((entry: RankedShowcaseItem) => entry.item.id)).toEqual(scrollOrder());
+
+      const identityless = v3Client({ candidates: scrolled(), rows });
+      await forYouPage(identityless.client, { viewerUserId: null });
+      expect(startsRead(identityless.reads)).toEqual([]);
+
+      const noLookback = v3Client({
+        candidates: scrolled(),
+        retrievalConfig: { ...FOR_YOU_RULES_V3_RETRIEVAL_CONFIG, seen_lookback_days: 0 },
+      });
+      await forYouPage(noLookback.client);
+      expect(startsRead(noLookback.reads)).toEqual([]);
+
+      const firstRpcConfig: Record<string, unknown> = { ...FOR_YOU_RULES_V3_RETRIEVAL_CONFIG };
+      delete firstRpcConfig.candidate_rpc;
+      const firstRpc = v3Client({ candidates: scrolled(), retrievalConfig: firstRpcConfig });
+      await forYouPage(firstRpc.client);
+      expect(startsRead(firstRpc.reads)).toEqual([]);
+    });
+
+    it('hydrates, of a sitting over the budget, the repeats the ranking will lead with', async () => {
+      // 70 repeats of one sitting for 60 places: the ten left out are the ten
+      // the seed draws last, not the ten scrolled past last.
+      const rankSpy = await spyOnRanking();
+      const { client, persisted } = v3Client({
+        candidates: scrolled(70),
+        rows: { feed_sessions: [ranking(minutesAgo(60))] },
+      });
+
+      await forYouPage(client);
+
+      const hydrated = (rankSpy.mock.calls[0][0].items as ShowcaseFeedItem[]).map((entry) => entry.id);
+      expect(hydrated).toHaveLength(60);
+      expect([...hydrated].sort()).not.toEqual(scrollOrder(70).slice(0, 60));
+      // The ranker is given the same starts and seed, so it keeps that order.
+      expect(persisted[0].p_items.map((entry) => entry.post_id)).toEqual(hydrated);
+    });
+  });
+
   it('applies the negative-feedback rules only to creators the viewer does not follow', async () => {
     const candidates = [
       v3Candidate('calm'),
@@ -2345,8 +2489,12 @@ describe('for-you-rules v3 wiring', () => {
       expect(prepared?.ranked).toHaveLength(20);
       expect(rpc.mock.calls.map(([name]) => name)).toEqual(['get_ranked_feed_candidates_v3']);
       expect(persisted).toEqual([]);
-      // Not even a reuse lookup: nothing about a session is read or written.
-      expect(reads.filter((read) => FEED_TABLES.includes(read.table))).toEqual([]);
+      // Not even a reuse lookup: nothing about a session is written, and the
+      // one read is of when the viewer's earlier rankings began, which orders
+      // the repeats (`loadRankingStarts`).
+      expect(reads.filter((read) => FEED_TABLES.includes(read.table)).map((read) => [read.table, read.calls])).toEqual([
+        ['feed_sessions', [['order', 'created_at', { ascending: false }], ['limit', 100]]],
+      ]);
     });
 
     it('prepares nothing for no identity, or for an empty ranking', async () => {
