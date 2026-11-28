@@ -33,6 +33,7 @@ import {
 } from '@/lib/edit-profile-form';
 import { isNetworkRequestFailedError } from '@/lib/supabase-auth-recovery';
 import { useAuth } from '@/lib/auth';
+import { clearCreatorSetupAnswers, peekCreatorSetupAnswers, type CreatorSetupAnswers } from '@/lib/creator-setup-answers';
 import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { onboardingReturnTo } from '@/lib/join-navigation';
 import { completeAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
@@ -124,6 +125,22 @@ function authDisplayName(metadata: Record<string, unknown> | undefined) {
   return typeof candidate === 'string' ? candidate.trim() : '';
 }
 
+type SetupAccount = { email?: string | null; user_metadata?: Record<string, unknown> };
+
+/**
+ * What the creator-name step opens with: the name the account has, or the one its sign-in brought,
+ * and its handle, or a handle made for it while it still carries the signup placeholder (owner,
+ * 2026-11-08), which they can change.
+ */
+function identityStart(profile: ProfileResponse, account: SetupAccount) {
+  const displayName = profile.displayName?.trim() || authDisplayName(account.user_metadata) || account.email?.split('@')[0] || 'Creator';
+  if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(profile.username ?? '')) {
+    const first = firstHandleSuggestion(displayName, account.email ?? null, (handle) => !readLocalUsernameRejection(handle));
+    return { displayName, username: first, suggestion: startHandleSuggestion(first) as HandleSuggestion | null };
+  }
+  return { displayName, username: profile.username ?? '', suggestion: null as HandleSuggestion | null };
+}
+
 /**
  * The first run stays dark in both schemes: its art is a neon night scene made
  * for black, and a flow that changed its look between steps would read as
@@ -169,11 +186,19 @@ function OnboardingFlow() {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const [step, setStep] = useState(state.introStep);
+  // The answers the sign-in page read on its way here (`lib/creator-setup-answers.ts`), and the
+  // name step they open: the setup then starts on that step, never on "Preparing your creator
+  // setup" first. Built once, with the screen.
+  const [handed] = useState<{ answers: CreatorSetupAnswers; start: ReturnType<typeof identityStart> } | null>(() => {
+    const answers = user ? peekCreatorSetupAnswers(user.id) : null;
+    return answers && user ? { answers, start: identityStart(answers.profile, user) } : null;
+  });
+  const handedRef = useRef(handed);
   // A signed-in creator never belongs on the guest intro, so open straight into
   // `loading` and let the resolver pick the real stage. Seeding `intro` here is
   // what put an account holder on the welcome card while the profile fetch was
   // still in flight.
-  const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? 'loading' : 'intro');
+  const [stage, setStage] = useState<'intro' | 'loading' | 'identity' | 'reward'>(user ? (handed ? 'identity' : 'loading') : 'intro');
   // Seen in this run of the app: Home does not open it again until the next start.
   useEffect(() => {
     markSetupShownThisRun();
@@ -184,15 +209,15 @@ function OnboardingFlow() {
   const isFlowFocused = useIsFocused();
   useHardwareBack(stage === 'identity' && isFlowFocused, () => undefined);
   const [goal, setGoal] = useState<OnboardingGoal>(state.goal);
-  const [profile, setProfile] = useState<ProfileResponse | null>(null);
-  const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(null);
-  const [displayName, setDisplayName] = useState('');
-  const [username, setUsername] = useState('');
+  const [profile, setProfile] = useState<ProfileResponse | null>(handed?.answers.profile ?? null);
+  const [welcome, setWelcome] = useState<WelcomeCreditResponse | null>(handed?.answers.welcome ?? null);
+  const [displayName, setDisplayName] = useState(handed?.start.displayName ?? '');
+  const [username, setUsername] = useState(handed?.start.username ?? '');
   // The handle this screen filled in, while it is still the field's value: it
   // follows the display name and a taken one is swapped for a numbered one,
   // but nothing moves while the handle field has the cursor or a save runs,
   // and typing in the handle field ends it (owner 11-08, review of #735).
-  const [suggestion, setSuggestion] = useState<HandleSuggestion | null>(null);
+  const [suggestion, setSuggestion] = useState<HandleSuggestion | null>(handed?.start.suggestion ?? null);
   const [handleFocused, setHandleFocused] = useState(false);
   // A save that failed for a reason other than the handle: the step then
   // offers a way out, so a lost connection cannot hold someone on it.
@@ -224,26 +249,33 @@ function OnboardingFlow() {
 
   const loadAuthenticatedStage = useCallback(async () => {
     if (!user) return;
-    setStage('loading');
-    setMessage(null);
+    // Answers the sign-in page handed over were applied as the screen was built:
+    // no loading card and no second read, once.
+    const handedAnswers = handedRef.current?.answers.profile.id === user.id ? handedRef.current.answers : null;
+    handedRef.current = null;
+    if (handedAnswers) {
+      clearCreatorSetupAnswers();
+    } else {
+      setStage('loading');
+      setMessage(null);
+    }
     try {
-      const [nextProfile, nextWelcome] = await Promise.all([
-        api.getProfile(),
-        api.getWelcomeCredits(),
-      ]);
-      setProfile(nextProfile);
-      adoptWelcome(nextWelcome);
-      const startingName = nextProfile.displayName?.trim() || authDisplayName(user.user_metadata) || user.email?.split('@')[0] || 'Creator';
-      setDisplayName(startingName);
-      if (PROFILE_PLACEHOLDER_USERNAME_PATTERN.test(nextProfile.username ?? '')) {
-        // The signup placeholder is nobody's name, so the field starts with a
-        // handle made for them instead (owner, 2026-11-08), which they can change.
-        const first = firstHandleSuggestion(startingName, user.email ?? null, (handle) => !readLocalUsernameRejection(handle));
-        setSuggestion(startHandleSuggestion(first));
-        setUsername(first);
+      let nextWelcome: WelcomeCreditResponse;
+      if (handedAnswers) {
+        nextWelcome = handedAnswers.welcome;
+        adoptWelcome(nextWelcome);
       } else {
-        setSuggestion(null);
-        setUsername(nextProfile.username ?? '');
+        const [nextProfile, fetchedWelcome] = await Promise.all([
+          api.getProfile(),
+          api.getWelcomeCredits(),
+        ]);
+        nextWelcome = fetchedWelcome;
+        setProfile(nextProfile);
+        adoptWelcome(nextWelcome);
+        const start = identityStart(nextProfile, user);
+        setDisplayName(start.displayName);
+        setSuggestion(start.suggestion);
+        setUsername(start.username);
       }
       // Resolved once, on entry. Re-deriving as state changes would eject
       // someone the instant `claimCredits` flips `eligible` to `claimed` —

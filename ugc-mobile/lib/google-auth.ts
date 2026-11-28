@@ -2,6 +2,8 @@ import type { GoTrueClient } from '@supabase/auth-js';
 import { makeRedirectUri } from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 
+import { OAUTH_CALLBACK_PATH, OAUTH_CALLBACK_SCHEME } from './oauth-callback-link';
+
 /**
  * Google sign-in through Supabase OAuth (PKCE), the same on both phones: the
  * system's own auth session shows Google's page (ASWebAuthenticationSession on
@@ -10,6 +12,8 @@ import * as WebBrowser from 'expo-web-browser';
  * runs on, so the sign-in screen and account deletion offer it on iOS as well
  * as Android (decision D1). On iOS a person who declines the system's "wants to
  * use … to sign in" prompt, or closes the sheet, is a cancel, not a failure.
+ * Android hands the same redirect to the app as a deep link as well, which the
+ * router leaves alone (`app/+native-intent.tsx`, `lib/oauth-callback-link.ts`).
  */
 
 type GoogleAuthClient = Pick<GoTrueClient, 'exchangeCodeForSession' | 'signInWithOAuth'>;
@@ -20,8 +24,8 @@ WebBrowser.maybeCompleteAuthSession();
 
 export function getGoogleAuthRedirectUri() {
   return makeRedirectUri({
-    scheme: 'magicbooklet',
-    path: 'oauth/callback',
+    scheme: OAUTH_CALLBACK_SCHEME,
+    path: OAUTH_CALLBACK_PATH,
   });
 }
 

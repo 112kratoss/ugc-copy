@@ -37,7 +37,12 @@ const paramsState = vi.hoisted(() => ({ params: {} as Record<string, string> }))
 
 const analytics = vi.hoisted(() => ({
   trackOnboardingEvent: vi.fn(async (_api: unknown, _eventName: string, _options?: { step?: string | null }) => undefined),
+  // The install's setup record, which the page's setup check reads (`lib/creator-setup-answers.ts`).
+  useOnboarding: () => ({ state: { identityDeferredAt: null, identityDeferredFor: null, status: 'not_started' } }),
 }));
+
+/** The query cache the page primes with the welcome answer it read. */
+const queryCache = vi.hoisted(() => ({ setQueryData: vi.fn() }));
 
 const authState = vi.hoisted(() => ({
   user: null as { id: string } | null,
@@ -165,6 +170,11 @@ vi.mock('@/lib/google-auth', () => ({
 }));
 
 vi.mock('@/lib/onboarding', () => analytics);
+
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useQueryClient: () => queryCache,
+}));
 
 import AuthScreen from '../app/auth';
 import { EmailSignInForm } from '../components/email-sign-in-form';

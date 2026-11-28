@@ -40,7 +40,12 @@ const paramsState = vi.hoisted(() => ({ params: {} as Record<string, string> }))
 
 const analytics = vi.hoisted(() => ({
   trackOnboardingEvent: vi.fn(async (_api: unknown, _eventName: string, _options?: { step?: string | null }) => undefined),
+  // The install's setup record, which the page's setup check reads (`lib/creator-setup-answers.ts`).
+  useOnboarding: () => ({ state: { identityDeferredAt: null, identityDeferredFor: null, status: 'not_started' } }),
 }));
+
+/** The query cache the page primes with the welcome answer it read. */
+const queryCache = vi.hoisted(() => ({ setQueryData: vi.fn() }));
 
 const authState = vi.hoisted(() => ({
   user: null as { id: string } | null,
@@ -172,6 +177,11 @@ vi.mock('@/lib/google-auth', () => ({
 
 vi.mock('@/lib/onboarding', () => analytics);
 
+vi.mock('@tanstack/react-query', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useQueryClient: () => queryCache,
+}));
+
 /**
  * The invite a shared link left on the phone: read from its store just after the page is
  * drawn, so its notice reaches the page a moment after the first frame.
@@ -231,6 +241,8 @@ import JoinScreen from '../app/join';
 import { EmailSignInForm } from '../components/email-sign-in-form';
 import { MEDIA_WALL_TILES, mediaWallColumn, mediaWallGeometry } from '../components/media-wall';
 import { signInOpensOnEmailForm } from '../lib/join-navigation';
+import { clearCreatorSetupAnswers, peekCreatorSetupAnswers } from '../lib/creator-setup-answers';
+import { markWelcomeReturn, welcomeReturnPath } from '../lib/welcome-popup';
 import { endWelcomePromise, resetWelcomePromiseForTests } from '../lib/welcome-promise';
 
 // The phone's welcome-credit record is a module singleton: each test starts on a fresh launch.
@@ -650,5 +662,148 @@ describe('Have an invite code? (owner, 2026-11-11)', () => {
     expect(textOf(tree)).toContain('That invite code was not found. Check it with whoever invited you.');
     expect(JSON.parse(secureStore.get(PENDING_KEY)!)).toMatchObject({ code: 'b1c2d3e4f5a6', kind: 'invite' });
     renderer.act(() => tree.unmount());
+  });
+});
+
+describe('the creator setup, asked before the page moves on (owner video, 2026-11-28)', () => {
+  const profile = {
+    id: 'user-1', username: 'maker', displayName: 'Maker', bio: null, avatarUrl: null, coverUrl: null,
+    websiteUrl: null, twitterHandle: null, instagramHandle: null, tiktokHandle: null, location: null, credits: 25,
+  };
+  const welcome = (over: Record<string, unknown> = {}) => ({
+    programKey: 'welcome-v1', status: 'claimed', amount: 25, promotionalAmount: 25, credits: 25,
+    promotionalCredits: 0, claimedAt: null, identityComplete: true, ...over,
+  });
+  const originalApi = authState.api;
+  const answering = (welcomeAnswer: Promise<unknown>) => {
+    const api = {
+      ...originalApi,
+      getProfile: vi.fn(async () => profile),
+      getWelcomeCredits: vi.fn(() => welcomeAnswer),
+    };
+    authState.api = api as typeof authState.api;
+    return api;
+  };
+  const pressGoogle = (tree: renderer.ReactTestRenderer) => renderer.act(async () => {
+    tree.root.findAll((node) => node.props.accessibilityLabel === 'Continue with Google' && typeof node.props.onPress === 'function')[0].props.onPress();
+  });
+  const googleBusy = (tree: renderer.ReactTestRenderer) => tree.root.findAll((node) => node.props.googleBusy !== undefined)[0].props.googleBusy;
+
+  beforeEach(() => {
+    platformState.os = 'android';
+    authState.user = null;
+    paramsState.params = { returnTo: '/post/post-1' };
+    authState.signInWithGoogle.mockReset();
+    authState.signInWithGoogle.mockResolvedValue(undefined);
+    navigationState.listeners = [];
+    queryCache.setQueryData.mockClear();
+    clearCreatorSetupAnswers();
+    markWelcomeReturn(null);
+  });
+
+  afterEach(() => {
+    authState.api = originalApi;
+  });
+
+  it('takes an account already set up straight back to the page that asked, never through the setup', async () => {
+    const router = await routerMock();
+    answering(Promise.resolve(welcome()));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(router.dismissTo).toHaveBeenCalledTimes(1);
+    expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+    // The answer it read is the one Home and the popup read next, not a second request.
+    expect(queryCache.setQueryData).toHaveBeenCalledWith(['welcome-credits', 'user-1'], welcome());
+    expect(peekCreatorSetupAnswers('user-1')).toBeNull();
+  });
+
+  it('sends an account with welcome credits still to claim back too, where the popup offers them', async () => {
+    const router = await routerMock();
+    answering(Promise.resolve(welcome({ status: 'eligible' })));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+    expect(welcomeReturnPath()).toBe('/post/post-1');
+  });
+
+  it('opens a new account’s setup with the answers handed over, so it starts on the name step', async () => {
+    const router = await routerMock();
+    const answer = welcome({ status: 'not_eligible', identityComplete: false });
+    answering(Promise.resolve(answer));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    expect(router.replace).toHaveBeenCalledTimes(1);
+    expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(router.dismissTo).not.toHaveBeenCalled();
+    expect(peekCreatorSetupAnswers('user-1')).toEqual({ profile, welcome: answer });
+    expect(peekCreatorSetupAnswers('someone-else')).toBeNull();
+  });
+
+  it('leaves the question to the setup when the answers fail, handing nothing over', async () => {
+    const router = await routerMock();
+    answering(Promise.reject(new Error('offline')));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    expect(router.replace).toHaveBeenCalledWith({ pathname: '/onboarding', params: { returnTo: '/post/post-1' } });
+    expect(peekCreatorSetupAnswers('user-1')).toBeNull();
+  });
+
+  it('keeps the spinner on Google until the page has moved on, and moves on once', async () => {
+    const router = await routerMock();
+    let answer!: (value: unknown) => void;
+    answering(new Promise((resolve) => {
+      answer = resolve;
+    }));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    // Signed in, the setup still being asked: the page holds, busy, with nowhere gone yet.
+    expect(googleBusy(tree)).toBe(true);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(router.dismissTo).not.toHaveBeenCalled();
+    await renderer.act(async () => answer(welcome()));
+    expect(router.dismissTo).toHaveBeenCalledTimes(1);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it('does not move on while a sign-in runs, even once its session has landed', async () => {
+    const router = await routerMock();
+    answering(Promise.resolve(welcome()));
+    let landed!: () => void;
+    authState.signInWithGoogle.mockReturnValue(new Promise<void>((resolve) => {
+      landed = resolve;
+    }));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    // The session is in (the guest's credits are still being moved to the account).
+    authState.user = { id: 'user-1' };
+    renderer.act(() => tree.update(<AuthRoute />));
+    expect(router.dismissTo).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+    await renderer.act(async () => landed());
+    expect(router.dismissTo).toHaveBeenCalledTimes(1);
+    expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
+  });
+
+  it('asks the same of the join page’s email sign-in, whose return is the setup', async () => {
+    const router = await routerMock();
+    paramsState.params = { returnTo: '/create/image?remix=gen-1' };
+    answering(Promise.resolve(welcome()));
+    authState.signInWithPassword.mockReset();
+    authState.signInWithPassword.mockResolvedValue(undefined);
+    const tree = render(<JoinScreen />);
+    renderer.act(() => {
+      tree.root.findAllByProps({ accessibilityLabel: 'Sign in with email' })[0].props.onPress();
+    });
+    const form = tree.root.findByType(EmailSignInForm);
+    renderer.act(() => {
+      form.findByProps({ accessibilityLabel: 'Email' }).props.onChangeText('creator@example.com');
+      form.findByProps({ accessibilityLabel: 'Password' }).props.onChangeText('a-good-password');
+    });
+    await renderer.act(async () => {
+      form.findByProps({ accessibilityLabel: 'Sign in' }).props.onPress();
+    });
+    expect(router.dismissTo).toHaveBeenCalledWith('/create/image?remix=gen-1');
+    expect(router.dismissTo).not.toHaveBeenCalledWith(expect.stringContaining('/onboarding'));
   });
 });

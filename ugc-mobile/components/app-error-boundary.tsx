@@ -40,9 +40,9 @@ export function AppErrorFallback({ onRetry, onHome }: { onRetry: () => void; onH
  * is not drawn again under Home; then the tabs are told to show Home, which is all there is to do
  * for a tab that failed (on the Pixel 9a emulator `dismissTo('/')` alone left a failed tab where it
  * was, there being nothing to dismiss) and what brings Home forward when another tab was under the
- * stack screen.
+ * stack screen. The page for a link the app has no screen for leaves the same way (`app/+not-found.tsx`).
  */
-function leaveForHome() {
+export function leaveForHome() {
   if (router.canDismiss()) router.dismissTo('/');
   router.navigate('/');
 }

@@ -6,7 +6,10 @@
 // into the sign in section … keep the background moving too"), and X or Back turns it back.
 // Apple and Google make an account or sign into one, so a person who signs in here goes on to
 // the creator name and the welcome credits once (`app/onboarding.tsx`, given the return), and
-// from there back to what they were doing; an account already set up passes straight through.
+// from there back to what they were doing. Whether the setup has anything to ask is read here,
+// under the pressed button's spinner (`lib/creator-setup-answers.ts`): an account already set up
+// goes straight back, and a new one opens onboarding on its name step, never on a loading card.
+import { useQueryClient } from '@tanstack/react-query';
 import { useIsFocused } from '@react-navigation/native';
 import { router, useNavigation } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -23,17 +26,20 @@ import { isAppleAuthCanceled } from '@/lib/apple-auth';
 import { useAuth } from '@/lib/auth';
 import { describeProviderSignInError, type AuthNotice } from '@/lib/auth-error-copy';
 import { completeAuthScreen, leaveAuthScreen, tookReturnsPlace } from '@/lib/auth-navigation';
+import { creatorSetupHasStep, handOffCreatorSetupAnswers, readCreatorSetupAnswers } from '@/lib/creator-setup-answers';
 import { isGoogleAuthCanceled } from '@/lib/google-auth';
-import { providerSignInNext } from '@/lib/join-navigation';
+import { creatorSetupReturn, providerSignInNext } from '@/lib/join-navigation';
 import { useReducedMotion } from '@/lib/motion';
 import { TYPED_INVITE_CODE_HELD } from '@/lib/invite-share-link/invite-typed-code';
-import { trackOnboardingEvent } from '@/lib/onboarding';
+import { trackOnboardingEvent, useOnboarding } from '@/lib/onboarding';
 import { CloseGlyph } from '@/lib/platform-glyphs';
 import { useSignInPageNotice } from '@/lib/sign-in-page-notice';
 import { useNavigationBarSurface } from '@/lib/system-bars';
 import { appTheme, mediaColors, SIGN_IN_WALL_SHADE } from '@/lib/theme';
 import { ThemeScope, useAppTheme } from '@/lib/theme-context';
 import { useHardwareBack } from '@/lib/use-hardware-back';
+import { primeWelcomeCredits } from '@/lib/use-onboarding-destination';
+import { markWelcomeReturn } from '@/lib/welcome-popup';
 import { useWelcomePromise } from '@/lib/welcome-promise';
 
 const SIDE = 20;
@@ -90,6 +96,13 @@ function SignInWallBody({
   useNavigationBarSurface(isFocused ? 'dark' : null);
   const { width, height } = useWindowDimensions();
   const { api, user, signInWithApple, signInWithGoogle, isAuthConfigured } = useAuth();
+  const { state: onboardingState } = useOnboarding();
+  const queryClient = useQueryClient();
+  // The account a sign-in landed on, read by the setup check once the sign-in is over.
+  const userRef = useRef(user);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
   const [mode, setMode] = useState<SignInWallMode>(initialMode);
   // The form is built the first time it is asked for, then kept, so turning back and forth
   // keeps what was typed.
@@ -160,28 +173,68 @@ function SignInWallBody({
     if (attempted.current) void trackOnboardingEvent(api, 'auth_canceled', { step });
   }), [api, navigation, step]);
 
+  /**
+   * A sign-in headed for the creator setup: reads the setup's answers first, while the page still
+   * shows the pressed button's spinner. Nothing to ask (the name is done; credits still to claim
+   * are offered by the popup over the return, as onboarding's own exit did) goes straight back to
+   * `route`; a name to choose opens the setup with the answers handed over, so it starts on that
+   * step. Answers that fail or keep it waiting leave the question to onboarding, as before.
+   */
+  const continueAfterSignIn = useCallback(async (route: string, inPlace: boolean, openSetup: () => void) => {
+    const answers = await readCreatorSetupAnswers(api);
+    if (!answers) {
+      openSetup();
+      return;
+    }
+    primeWelcomeCredits(queryClient, answers.profile.id, answers.welcome);
+    const account = userRef.current;
+    const hasStep = creatorSetupHasStep(answers, {
+      local: onboardingState,
+      accountMetadata: account?.id === answers.profile.id ? account.user_metadata : undefined,
+    });
+    if (hasStep) {
+      handOffCreatorSetupAnswers(answers);
+      openSetup();
+      return;
+    }
+    markWelcomeReturn(route);
+    completeAuthScreen(router, route, { inPlace });
+  }, [api, onboardingState, queryClient]);
+
   // Signed in, by any way in (or already, if an account opened the page): once, from here.
   // Apple and Google go on to the name and the welcome credits (`providerSignInNext`); email,
   // and an account that opened the page signed in, go back to the return as the sign-in screen
-  // always did (for a guest's `/join` that return is onboarding itself).
-  const finish = useCallback(() => {
+  // always did (for a guest's `/join` that return is onboarding itself). Either way a setup is
+  // asked first whether it has a step (`continueAfterSignIn`).
+  const finish = useCallback(async () => {
     if (completed.current) return;
     completed.current = true;
     if (attempted.current) void trackOnboardingEvent(api, 'auth_succeeded', { step });
     if (canceled.current) return;
     const inPlace = tookReturnsPlace(emailInPlace);
     if (lastMethod.current === 'email' || lastMethod.current === null) {
+      const setupReturn = creatorSetupReturn(emailReturnTo);
+      if (setupReturn) {
+        await continueAfterSignIn(setupReturn, inPlace, () => completeAuthScreen(router, emailReturnTo, { inPlace }));
+        return;
+      }
       completeAuthScreen(router, emailReturnTo, { inPlace });
       return;
     }
     const next = providerSignInNext(target, inPlace);
-    if (next.kind === 'return') completeAuthScreen(router, next.route, { inPlace });
-    else router.replace(next.href as never);
-  }, [api, emailInPlace, emailReturnTo, step, target]);
+    if (next.kind === 'return') {
+      completeAuthScreen(router, next.route, { inPlace });
+      return;
+    }
+    await continueAfterSignIn(next.href.params.returnTo, inPlace, () => router.replace(next.href as never));
+  }, [api, continueAfterSignIn, emailInPlace, emailReturnTo, step, target]);
 
+  // An account that opened the page signed in, or a sign-in that ended without moving the page
+  // on (one that failed after its session landed): never while one runs, whose own end moves on
+  // once it is over, so a new account's guest credits are prepared before the setup is asked.
   useEffect(() => {
-    if (user && isFocused) finish();
-  }, [finish, isFocused, user]);
+    if (user && isFocused && !inFlight) void finish();
+  }, [finish, inFlight, isFocused, user]);
 
   /**
    * Runs one sign-in for either half. Refuses while another runs, counts the visit's first
@@ -196,7 +249,8 @@ function SignInWallBody({
     lastMethod.current = method;
     try {
       await attempt();
-      finish();
+      // The spinner stays on the pressed button until the page has moved on.
+      await finish();
       return true;
     } finally {
       inFlightRef.current = null;
