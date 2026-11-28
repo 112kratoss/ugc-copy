@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -94,5 +94,28 @@ describe('the screen under an open reel', () => {
     expect(tabs).toContain("navigation.addListener('blur', () => covered.set(1))");
     expect(tabs.indexOf('<Animated.View style={[styles.fill, underlayStyle]}>')).toBeLessThan(tabs.indexOf('<Tabs'));
     expect(tabs.indexOf('</Tabs>')).toBeLessThan(tabs.indexOf('</Animated.View>'));
+  });
+
+  // The rule the tabs broke holds for any view over a list (`.claude/rules/mobile-runtime.md`): a new
+  // `display: 'none'` in the app's own code fails here, so its author reads the rule first. One a list
+  // can never sit under is added to the list below, with the reason.
+  it('is not joined by another view that leaves layout', () => {
+    const known = [
+      // Help & Support's three panes, each a list: there before the rule, not yet checked for the fault.
+      'app/support.tsx',
+    ];
+    const found: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(join(__dirname, '..', dir), { withFileTypes: true })) {
+        const path = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) walk(path);
+        else if (/\.tsx?$/.test(entry.name)) {
+          const code = source(path).split('\n').filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join('\n');
+          if (/display\s*:[^,;\n]*['"]none['"]/.test(code)) found.push(path);
+        }
+      }
+    };
+    ['app', 'components', 'lib'].forEach(walk);
+    expect(found.sort()).toEqual(known);
   });
 });

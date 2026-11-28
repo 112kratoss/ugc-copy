@@ -1730,7 +1730,7 @@ describe('Home screen', () => {
     renderer.act(() => hostProps(header, 'home-shelf').onPlaybackCandidateChange({ ...videoItem('post-1', 'delivery-shelf'), id: 'home-shelf:post-1' }));
     expect(store.snapshot().activeIds).toEqual(['home-shelf:post-1']);
 
-    // Under a reel on Android the tabs leave layout, and a new viewability report measures nothing.
+    // Out of layout (as the tabs were under a reel on Android until 2026-11-28), a new viewability report measures nothing.
     navState.focused = false;
     renderer.act(() => tree.update(<HomeDashboard />));
     shelfBox.height = 0;
