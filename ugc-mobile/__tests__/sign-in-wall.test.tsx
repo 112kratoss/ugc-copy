@@ -785,6 +785,23 @@ describe('the creator setup, asked before the page moves on (owner video, 2026-1
     expect(router.dismissTo).toHaveBeenCalledWith('/post/post-1');
   });
 
+  it('goes nowhere when something else took the page off the stack while the answers were read', async () => {
+    const router = await routerMock();
+    let answer!: (value: unknown) => void;
+    answering(new Promise((resolve) => {
+      answer = resolve;
+    }));
+    const tree = render(<AuthRoute />);
+    await pressGoogle(tree);
+    // A forced update, say, replaced the page meanwhile.
+    renderer.act(() => {
+      navigationState.listeners.forEach((listener) => listener());
+    });
+    await renderer.act(async () => answer(welcome()));
+    expect(router.dismissTo).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it('asks the same of the join page’s email sign-in, whose return is the setup', async () => {
     const router = await routerMock();
     paramsState.params = { returnTo: '/create/image?remix=gen-1' };

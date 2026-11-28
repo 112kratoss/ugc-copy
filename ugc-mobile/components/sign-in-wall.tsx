@@ -98,11 +98,14 @@ function SignInWallBody({
   const { api, user, signInWithApple, signInWithGoogle, isAuthConfigured } = useAuth();
   const { state: onboardingState } = useOnboarding();
   const queryClient = useQueryClient();
-  // The account a sign-in landed on, read by the setup check once the sign-in is over.
+  // The account a sign-in landed on and the install's setup record, as they are when the setup
+  // check runs once the sign-in is over (the record can be reconciled with the server meanwhile).
   const userRef = useRef(user);
+  const onboardingStateRef = useRef(onboardingState);
   useEffect(() => {
     userRef.current = user;
-  }, [user]);
+    onboardingStateRef.current = onboardingState;
+  }, [onboardingState, user]);
   const [mode, setMode] = useState<SignInWallMode>(initialMode);
   // The form is built the first time it is asked for, then kept, so turning back and forth
   // keeps what was typed.
@@ -123,6 +126,8 @@ function SignInWallBody({
   const attempted = useRef(false);
   const completed = useRef(false);
   const canceled = useRef(false);
+  // Taken off the stack by anything, the page's own move on included.
+  const left = useRef(false);
   const lastMethod = useRef<SignInMethod | null>(null);
   // The first half's scroll view, brought to its end when the invite-code field's keyboard
   // comes up: iOS alone scrolls only as far as the caret, which left the field's lower edge
@@ -168,6 +173,7 @@ function SignInWallBody({
   // Left without finishing (Close, Android's back, or anything else that removes the page):
   // a sign-in landing after that goes nowhere, since the person is on the screen they went to.
   useEffect(() => navigation.addListener('beforeRemove', () => {
+    left.current = true;
     if (completed.current || canceled.current) return;
     canceled.current = true;
     if (attempted.current) void trackOnboardingEvent(api, 'auth_canceled', { step });
@@ -182,6 +188,9 @@ function SignInWallBody({
    */
   const continueAfterSignIn = useCallback(async (route: string, inPlace: boolean, openSetup: () => void) => {
     const answers = await readCreatorSetupAnswers(api);
+    // Taken off the stack while the answers were read (a forced update, a session ended
+    // elsewhere): whatever replaced the page stays.
+    if (left.current) return;
     if (!answers) {
       openSetup();
       return;
@@ -189,7 +198,7 @@ function SignInWallBody({
     primeWelcomeCredits(queryClient, answers.profile.id, answers.welcome);
     const account = userRef.current;
     const hasStep = creatorSetupHasStep(answers, {
-      local: onboardingState,
+      local: onboardingStateRef.current,
       accountMetadata: account?.id === answers.profile.id ? account.user_metadata : undefined,
     });
     if (hasStep) {
@@ -199,7 +208,7 @@ function SignInWallBody({
     }
     markWelcomeReturn(route);
     completeAuthScreen(router, route, { inPlace });
-  }, [api, onboardingState, queryClient]);
+  }, [api, queryClient]);
 
   // Signed in, by any way in (or already, if an account opened the page): once, from here.
   // Apple and Google go on to the name and the welcome credits (`providerSignInNext`); email,

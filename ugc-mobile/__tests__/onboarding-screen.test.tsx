@@ -279,6 +279,29 @@ describe('authenticated onboarding entry', () => {
     act(() => tree?.unmount());
   });
 
+  it('reads the answers itself, and leaves, when its own resolver finds no name to choose', async () => {
+    const named = { ...welcome, status: 'claimed', identityComplete: true };
+    harness.api.getProfile.mockResolvedValue({ ...profile, username: 'sarath' });
+    harness.api.getWelcomeCredits.mockResolvedValue(named);
+    handOffCreatorSetupAnswers({ profile: { ...profile, id: 'creator-1', username: 'sarath' } as never, welcome: named as never });
+    const queryClient = new QueryClient();
+
+    let tree: renderer.ReactTestRenderer | undefined;
+    act(() => {
+      tree = renderScreen(queryClient);
+    });
+    // Never the name step for an account that has one, not even for a frame.
+    expect(JSON.stringify(tree?.toJSON())).not.toContain('Claim your creator name');
+    await act(async () => {
+      await settle();
+    });
+    expect(harness.api.getWelcomeCredits).toHaveBeenCalledTimes(1);
+    expect(router.replace).toHaveBeenCalledWith('/(tabs)');
+    expect(peekCreatorSetupAnswers('creator-1')).toBeNull();
+
+    act(() => tree?.unmount());
+  });
+
   it('reads the answers itself when those handed over describe another account', async () => {
     harness.api.getProfile.mockResolvedValue(profile);
     harness.api.getWelcomeCredits.mockResolvedValue(welcome);

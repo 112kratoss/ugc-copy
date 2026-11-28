@@ -188,10 +188,19 @@ function OnboardingFlow() {
   const [step, setStep] = useState(state.introStep);
   // The answers the sign-in page read on its way here (`lib/creator-setup-answers.ts`), and the
   // name step they open: the setup then starts on that step, never on "Preparing your creator
-  // setup" first. Built once, with the screen.
+  // setup" first. Built once, with the screen, and only when this screen's own resolver agrees
+  // there is a name to choose; otherwise it reads the answers itself, as it always did.
   const [handed] = useState<{ answers: CreatorSetupAnswers; start: ReturnType<typeof identityStart> } | null>(() => {
     const answers = user ? peekCreatorSetupAnswers(user.id) : null;
-    return answers && user ? { answers, start: identityStart(answers.profile, user) } : null;
+    if (!answers || !user) return null;
+    const destination = resolveOnboardingDestination({
+      hasUser: true,
+      userId: user.id,
+      welcome: answers.welcome,
+      local: { identityDeferredAt, identityDeferredFor, status: state.status },
+      identityDeferredOnAccount: isIdentityDeferredInMetadata(user.user_metadata),
+    });
+    return destination === 'identity' ? { answers, start: identityStart(answers.profile, user) } : null;
   });
   const handedRef = useRef(handed);
   // A signed-in creator never belongs on the guest intro, so open straight into
@@ -253,9 +262,8 @@ function OnboardingFlow() {
     // no loading card and no second read, once.
     const handedAnswers = handedRef.current?.answers.profile.id === user.id ? handedRef.current.answers : null;
     handedRef.current = null;
-    if (handedAnswers) {
-      clearCreatorSetupAnswers();
-    } else {
+    clearCreatorSetupAnswers();
+    if (!handedAnswers) {
       setStage('loading');
       setMessage(null);
     }
