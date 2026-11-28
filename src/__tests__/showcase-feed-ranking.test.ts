@@ -369,11 +369,17 @@ describe('showcase feed ranking', () => {
     });
 
     it('says which sitting ordered each repeat', () => {
-      const ranked = rank({ seed: 7, seenAt: scrolledOnce(), sittingStarts: [SCROLL_STARTED + 12_500, Number.NaN] });
+      // post-12 was seen at the very moment the ranking began: it is of that sitting.
+      const began = SCROLL_STARTED + 13_000;
+      const ranked = rank({ seed: 7, seenAt: scrolledOnce(), sittingStarts: [began, Number.NaN] });
       const byId = new Map(ranked.map((entry) => [entry.item.id, entry.repeatSittingAt ?? null]));
 
       expect(byId.get('post-00')).toBeNull();
-      expect(byId.get('post-23')).toBe(SCROLL_STARTED + 12_500);
+      expect(byId.get('post-11')).toBeNull();
+      expect(byId.get('post-12')).toBe(began);
+      expect(byId.get('post-23')).toBe(began);
+      // And it is ranked with that sitting, after everything seen before it.
+      expect(ranked.map((entry) => entry.item.id).slice(0, 12)).toEqual(scrollOrder.slice(0, 12));
     });
 
     it('leaves a ranking that continues another one in score order', () => {

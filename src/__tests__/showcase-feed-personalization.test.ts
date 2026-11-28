@@ -1796,7 +1796,9 @@ describe('for-you-rules v3 wiring', () => {
           ...scrolled(),
           v3Candidate('looked-at-since', { interest_match: 0.99, seen_recently: true, last_seen_at: minutesAgo(9) }),
         ],
-        rows: { feed_sessions: [ranking(lastPull), ranking(scrollBegan), ranking(minutesAgo(5), { viewer_user_id: 'viewer-2' })] },
+        // Another viewer's ranking began in the middle of the scroll: read as
+        // this viewer's, it would cut the scroll into two sittings.
+        rows: { feed_sessions: [ranking(lastPull), ranking(scrollBegan), ranking(minutesAgo(49.9), { viewer_user_id: 'viewer-2' })] },
       });
 
       await forYouPage(client);
@@ -1807,7 +1809,9 @@ describe('for-you-rules v3 wiring', () => {
       expect(order.slice(0, -1).sort()).toEqual(scrollOrder());
       // A stored session says which sitting ordered each repeat.
       const byPost = new Map(persisted[0].p_items.map((entry) => [entry.post_id, entry.score_components]));
-      expect(byPost.get('scrolled-00')).toMatchObject({ seen_sitting_at: scrollBegan });
+      scrollOrder().forEach((postId) => {
+        expect(byPost.get(postId), postId).toMatchObject({ seen_sitting_at: scrollBegan });
+      });
       expect(byPost.get('looked-at-since')).toMatchObject({ seen_sitting_at: lastPull });
     });
 

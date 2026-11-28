@@ -678,9 +678,11 @@ function lastSeenMs(features: Pick<RankedFeedFeatureRow, 'lastSeenAt'>) {
 
 /**
  * The seen tier, and the order inside it: every unseen post before every
- * repeat, and among repeats the one seen longest ago first (0 between two
- * unseen posts, and between repeats seen at the same moment, which the score
- * then orders).
+ * repeat, and among repeats the one seen longest ago first, counted in
+ * sittings where the viewer's earlier rankings are known (`RepeatSittings`:
+ * repeats of one sitting are tied and drawn from the seed). 0 between two
+ * unseen posts, and between two repeats outside every sitting that were seen
+ * at the same moment, which the score then orders.
  *
  * Repeats were ordered by score until 2026-11-28. A reader who has seen the
  * whole of a small catalog is ranked from this tier alone, and scores barely
@@ -691,9 +693,6 @@ function lastSeenMs(features: Pick<RankedFeedFeatureRow, 'lastSeenAt'>) {
  * and the catalog goes round once before a post returns. The price: among
  * repeats a stronger post seen a minute ago waits behind a weaker one seen
  * yesterday. A new post is unseen and still leads them all.
- *
- * Told where the viewer's earlier rankings began (`sittings`), "longest ago"
- * is counted in sittings, not moments: `RepeatSittings`.
  */
 export function compareSeenTier(
   left: Pick<RankedFeedFeatureRow, 'seenRecently' | 'lastSeenAt' | 'postId'>,
@@ -780,7 +779,7 @@ export type RankedFeedRepeatOrder = 'least-recent' | 'score';
 
 /**
  * How far down the repeats the fatigue rules may look for a post that suits a
- * place better: the twelve seen longest ago, a page of the app's feed. Without
+ * place better: the twelve next in the tier's order, a page of the app's feed. Without
  * a bound they look through the whole tier, and where one creator or cluster
  * holds most of a small catalog they find the same few other posts at every
  * ranking, minutes after the reader saw them (the owner's lane: one creator
